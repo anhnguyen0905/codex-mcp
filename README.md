@@ -95,8 +95,8 @@ Works on **macOS**, **Windows**, and **Linux**. Notes:
   codex login          # ChatGPT Plus/Pro/Team — or set OPENAI_API_KEY
   ```
 
-**First-time check:** after cloning, run the doctor — it verifies Node, Codex CLI install +
-login, and Claude Code CLI install, and prints the exact fix for anything missing:
+**First-time check** (if you cloned the repo): run the doctor — it verifies Node, Codex CLI
+install + login, and Claude Code CLI install, and prints the exact fix for anything missing:
 
 ```bash
 npm run doctor
@@ -123,31 +123,24 @@ The repo doubles as a Claude Code plugin marketplace bundling the `/codex-flow` 
 Restart Claude Code when prompted, then run `/codex-flow <feature description>` in any project.
 Prerequisite stays the same: Codex CLI installed and logged in (see below).
 
-## Install (standalone, from git)
+## Install (standalone, one command)
 
-Clone, install (the `prepare` script builds `dist/` automatically), then register with Claude Code.
+No clone, no build — `npx` fetches and builds it automatically. Same command on macOS, Windows, and Linux:
 
-**macOS / Linux:**
 ```bash
-git clone <your-repo-url> codex-mcp
-cd codex-mcp
-npm install                                   # installs deps AND builds dist/
-claude mcp add --scope user codex -- node "$(pwd)/dist/index.js"
-```
+# from npm
+claude mcp add --scope user codex -- npx -y @anhnguyen0905/codex-mcp
 
-**Windows (PowerShell):**
-```powershell
-git clone <your-repo-url> codex-mcp
-cd codex-mcp
-npm install                                   # installs deps AND builds dist/
-claude mcp add --scope user codex -- node "$($PWD.Path)\dist\index.js"
+# or straight from this git repo
+claude mcp add --scope user codex -- npx -y github:anhnguyen0905/codex-mcp
 ```
 
 Verify: `claude mcp list` should show `codex … ✔ Connected`. To enable the live terminal by default,
 export `CODEX_MCP_TERMINAL=1` in your shell profile.
 
-The bundled slash command `/codex-flow` (see `.claude/commands/codex-flow.md`) drives the full
-interview → plan → execute → review workflow. Copy it to `~/.claude/commands/` to use it in every project.
+For the full workflow command, copy [`commands/codex-flow.md`](commands/codex-flow.md) to
+`~/.claude/commands/` — or skip both steps entirely and use the plugin install above, which
+bundles the server and the command.
 
 ## Usage
 
