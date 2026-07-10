@@ -1,0 +1,131 @@
+# codex-mcp
+
+MCP server bridging **Claude Code** and **OpenAI Codex CLI** for a plan → execute → review workflow:
+
+1. **Interview** — Claude clarifies requirements with you
+2. **Design & Planning** — Claude explores the codebase and writes `.codex-flow/PLAN.md`
+3. **Execution** — Codex implements the plan (`codex_execute`)
+4. **Review** — Claude reviews the diff and sends findings back into the same Codex session (`codex_continue`)
+
+## Architecture
+
+```
+Claude Code ──(MCP stdio)──▶ codex-mcp (this server)
+                                 │ spawns
+                                 ▼
+                            codex exec --json  (OpenAI Codex CLI)
+```
+
+The server spawns `codex exec` non-interactively, parses its JSONL event stream, and returns structured results: `sessionId`, `agentMessage`, `fileChanges`, `commands`, token `usage`, `errors`.
+
+## Tools
+
+| Tool | Purpose | Key inputs |
+|------|---------|------------|
+| `codex_execute` | Start a new Codex session executing a task/plan | `prompt`, `cwd`, `sandbox`, `model?`, `timeoutMs?`, `terminal?` |
+| `codex_continue` | Resume a session with follow-up (e.g. review feedback) | `sessionId`, `prompt`, `cwd`, `sandbox`, `timeoutMs?`, `terminal?` |
+| `codex_health` | Check Codex CLI version and login status | — |
+
+Sandbox modes: `read-only`, `workspace-write` (default), `danger-full-access`.
+Default execution timeout: 30 minutes (`timeoutMs` caps at 2 hours).
+
+### Live progress in a Terminal window
+
+Long Codex runs are otherwise invisible (the MCP call only returns when Codex finishes). Set
+`terminal: true` on `codex_execute` / `codex_continue` — or export `CODEX_MCP_TERMINAL=1` — and the
+server streams Codex's event stream to `<cwd>/.codex-flow/live/<timestamp>.jsonl` and opens a terminal
+window that pretty-tails it — **Terminal.app** on macOS, a **PowerShell** window on Windows:
+
+```
+[17:23:22] ● session started: 019f4b…
+[17:23:40] ✎ 3 file(s): src/fb_crawler/metrics.py, tests/test_metrics.py, pyproject.toml
+[17:24:05] ▸ $ pytest  (exit 0)
+[17:24:12] ✓ turn complete (in:27599 out:147)
+```
+
+The structured MCP result is unchanged; the terminal is a best-effort side view (a failed/unavailable
+viewer never fails the run). The result payload always includes a `liveLog` path to the raw JSONL, so on
+platforms without a supported terminal (e.g. Linux) you can tail it yourself.
+
+## Platform support
+
+Works on **macOS**, **Windows**, and **Linux**. Notes:
+
+- On Windows the Codex CLI installs as `codex.cmd`; the server auto-selects it. If your binary lives
+  elsewhere or is named differently, set `CODEX_BIN` (e.g. `CODEX_BIN=C:\tools\codex.exe`).
+- The live-progress terminal window is implemented for macOS and Windows. On Linux the run still works;
+  tail the `liveLog` path manually to follow progress.
+
+## Prerequisites
+
+- Node.js ≥ 20
+- OpenAI Codex CLI, authenticated:
+  ```bash
+  npm i -g @openai/codex
+  codex login          # ChatGPT Plus/Pro/Team — or set OPENAI_API_KEY
+  ```
+
+> **Security note:** this server never reads, stores, or transmits your credentials.
+> Authentication is handled entirely by the Codex CLI itself (`~/.codex/`); the server
+> just spawns the `codex` binary and inherits whatever session the CLI already has.
+
+## Install (standalone, from git)
+
+Clone, install (the `prepare` script builds `dist/` automatically), then register with Claude Code.
+
+**macOS / Linux:**
+```bash
+git clone <your-repo-url> codex-mcp
+cd codex-mcp
+npm install                                   # installs deps AND builds dist/
+claude mcp add --scope user codex -- node "$(pwd)/dist/index.js"
+```
+
+**Windows (PowerShell):**
+```powershell
+git clone <your-repo-url> codex-mcp
+cd codex-mcp
+npm install                                   # installs deps AND builds dist/
+claude mcp add --scope user codex -- node "$($PWD.Path)\dist\index.js"
+```
+
+Verify: `claude mcp list` should show `codex … ✔ Connected`. To enable the live terminal by default,
+export `CODEX_MCP_TERMINAL=1` in your shell profile.
+
+The bundled slash command `/codex-flow` (see `.claude/commands/codex-flow.md`) drives the full
+interview → plan → execute → review workflow. Copy it to `~/.claude/commands/` to use it in every project.
+
+## Usage
+
+In any Claude Code session:
+
+```
+/codex-flow implement dark mode toggle for the settings page
+```
+
+(The slash command lives at `~/.claude/commands/codex-flow.md`.)
+
+Or call tools directly: ask Claude to "use codex_execute to ..." — remember to keep the returned `sessionId` for follow-ups.
+
+> Note: long Codex runs can exceed Claude Code's MCP tool timeout. If a call is killed early, raise `MCP_TOOL_TIMEOUT` (env var, ms) when starting Claude Code.
+
+## Development
+
+```bash
+npm test          # unit tests (vitest)
+npm run coverage  # enforces 80% thresholds
+npm run test:e2e  # real end-to-end smoke test (spawns real Codex, uses quota)
+npm run build     # tsc → dist/
+```
+
+Source layout:
+
+- `src/argsBuilder.ts` — validates input, builds `codex exec` / `codex exec resume` argv
+- `src/codexRunner.ts` — spawns the CLI with timeout + kill handling
+- `src/eventParser.ts` — folds the JSONL event stream into a `CodexResult`
+- `src/server.ts` — MCP tool registration (`@modelcontextprotocol/sdk`)
+- `src/index.ts` — stdio entrypoint
+- `src/terminal.ts` — cross-platform live-progress terminal launcher (macOS/Windows)
+- `src/liveView.ts` — streams the event log to disk and opens the viewer
+- `src/progressFormatter.ts` — turns JSONL events into human-readable lines
+- `scripts/tail-progress.mjs` — the pretty-tail script the terminal window runs

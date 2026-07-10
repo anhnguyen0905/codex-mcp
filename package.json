@@ -1,0 +1,43 @@
+{
+  "name": "codex-mcp",
+  "version": "0.1.0",
+  "description": "MCP server bridging Claude Code and OpenAI Codex CLI for plan-execute-review workflows",
+  "main": "dist/index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc",
+    "coverage": "vitest run --coverage",
+    "test:e2e": "node scripts/smoke-e2e.mjs",
+    "prepare": "npm run build",
+    "start": "node dist/index.js"
+  },
+  "keywords": [],
+  "author": "anhnguyen0905",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "codex-mcp": "dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@vitest/coverage-v8": "^4.1.10",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "scripts/tail-progress.mjs",
+    "README.md",
+    "LICENSE"
+  ]
+}
