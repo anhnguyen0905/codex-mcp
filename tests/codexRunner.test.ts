@@ -70,7 +70,7 @@ describe('runCodex', () => {
     await runCodex(['exec', 'hi'], { spawnFn, cwd: '/repo' })
 
     expect(spawnFn).toHaveBeenCalledWith(
-      'codex',
+      resolveCodexBinary(process.platform, process.env),
       ['exec', 'hi'],
       expect.objectContaining({ cwd: '/repo', stdio: ['ignore', 'pipe', 'pipe'] }),
     )
