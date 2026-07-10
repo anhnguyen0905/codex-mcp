@@ -4,7 +4,13 @@ import { buildTerminalLaunch, openTerminal } from '../src/terminal.js'
 const paths = { nodeBin: '/usr/bin/node', tailScript: '/tools/tail.mjs', logPath: '/logs/a b.jsonl' }
 
 describe('buildTerminalLaunch', () => {
-  test('darwin launches osascript running Terminal.app', () => {
+  test('darwin uses `open -a Terminal` with a .command wrapper when provided (no Apple Events)', () => {
+    const launch = buildTerminalLaunch('darwin', { ...paths, commandFile: '/logs/watch.command' })
+    expect(launch?.command).toBe('open')
+    expect(launch?.args).toEqual(['-a', 'Terminal', '/logs/watch.command'])
+  })
+
+  test('darwin falls back to osascript when no .command wrapper is available', () => {
     const launch = buildTerminalLaunch('darwin', paths)
     expect(launch?.command).toBe('osascript')
     const joined = launch?.args.join(' ') ?? ''
@@ -34,18 +40,19 @@ describe('buildTerminalLaunch', () => {
 })
 
 describe('openTerminal', () => {
-  test('spawns the launch command on a supported platform', () => {
+  test('spawns `open` on darwin when a .command wrapper is provided', () => {
     const spawnFn = vi.fn(() => ({ unref: () => {} }))
 
     const opened = openTerminal('/logs/a.jsonl', {
       platform: 'darwin',
       nodeBin: '/usr/bin/node',
       tailScript: '/tools/tail.mjs',
+      commandFile: '/logs/watch.command',
       spawnFn: spawnFn as never,
     })
 
     expect(opened).toBe(true)
-    expect(spawnFn).toHaveBeenCalledWith('osascript', expect.any(Array), expect.any(Object))
+    expect(spawnFn).toHaveBeenCalledWith('open', ['-a', 'Terminal', '/logs/watch.command'], expect.any(Object))
   })
 
   test('spawns powershell on win32', () => {

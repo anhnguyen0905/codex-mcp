@@ -2,7 +2,10 @@
   "mcpServers": {
     "codex": {
       "command": "npx",
-      "args": ["-y", "@anhnguyen0905/codex-mcp@latest"]
+      "args": ["-y", "@anhnguyen0905/codex-mcp@latest"],
+      "env": {
+        "CODEX_MCP_TERMINAL": "1"
+      }
     }
   }
 }

@@ -6,6 +6,12 @@ export interface TerminalPaths {
   nodeBin: string
   tailScript: string
   logPath: string
+  /**
+   * Executable `.command` wrapper (macOS). When present, the launcher uses `open -a Terminal`
+   * (LaunchServices) instead of `osascript` (Apple Events), which does not require the caller to
+   * hold Automation (TCC) permission — the common failure mode when spawned from an MCP server.
+   */
+  commandFile?: string
 }
 
 export interface OpenTerminalOptions extends Omit<TerminalPaths, 'logPath'> {
@@ -22,7 +28,10 @@ const escapeAppleScript = (value: string): string => value.replace(/\\/g, '\\\\'
 
 const escapePowerShell = (value: string): string => value.replace(/'/g, "''")
 
-const buildDarwinLaunch = ({ nodeBin, tailScript, logPath }: TerminalPaths): TerminalLaunch => {
+const buildDarwinLaunch = ({ nodeBin, tailScript, logPath, commandFile }: TerminalPaths): TerminalLaunch => {
+  if (commandFile) {
+    return { command: 'open', args: ['-a', 'Terminal', commandFile] }
+  }
   const shellCommand = `"${nodeBin}" "${tailScript}" "${logPath}"`
   const escaped = escapeAppleScript(shellCommand)
   return {
@@ -64,8 +73,8 @@ export const buildTerminalLaunch = (
  * viewer must never fail the actual Codex run. On other platforms, tail the `logPath` manually.
  */
 export const openTerminal = (logPath: string, options: OpenTerminalOptions): boolean => {
-  const { platform, nodeBin, tailScript, spawnFn = spawn } = options
-  const launch = buildTerminalLaunch(platform, { nodeBin, tailScript, logPath })
+  const { platform, nodeBin, tailScript, commandFile, spawnFn = spawn } = options
+  const launch = buildTerminalLaunch(platform, { nodeBin, tailScript, logPath, commandFile })
   if (launch === null) return false
 
   try {
