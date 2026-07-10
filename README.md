@@ -1,5 +1,7 @@
 # codex-mcp
 
+[![CI](https://github.com/anhnguyen0905/codex-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/anhnguyen0905/codex-mcp/actions/workflows/ci.yml)
+
 MCP server bridging **Claude Code** and **OpenAI Codex CLI** for a plan → execute → review workflow:
 
 1. **Interview** — Claude clarifies requirements with you
@@ -24,10 +26,38 @@ The server spawns `codex exec` non-interactively, parses its JSONL event stream,
 |------|---------|------------|
 | `codex_execute` | Start a new Codex session executing a task/plan | `prompt`, `cwd`, `sandbox`, `model?`, `timeoutMs?`, `terminal?` |
 | `codex_continue` | Resume a session with follow-up (e.g. review feedback) | `sessionId`, `prompt`, `cwd`, `sandbox`, `timeoutMs?`, `terminal?` |
+| `codex_review` | Read-only review of uncommitted workspace changes | `cwd`, `focus?`, `model?`, `timeoutMs?`, `terminal?` |
 | `codex_health` | Check Codex CLI version and login status | — |
 
 Sandbox modes: `read-only`, `workspace-write` (default), `danger-full-access`.
+`codex_review` always runs read-only and never modifies files.
 Default execution timeout: 30 minutes (`timeoutMs` caps at 2 hours).
+
+### Result payload
+
+Every run tool returns structured JSON: `sessionId`, `agentMessage`, `fileChanges`, `commands`,
+token `usage`, `errors`, plus:
+
+- `diff` — the workspace's `git status --porcelain` and `git diff HEAD` after the run (patch capped
+  at 64 KB, `truncated` flag set when cut), so the caller can review changes without re-reading files.
+  `null` when the cwd is not a git repo.
+- `aborted` — `true` when the run was cancelled from the client (e.g. Esc in Claude Code). The
+  server forwards MCP cancellation to Codex (SIGTERM, then SIGKILL after 5 s). On macOS/Linux the
+  signal goes to Codex's whole process group, so subprocesses it spawned die too; on Windows only
+  the CLI process itself is killed.
+- `liveLog` — path to the raw JSONL event log when the live terminal view was enabled.
+
+### Progress streaming
+
+Clients that send an MCP `progressToken` (Claude Code does) receive `notifications/progress` for
+every meaningful Codex event — session start, file changes, command runs, turn completion — so
+progress is visible in-session on every platform, even without the terminal window below.
+
+### Concurrency
+
+Runs are serialized per workspace: a second `codex_execute`/`codex_continue`/`codex_review` into
+the same `cwd` while one is active fails fast with a clear error instead of racing on files and
+git state. Different workspaces run in parallel fine.
 
 ### Live progress in a Terminal window
 
@@ -123,9 +153,11 @@ Source layout:
 - `src/argsBuilder.ts` — validates input, builds `codex exec` / `codex exec resume` argv
 - `src/codexRunner.ts` — spawns the CLI with timeout + kill handling
 - `src/eventParser.ts` — folds the JSONL event stream into a `CodexResult`
-- `src/server.ts` — MCP tool registration (`@modelcontextprotocol/sdk`)
+- `src/server.ts` — MCP tool registration (`@modelcontextprotocol/sdk`), cwd lock, cancellation wiring
 - `src/index.ts` — stdio entrypoint
 - `src/terminal.ts` — cross-platform live-progress terminal launcher (macOS/Windows)
 - `src/liveView.ts` — streams the event log to disk and opens the viewer
 - `src/progressFormatter.ts` — turns JSONL events into human-readable lines
+- `src/progressNotifier.ts` — line-buffers stdout into MCP `notifications/progress`
+- `src/workspaceDiff.ts` — captures `git status` + `git diff HEAD` for the result payload
 - `scripts/tail-progress.mjs` — the pretty-tail script the terminal window runs

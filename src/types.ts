@@ -47,4 +47,6 @@ export interface RunOutcome {
   stderr: string
   exitCode: number | null
   timedOut: boolean
+  /** True when the run was cancelled via AbortSignal (e.g. user pressed Esc in the MCP client). */
+  aborted?: boolean
 }

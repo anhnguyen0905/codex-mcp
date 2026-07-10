@@ -39,13 +39,13 @@ describe('codex-mcp server', () => {
     runFn = vi.fn(async () => okOutcome)
   })
 
-  test('lists the three expected tools', async () => {
+  test('lists the four expected tools', async () => {
     const client = await connect(runFn)
 
     const { tools } = await client.listTools()
     const names = tools.map((tool) => tool.name).sort()
 
-    expect(names).toEqual(['codex_continue', 'codex_execute', 'codex_health'])
+    expect(names).toEqual(['codex_continue', 'codex_execute', 'codex_health', 'codex_review'])
   })
 
   test('codex_execute runs codex and returns a structured result', async () => {

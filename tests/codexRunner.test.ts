@@ -61,7 +61,7 @@ describe('runCodex', () => {
 
     const result = await runCodex(['exec', 'hi'], { spawnFn, cwd: '/repo' })
 
-    expect(result).toEqual({ stdout: 'out', stderr: 'err', exitCode: 0, timedOut: false })
+    expect(result).toEqual({ stdout: 'out', stderr: 'err', exitCode: 0, timedOut: false, aborted: false })
   })
 
   test('invokes codex binary with given args, cwd and ignored stdin', async () => {

@@ -1,8 +1,19 @@
 {
-  "name": "codex-mcp",
-  "version": "0.1.0",
+  "name": "@anhnguyen0905/codex-mcp",
+  "version": "0.2.0",
   "description": "MCP server bridging Claude Code and OpenAI Codex CLI for plan-execute-review workflows",
   "main": "dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anhnguyen0905/codex-mcp.git"
+  },
+  "homepage": "https://github.com/anhnguyen0905/codex-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/anhnguyen0905/codex-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "directories": {
     "test": "tests"
   },
@@ -14,7 +25,15 @@
     "prepare": "npm run build",
     "start": "node dist/index.js"
   },
-  "keywords": [],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "codex",
+    "claude-code",
+    "openai-codex",
+    "ai-agents",
+    "code-review"
+  ],
   "author": "anhnguyen0905",
   "license": "MIT",
   "type": "module",

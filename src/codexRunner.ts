@@ -26,6 +26,8 @@ export interface RunOptions {
   spawnFn?: SpawnFn
   sigkillGraceMs?: number
   onStdout?: (chunk: Buffer) => void
+  /** Cancels the run: the codex process gets SIGTERM, then SIGKILL after a grace period. */
+  signal?: AbortSignal
 }
 
 export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcome> => {
@@ -35,31 +37,68 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
     spawnFn = spawn,
     sigkillGraceMs = SIGKILL_GRACE_MS,
     onStdout,
+    signal,
   } = options
+
+  if (signal?.aborted) {
+    return Promise.resolve({ stdout: '', stderr: '', exitCode: null, timedOut: false, aborted: true })
+  }
+
+  // On POSIX, make the child a process-group leader so termination signals reach any
+  // subprocesses Codex itself spawned (test runners, builds), not just the CLI process.
+  const useProcessGroup = process.platform !== 'win32'
 
   return new Promise((resolve, reject) => {
     const child = spawnFn(resolveCodexBinary(process.platform, process.env), args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
+      detached: useProcessGroup,
     })
+
+    const signalChild = (signal: NodeJS.Signals): void => {
+      if (useProcessGroup && typeof child.pid === 'number') {
+        try {
+          process.kill(-child.pid, signal)
+          return
+        } catch {
+          // group may already be gone; fall through to direct kill
+        }
+      }
+      child.kill(signal)
+    }
 
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
     let bufferedBytes = 0
     let timedOut = false
+    let aborted = false
     let settled = false
     let killTimer: NodeJS.Timeout | undefined
 
+    let terminating = false
+    const terminate = (): void => {
+      if (terminating) return
+      terminating = true
+      signalChild('SIGTERM')
+      killTimer = setTimeout(() => signalChild('SIGKILL'), sigkillGraceMs)
+    }
+
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill('SIGTERM')
-      killTimer = setTimeout(() => child.kill('SIGKILL'), sigkillGraceMs)
+      terminate()
     }, timeoutMs)
+
+    const onAbort = (): void => {
+      aborted = true
+      terminate()
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
 
     const clearTimers = (): void => {
       clearTimeout(timer)
       if (killTimer) clearTimeout(killTimer)
+      signal?.removeEventListener('abort', onAbort)
     }
 
     const collect = (chunks: Buffer[], forward?: (chunk: Buffer) => void) => (chunk: Buffer) => {
@@ -92,6 +131,7 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
         stderr: Buffer.concat(stderrChunks).toString('utf8'),
         exitCode,
         timedOut,
+        aborted,
       })
     })
   })

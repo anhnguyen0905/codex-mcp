@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.anhnguyen0905/codex-mcp",
+  "description": "Bridge Claude Code and OpenAI Codex CLI: execute plans, resume sessions, read-only reviews, live progress, git diff results.",
+  "version": "0.2.0",
+  "repository": {
+    "url": "https://github.com/anhnguyen0905/codex-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@anhnguyen0905/codex-mcp",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "CODEX_MCP_TERMINAL",
+          "description": "Set to 1 to open a live-progress terminal window by default",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "CODEX_BIN",
+          "description": "Override path to the Codex CLI binary",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
