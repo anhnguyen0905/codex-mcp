@@ -99,6 +99,20 @@ Works on **macOS**, **Windows**, and **Linux**. Notes:
 > Authentication is handled entirely by the Codex CLI itself (`~/.codex/`); the server
 > just spawns the `codex` binary and inherits whatever session the CLI already has.
 
+## Install as a Claude Code plugin (recommended for teams)
+
+The repo doubles as a Claude Code plugin marketplace bundling the `/codex-flow` command
+(interview → plan/architecture → backlog → Codex executes per task → Claude reviews) and the
+`codex` MCP server (via `npx @anhnguyen0905/codex-mcp`). In Claude Code:
+
+```
+/plugin marketplace add anhnguyen0905/codex-mcp
+/plugin install codex-flow@codex-mcp
+```
+
+Restart Claude Code when prompted, then run `/codex-flow <feature description>` in any project.
+Prerequisite stays the same: Codex CLI installed and logged in (see below).
+
 ## Install (standalone, from git)
 
 Clone, install (the `prepare` script builds `dist/` automatically), then register with Claude Code.

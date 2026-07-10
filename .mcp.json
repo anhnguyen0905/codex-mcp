@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "codex": {
+      "command": "npx",
+      "args": ["-y", "@anhnguyen0905/codex-mcp@latest"]
+    }
+  }
+}
