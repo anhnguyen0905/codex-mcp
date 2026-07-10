@@ -197,7 +197,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
   const openView = (cwd: string, requested?: boolean): LiveView =>
     terminalEnabled(requested) ? liveViewFactory(cwd) : NULL_VIEW
   const withCwdLock = createCwdGuard()
-  const server = new McpServer({ name: 'codex-mcp', version: '0.2.0' })
+  const server = new McpServer({ name: 'codex-mcp', version: '0.3.0' })
 
   server.registerTool(
     'codex_execute',
