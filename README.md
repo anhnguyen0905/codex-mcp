@@ -95,6 +95,16 @@ Works on **macOS**, **Windows**, and **Linux**. Notes:
   codex login          # ChatGPT Plus/Pro/Team — or set OPENAI_API_KEY
   ```
 
+**First-time check:** after cloning, run the doctor — it verifies Node, Codex CLI install +
+login, and Claude Code CLI install, and prints the exact fix for anything missing:
+
+```bash
+npm run doctor
+```
+
+`/codex-flow` also re-checks Codex login at the start of every run (Phase 0) and stops with
+instructions instead of burning a session when you're not logged in.
+
 > **Security note:** this server never reads, stores, or transmits your credentials.
 > Authentication is handled entirely by the Codex CLI itself (`~/.codex/`); the server
 > just spawns the `codex` binary and inherits whatever session the CLI already has.

@@ -22,6 +22,7 @@
     "build": "tsc",
     "coverage": "vitest run --coverage",
     "test:e2e": "node scripts/smoke-e2e.mjs",
+    "doctor": "node scripts/doctor.mjs",
     "prepare": "npm run build",
     "start": "node dist/index.js"
   },
@@ -56,6 +57,7 @@
   "files": [
     "dist",
     "scripts/tail-progress.mjs",
+    "scripts/doctor.mjs",
     "README.md",
     "LICENSE"
   ]

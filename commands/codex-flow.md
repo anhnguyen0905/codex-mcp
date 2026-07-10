@@ -9,9 +9,19 @@ Task: $ARGUMENTS
 
 Follow these 5 phases strictly. Do NOT write implementation code yourself — Codex does the implementation.
 
-## Phase 1 — Interview (Claude)
+## Phase 0 — Preflight (gate, do this FIRST)
 
-Before any design work, verify Codex is ready by calling `mcp__codex__codex_health`.
+Call `mcp__codex__codex_health` before anything else:
+
+- **Tool call fails / server missing** → the MCP server is not set up. Tell the user to follow the
+  install steps in the codex-mcp README (or run `node scripts/doctor.mjs` in the codex-mcp repo),
+  then STOP.
+- **`loggedIn: false`** → tell the user to run `codex login` in their terminal (ChatGPT
+  Plus/Pro/Team, or set `OPENAI_API_KEY`), then STOP. Do not interview, plan, or execute anything
+  until a re-check shows `loggedIn: true`.
+- **`loggedIn: true`** → report the Codex version and continue to Phase 1.
+
+## Phase 1 — Interview (Claude)
 
 Interview the user about the task using AskUserQuestion. Cover at minimum:
 - Goal and success criteria (what does "done" look like?)
