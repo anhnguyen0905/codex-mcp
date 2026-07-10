@@ -79,12 +79,20 @@ platforms without a supported terminal (e.g. Linux) you can tail it yourself.
 
 ## Platform support
 
-Works on **macOS**, **Windows**, and **Linux**. Notes:
+Works on **macOS**, **Windows**, and **Linux**. The Codex run itself is fully cross-platform; the
+live-progress **terminal window** is opened per-OS:
 
-- On Windows the Codex CLI installs as `codex.cmd`; the server auto-selects it. If your binary lives
-  elsewhere or is named differently, set `CODEX_BIN` (e.g. `CODEX_BIN=C:\tools\codex.exe`).
-- The live-progress terminal window is implemented for macOS and Windows. On Linux the run still works;
-  tail the `liveLog` path manually to follow progress.
+| OS | How the window opens | Notes |
+|----|----------------------|-------|
+| macOS | `open -a Terminal <.command>` (LaunchServices) | Avoids the Apple Events / Automation (TCC) permission that silently blocks `osascript` from an MCP server. Verified. |
+| Windows | `powershell.exe … Start-Process` | No TCC-style gate on Windows. Codex CLI installs as `codex.cmd` (auto-selected). *Mechanism implemented; validate on your Windows host.* |
+| Linux | first installed emulator (`gnome-terminal`, `konsole`, `xterm`, `kitty`, `alacritty`, …) | Detected via `command -v`. If none is found (headless / SSH), no window opens. *Mechanism implemented; validate on your distro.* |
+
+If a window can't open (headless, SSH, missing permission, unknown emulator), the run still succeeds —
+follow progress via the `liveLog` path in the result **or** the in-session MCP progress notifications.
+
+- `CODEX_BIN` overrides the Codex binary path/name on any OS (e.g. `CODEX_BIN=C:\tools\codex.exe`).
+- `CODEX_MCP_TERMINAL=1` opens the window by default without passing `terminal: true` per call.
 
 ## Prerequisites
 

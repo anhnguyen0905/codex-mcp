@@ -33,8 +33,24 @@ describe('buildTerminalLaunch', () => {
     expect(joined).toContain('C:\\logs\\a.jsonl')
   })
 
-  test('returns null on unsupported platforms', () => {
+  test('linux runs the detected emulator with its exec flag before the command', () => {
+    const launch = buildTerminalLaunch('linux', {
+      nodeBin: '/usr/bin/node',
+      tailScript: '/tools/tail.mjs',
+      logPath: '/logs/a.jsonl',
+      linuxTerminal: { command: 'gnome-terminal', execFlag: ['--'] },
+    })
+    expect(launch).toEqual({
+      command: 'gnome-terminal',
+      args: ['--', '/usr/bin/node', '/tools/tail.mjs', '/logs/a.jsonl'],
+    })
+  })
+
+  test('linux returns null when no emulator was detected', () => {
     expect(buildTerminalLaunch('linux', paths)).toBeNull()
+  })
+
+  test('returns null on unsupported platforms', () => {
     expect(buildTerminalLaunch('aix', paths)).toBeNull()
   })
 })

@@ -1,7 +1,8 @@
+import { spawnSync } from 'node:child_process'
 import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { openTerminal } from './terminal.js'
+import { LINUX_TERMINALS, openTerminal, type LinuxTerminal } from './terminal.js'
 
 export interface LiveView {
   onStdout: ((chunk: Buffer) => void) | undefined
@@ -18,6 +19,20 @@ const TAIL_SCRIPT = join(HERE, '..', 'scripts', 'tail-progress.mjs')
  * silently blocked when the MCP server lacks Automation (TCC) permission. Returns the file path,
  * or undefined on other platforms / on failure (the launcher then falls back to osascript).
  */
+/**
+ * Pick the first installed Linux terminal emulator (via `command -v`). Returns undefined on
+ * non-Linux platforms or when none is found (headless / SSH), in which case no window opens and
+ * the caller relies on the `liveLog` file plus in-session MCP progress notifications.
+ */
+const detectLinuxTerminal = (): LinuxTerminal | undefined => {
+  if (process.platform !== 'linux') return undefined
+  for (const terminal of LINUX_TERMINALS) {
+    const found = spawnSync('command', ['-v', terminal.command], { shell: true })
+    if (found.status === 0) return terminal
+  }
+  return undefined
+}
+
 const writeCommandFile = (logDir: string, stamp: string, logPath: string): string | undefined => {
   if (process.platform !== 'darwin') return undefined
   try {
@@ -48,6 +63,7 @@ export const createLiveView = (cwd: string): LiveView => {
       nodeBin: process.execPath,
       tailScript: TAIL_SCRIPT,
       commandFile: writeCommandFile(logDir, stamp, logPath),
+      linuxTerminal: detectLinuxTerminal(),
     })
 
     return {

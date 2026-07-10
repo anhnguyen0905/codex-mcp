@@ -1,6 +1,6 @@
 {
   "name": "@anhnguyen0905/codex-mcp",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "MCP server bridging Claude Code and OpenAI Codex CLI for plan-execute-review workflows",
   "main": "dist/index.js",
   "repository": {

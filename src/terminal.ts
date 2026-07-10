@@ -2,6 +2,27 @@ import { spawn } from 'node:child_process'
 
 type SpawnFn = typeof spawn
 
+export interface LinuxTerminal {
+  /** Emulator executable, e.g. `gnome-terminal`, `konsole`, `xterm`. */
+  command: string
+  /** Flag(s) that precede the program to run, e.g. `['--']` for gnome-terminal, `['-e']` for xterm. */
+  execFlag: string[]
+}
+
+/**
+ * Known Linux terminal emulators and how they take a command to run, in preference order.
+ * The launcher picks the first one that exists on the host (detected in liveView).
+ */
+export const LINUX_TERMINALS: readonly LinuxTerminal[] = [
+  { command: 'x-terminal-emulator', execFlag: ['-e'] },
+  { command: 'gnome-terminal', execFlag: ['--'] },
+  { command: 'konsole', execFlag: ['-e'] },
+  { command: 'xfce4-terminal', execFlag: ['-x'] },
+  { command: 'kitty', execFlag: [] },
+  { command: 'alacritty', execFlag: ['-e'] },
+  { command: 'xterm', execFlag: ['-e'] },
+]
+
 export interface TerminalPaths {
   nodeBin: string
   tailScript: string
@@ -12,6 +33,8 @@ export interface TerminalPaths {
    * hold Automation (TCC) permission — the common failure mode when spawned from an MCP server.
    */
   commandFile?: string
+  /** Detected Linux terminal emulator (chosen by liveView). When absent, Linux has no viewer. */
+  linuxTerminal?: LinuxTerminal
 }
 
 export interface OpenTerminalOptions extends Omit<TerminalPaths, 'logPath'> {
@@ -57,6 +80,14 @@ const buildWindowsLaunch = ({ nodeBin, tailScript, logPath }: TerminalPaths): Te
   }
 }
 
+const buildLinuxLaunch = ({ nodeBin, tailScript, logPath, linuxTerminal }: TerminalPaths): TerminalLaunch | null => {
+  if (!linuxTerminal) return null
+  return {
+    command: linuxTerminal.command,
+    args: [...linuxTerminal.execFlag, nodeBin, tailScript, logPath],
+  }
+}
+
 /** Build the platform-specific command to open a new terminal window tailing the Codex log. */
 export const buildTerminalLaunch = (
   platform: NodeJS.Platform,
@@ -64,6 +95,7 @@ export const buildTerminalLaunch = (
 ): TerminalLaunch | null => {
   if (platform === 'darwin') return buildDarwinLaunch(paths)
   if (platform === 'win32') return buildWindowsLaunch(paths)
+  if (platform === 'linux') return buildLinuxLaunch(paths)
   return null
 }
 
@@ -73,8 +105,8 @@ export const buildTerminalLaunch = (
  * viewer must never fail the actual Codex run. On other platforms, tail the `logPath` manually.
  */
 export const openTerminal = (logPath: string, options: OpenTerminalOptions): boolean => {
-  const { platform, nodeBin, tailScript, commandFile, spawnFn = spawn } = options
-  const launch = buildTerminalLaunch(platform, { nodeBin, tailScript, logPath, commandFile })
+  const { platform, nodeBin, tailScript, commandFile, linuxTerminal, spawnFn = spawn } = options
+  const launch = buildTerminalLaunch(platform, { nodeBin, tailScript, logPath, commandFile, linuxTerminal })
   if (launch === null) return false
 
   try {
