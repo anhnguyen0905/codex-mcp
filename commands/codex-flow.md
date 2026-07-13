@@ -109,6 +109,7 @@ For each task in dependency order:
 
 **Load skills first**: `codex-flow:review-conformance` (requirement/plan/structure conformance — check FIRST), `codex-flow:review-quality` (correctness hazards, silent failures, test quality), `codex-flow:review-security` (mandatory when the diff touches auth, input, queries, files, or secrets), and `codex-flow:review-feedback` (severity levels + codex_continue format).
 
+0. Re-read `.codex-flow/PLAN.md` and this task's entry in `.codex-flow/TASKS.md` before reviewing — treat the files on disk as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline, not session memory (which may have been compacted across a long backlog).
 1. Inspect what Codex did: use the `diff` field returned by the tool (git status + patch), and read changed files where the patch is not enough.
 2. Review in order: conformance → quality → security, per the loaded skills.
 3. Run the project's tests/build yourself to verify — Codex's claim is input, not evidence. Compare

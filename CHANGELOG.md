@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-07-14
+
+### Changed
+
+- `/codex-flow` Phase 5 now re-reads `.codex-flow/PLAN.md` and the task's `TASKS.md` entry before reviewing, treating the on-disk files as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline — so reviews stay correct even when session memory has been compacted across a long backlog.
+
 ## [0.4.1] - 2026-07-13
 
 ### Fixed
