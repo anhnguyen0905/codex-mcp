@@ -23,12 +23,21 @@ Call `mcp__codex__codex_health` before anything else:
   until a re-check shows `loggedIn: true`.
 - **`loggedIn: true`** → report the Codex version and continue.
 
+**Resume check** — if `.codex-flow/PLAN.md` and `.codex-flow/TASKS.md` already exist from a prior
+run, do NOT clobber them. Show the user the task Statuses and ask: **resume** (continue from the
+first task not marked done — skip Phases 1–3, jump to Phase 4 for the remaining tasks) or **restart**
+(archive the old files to `.codex-flow/archive/<timestamp>/` and begin fresh). Only interview/plan
+from scratch on restart or when no plan exists.
+
 Then baseline the workspace (in the project root):
 
 1. `git status --porcelain` — if the tree is dirty, ask the user: commit/stash first
    (recommended, gives clean per-task diffs and a rollback point) or proceed with the dirty
-   baseline noted in PLAN.md. Record the baseline ref (`git rev-parse HEAD`).
-2. Detect the project's test command and run it once. Record any pre-existing failures as the
+   baseline noted in PLAN.md. Record the baseline ref (`git rev-parse HEAD`). If the cwd is not a
+   git repo, tell the user diffs/checkpoints/rollback are unavailable and confirm before continuing.
+2. Ensure `.codex-flow/live/` is in the project's `.gitignore` (append it if missing) so raw
+   live-progress JSONL logs never land in checkpoint or final commits.
+3. Detect the project's test command and run it once. Record any pre-existing failures as the
    **known-red baseline** — these are not Codex's fault, and Phase 5 compares against this list
    instead of blaming Codex for old breakage. If the suite can't run at all, tell the user and
    agree on how results will be verified before continuing.
@@ -38,6 +47,10 @@ Then baseline the workspace (in the project root):
 **Load skills first**: `codex-flow:interview-elicitation` (six question domains, stop condition) and `codex-flow:interview-ask-back` (5 Whys, example probing, hidden assumptions).
 
 Interview the user with AskUserQuestion following those skills. Keep asking until every acceptance criterion is verifiable, then write the Requirements Summary and get confirmation.
+
+Scale interview depth to task complexity: a small, unambiguous change needs only a short
+Requirements Summary and a quick confirmation — don't force the full six-domain interview. A large
+or ambiguous feature warrants the full elicitation. When in doubt, ask.
 
 ## Phase 2 — Plan & Architecture (Claude)
 
@@ -72,6 +85,7 @@ Decompose the approved plan into tasks and write `.codex-flow/TASKS.md`:
 - Depends on: — | T<n>
 - Files: <files to create/modify>
 - Steps: <concrete, file-level steps>
+- Skills: <Phase 2 domain skills relevant to THIS task, or — >
 - Acceptance: <verifiable criteria for THIS task — tests to pass, behaviors>
 - Status: pending
 ```
@@ -79,6 +93,8 @@ Decompose the approved plan into tasks and write `.codex-flow/TASKS.md`:
 Rules for slicing:
 - Each task independently verifiable, roughly one Codex run (~5–30 min of work).
 - Order by dependency; a task may only depend on earlier tasks.
+- Decide the skill→task mapping ONCE here (the `Skills:` field), from the skills selected in
+  Phase 2 — so Phase 4 embeds a consistent, user-reviewable set per task instead of re-guessing.
 - Also mirror the tasks with TaskCreate so the user sees live progress.
 
 Show the backlog to the user and get approval before executing. At the same time ask once:
@@ -92,9 +108,10 @@ gives per-task rollback points).
 For each task in dependency order:
 
 1. Call `mcp__codex__codex_execute` with:
-   - `prompt`: "Read .codex-flow/PLAN.md for context. Implement task T<n> exactly as specified below, and only this task. Run its acceptance checks before finishing." + the full task text + the standards, testing, and language blocks from the loaded skills + a distilled ≤ 30-line rules block per domain skill selected in Phase 2 that is relevant to THIS task (see `codex-flow:skill-selection` Step 5 — never paste a whole SKILL.md)
+   - `prompt`: "Read .codex-flow/PLAN.md for context. Implement task T<n> exactly as specified below, and only this task. Run its acceptance checks before finishing." + the full task text + the standards, testing, and language blocks from the loaded skills + a distilled ≤ 30-line rules block for each skill listed in the task's `Skills:` field (see `codex-flow:skill-selection` Step 6 — never paste a whole SKILL.md)
    - `cwd`: absolute path of the project root
-   - `sandbox`: `workspace-write`
+   - `sandbox`: `workspace-write` by default. Use `read-only` for investigation-only tasks; use `danger-full-access` ONLY when the task genuinely needs network or a global install — and tell the user before doing so.
+   - `model`: match the task's complexity — a stronger model for architectural, cross-cutting, or subtle-logic tasks; the default (or a faster/cheaper model) for small, mechanical, well-specified tasks. Note the choice in the Decision log.
    - `timeoutMs`: scale to task size (default 30 min)
    - `terminal`: `true` — opens a live-progress terminal window when supported; progress also streams into the session via MCP notifications
 2. **Save the returned `sessionId`** — reviews in Phase 5 go back into this session. Reuse one session (`codex_continue`) while consecutive tasks build on each other in the SAME domain; start a fresh `codex_execute` when a task is independent OR shifts domain (e.g. backend → data pipeline → marketing copy) — a fresh session gets the new task's distilled skill blocks instead of inheriting stale context from the previous domain.
@@ -119,12 +136,12 @@ For each task in dependency order:
    requirement) rather than Codex mis-implementing it, do NOT burn review rounds — go back to
    Phase 2, amend PLAN.md with user approval, re-slice the affected tasks, then resume.
 6. **If clean**: mark the task done, move to the next task.
-7. **After the last task**: do a whole-feature review pass (optionally `mcp__codex__codex_review` for a second opinion), run the full test suite, AND verify the feature end-to-end by actually exercising the changed behavior (run the app/flow, not only unit tests). Then summarize the delivered change, remaining risks, and suggest a commit message. Do not commit unless the user asks.
+7. **After the last task**: do a whole-feature review pass (optionally `mcp__codex__codex_review` for a second opinion), run the full test suite, AND verify the feature end-to-end by actually exercising the changed behavior (run the app/flow, not only unit tests). Then summarize the delivered change, remaining risks, and suggest a commit message. If per-task checkpoint commits were made, offer to squash the `wip(codex-flow)` commits into one clean commit (or keep them — user's call). Do not commit or squash unless the user asks.
 8. **Retro**: per `codex-flow:skill-selection` Step 7, if the flow produced reusable domain
    knowledge not covered by any indexed skill, offer to save it as a new skill in the local
    library and rebuild the index.
 
 Rules:
 - Never skip the interview, plan approval, or backlog approval.
-- Never fix Codex's code yourself in rounds 1–3 — send findings back via `codex_continue` so the Codex session stays consistent. Only fix by hand if 3 rounds fail, and tell the user.
+- Never fix Codex's code yourself in rounds 1–3 — send findings back via `codex_continue` so the Codex session stays consistent. Only fix by hand if 3 rounds fail, and tell the user. After any hand-fix, re-run the task's acceptance checks before marking it done.
 - If a Codex run fails or times out, report it and ask the user before retrying (quota is not free).

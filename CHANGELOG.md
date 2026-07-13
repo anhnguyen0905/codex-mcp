@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-07-14
+
+### Added
+
+- **Resume/idempotency**: Phase 0 detects an existing `.codex-flow/PLAN.md` + `TASKS.md` and offers to resume from the first not-done task (skipping interview/plan/backlog) or restart (archiving the old files) — instead of silently clobbering an interrupted run.
+- **Per-task `Skills:` field** in `TASKS.md`: the skill→task mapping is decided once at slicing time (Phase 3) from the Phase 2 selection, so Phase 4 embeds a consistent, user-reviewable set per task instead of re-guessing each run.
+- **Model selection by complexity**: Phase 4 picks the Codex `model` per task — a stronger model for architectural/cross-cutting/subtle tasks, a faster/cheaper one for small mechanical tasks — recorded in the Decision log.
+- **Sandbox-mode guidance**: `workspace-write` by default, `read-only` for investigation-only tasks, `danger-full-access` only when network/global install is genuinely needed (with user notice).
+
+### Changed
+
+- Phase 0 ensures `.codex-flow/live/` is in the project `.gitignore` so raw live-progress JSONL logs never land in checkpoint or final commits; warns when the cwd is not a git repo.
+- Phase 1 interview depth now scales to task complexity (short summary + quick confirm for small changes; full elicitation for large/ambiguous ones).
+- Phase 5 offers to squash the `wip(codex-flow)` checkpoint commits into one clean commit at the end, and requires re-running acceptance checks after any hand-fix.
+
 ## [0.4.2] - 2026-07-14
 
 ### Changed
