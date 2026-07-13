@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Runs the skill-selection scope scenarios against a skill index and evaluates
 // whether the retrieval core surfaces the right skills within the ≤3 budget.
 //

@@ -3,6 +3,13 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-07-13
+
+### Fixed
+
+- CI: the skill-selection scripts no longer carry a `#!/usr/bin/env node` shebang, which Vite failed to strip on Windows when the test suite imports them (`SyntaxError: Invalid or unexpected token`). They still run via `node scripts/<file>.mjs`.
+- CI: `tests/skillEval.test.ts` no longer reads the built index at collection time, so the real-index suite is cleanly skipped (not errored) on machines without `~/.claude/skill-library/INDEX.md`.
+
 ## [0.4.0] - 2026-07-13
 
 ### Added

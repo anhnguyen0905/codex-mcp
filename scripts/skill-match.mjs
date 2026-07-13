@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Deterministic retrieval core for skill-selection: score index entries against
 // derived search terms, rank them, and apply the budget. This is the mechanically
 // testable part of skills/skill-selection/SKILL.md (Steps 4-5) — the LLM handles

@@ -83,9 +83,10 @@ describe('evaluateScenario', () => {
 // index hasn't been built yet (e.g. CI without the skill library) so the suite
 // stays green without the local setup.
 describe.runIf(existsSync(indexFile))('scope scenarios against the real index', () => {
-  const entries = parseCatalog(readFileSync(indexFile, 'utf8'))
-
   test('all scope scenarios select the expected skills within budget', () => {
+    // Read inside the test (not the describe body) so collection never touches
+    // the file — the suite is skipped when the index isn't built (e.g. CI).
+    const entries = parseCatalog(readFileSync(indexFile, 'utf8'))
     const { results, passed, total } = runScenarios(scenarios, entries)
     const failed = results.filter((r: { pass: boolean }) => !r.pass)
     // Surface which scenarios failed for a readable assertion message.

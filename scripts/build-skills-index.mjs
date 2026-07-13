@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Builds a grep-friendly index of local skills so /codex-flow can SELECT the
 // few relevant skills for a task instead of blind-loading whole collections.
 //

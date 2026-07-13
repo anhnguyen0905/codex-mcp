@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Syncs the awesome-claude-skills list into a local REMOTE.md catalog — the
 // foundation layer of the skill index. build-skills-index.mjs merges this
 // catalog into INDEX.md; locally vetted skills always shadow remote entries.
