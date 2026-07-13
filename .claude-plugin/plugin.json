@@ -1,7 +1,7 @@
 {
   "name": "codex-flow",
-  "description": "Plan with Claude, execute with OpenAI Codex, review with Claude — /codex-flow command plus the codex MCP server (execute, continue, review, health).",
-  "version": "0.3.0",
+  "description": "Plan with Claude, execute with OpenAI Codex, review with Claude \u2014 /codex-flow command plus the codex MCP server (execute, continue, review, health).",
+  "version": "0.4.0",
   "author": {
     "name": "anhnguyen0905",
     "url": "https://github.com/anhnguyen0905"
@@ -9,5 +9,10 @@
   "homepage": "https://github.com/anhnguyen0905/codex-mcp",
   "repository": "https://github.com/anhnguyen0905/codex-mcp",
   "license": "MIT",
-  "keywords": ["codex", "mcp", "workflow", "plan-execute-review"]
+  "keywords": [
+    "codex",
+    "mcp",
+    "workflow",
+    "plan-execute-review"
+  ]
 }

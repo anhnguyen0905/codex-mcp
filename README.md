@@ -94,6 +94,27 @@ follow progress via the `liveLog` path in the result **or** the in-session MCP p
 - `CODEX_BIN` overrides the Codex binary path/name on any OS (e.g. `CODEX_BIN=C:\tools\codex.exe`).
 - `CODEX_MCP_TERMINAL=1` opens the window by default without passing `terminal: true` per call.
 
+### Verifying skill selection (scope eval)
+
+A 32-scenario eval covers selection across scopes — engineering, data/analytics, marketing,
+product, design, security, bioinformatics, ML, documents, testing, game design, mobile, plus a
+multi-facet request and an uncovered-domain negative case. It runs the deterministic retrieval
+core (`scripts/skill-match.mjs`) against your built index and asserts each scope surfaces the
+right skill within a ~3%-of-context token budget (no fixed skill count; stays empty for uncovered
+domains):
+
+```bash
+npm run skills:eval   # writes docs/skill-selection-eval-report.md
+```
+
+Latest run: **32/32 (100%)** against a 348-skill index — see
+[`docs/skill-selection-eval-report.md`](docs/skill-selection-eval-report.md). Selection is bounded
+by the context budget, not a skill count: a scope loads every relevant skill that fits (e.g. the
+Expo mobile scenario loads 10 skills up to the ~6000-token ceiling; narrow scopes load one). The
+eval covers the mechanical match/rank/budget steps; role classification, per-facet selection, and
+content vetting are LLM-judgment steps checked in review (the report's "Method & scope" section
+spells out the boundary).
+
 ## Prerequisites
 
 - Node.js ≥ 20
@@ -130,6 +151,31 @@ The repo doubles as a Claude Code plugin marketplace bundling the `/codex-flow` 
 
 Restart Claude Code when prompted, then run `/codex-flow <feature description>` in any project.
 Prerequisite stays the same: Codex CLI installed and logged in (see below).
+
+## Skill selection (local skill index)
+
+Instead of blind-loading whole skill collections, `/codex-flow` selects the few domain skills
+relevant to the task from a **local index** (Phase 2): it classifies the request's role facets
+(engineering, data, marketing, product, design…), evaluates what's already loaded, loads at most
+3 matching skills, and embeds distilled rule blocks into the Codex prompts — re-selected per task.
+
+```bash
+node scripts/sync-awesome-skills.mjs --clone              # local-first: clone every repo in awesome-claude-skills → ~/claude-skill-library/remote/
+node scripts/build-skills-index.mjs                       # scans ~/.claude/skills + ~/claude-skill-library, merges leftover REMOTE.md pointers
+node scripts/build-skills-index.mjs ~/my-skill-collection # add your own collection dirs
+```
+
+Output: `~/.claude/skill-library/INDEX.md` — one grep-friendly line per skill
+(`name | description | path`). Skills on disk cost **zero context** until selected — the library
+lives outside Claude's auto-discovered skill dirs, so only what a session actually loads enters
+that session. Third-party skills (anything under `remote/`) are **vetted once before first use**
+and recorded in `VETTED.md`; non-GitHub entries stay as URL pointers until fetched. Skills
+researched or created during a flow are registered back into the library + index, so it grows
+richer over time. Re-run `--clone` periodically to pull upstream updates. Override the index
+location with `--out <file>` or `CODEX_FLOW_SKILLS_INDEX`. No index? The flow still works — it
+just skips domain skill selection. See `skills/skill-selection/SKILL.md` for the full procedure
+(classify role facets → evaluate loaded set → match → vet + budgeted load → embed per Codex task →
+research/create fallback → register back).
 
 ## Install (standalone, one command)
 
