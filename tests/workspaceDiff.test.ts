@@ -52,7 +52,30 @@ describe('captureWorkspaceDiff', () => {
 
     const diff = await captureWorkspaceDiff(repo)
 
-    expect(diff).toEqual({ status: '', patch: '', truncated: false })
+    expect(diff).toEqual({ status: '', statusTruncated: false, patch: '', truncated: false })
+  })
+
+  test('keeps a valid status when the repo has no commits yet (unborn HEAD)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-unborn-'))
+    tempDirs.push(dir)
+    git(dir, 'init', '-q')
+    writeFileSync(join(dir, 'new.txt'), 'brand new\n')
+
+    // `git diff HEAD` fails here (no HEAD), but status must still survive — not swallowed to null.
+    const diff = await captureWorkspaceDiff(dir)
+
+    expect(diff).not.toBeNull()
+    expect(diff?.status).toContain('new.txt')
+  })
+
+  test('truncates an oversized status and flags it', async () => {
+    const repo = makeRepo()
+    for (let i = 0; i < 50; i++) writeFileSync(join(repo, `f${i}.txt`), 'x\n')
+
+    const diff = await captureWorkspaceDiff(repo, { maxStatusBytes: 64 })
+
+    expect(diff?.statusTruncated).toBe(true)
+    expect(diff?.status.length).toBeLessThanOrEqual(64)
   })
 
   test('returns null outside a git repo', async () => {
