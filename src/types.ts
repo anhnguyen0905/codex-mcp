@@ -49,4 +49,6 @@ export interface RunOutcome {
   timedOut: boolean
   /** True when the run was cancelled via AbortSignal (e.g. user pressed Esc in the MCP client). */
   aborted?: boolean
+  /** True when stdout exceeded the buffer cap and the tail was dropped — the parsed result may be incomplete. */
+  truncated?: boolean
 }

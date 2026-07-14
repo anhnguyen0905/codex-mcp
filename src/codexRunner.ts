@@ -70,7 +70,6 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
 
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
-    let bufferedBytes = 0
     let timedOut = false
     let aborted = false
     let settled = false
@@ -101,23 +100,40 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
       signal?.removeEventListener('abort', onAbort)
     }
 
-    const collect = (chunks: Buffer[], forward?: (chunk: Buffer) => void) => (chunk: Buffer) => {
-      forward?.(chunk)
-      if (bufferedBytes >= MAX_OUTPUT_BYTES) return
-      bufferedBytes += chunk.length
-      chunks.push(chunk)
+    // Each stream gets its OWN byte budget: a noisy stderr must not evict stdout (the stream
+    // that gets parsed), and `truncated` must reflect only stdout. Forwarding to the live view /
+    // progress sink is also capped, so a runaway stream can't fill the disk after the buffer cap.
+    const makeCollector = (chunks: Buffer[], forward?: (chunk: Buffer) => void) => {
+      let bytes = 0
+      let capped = false
+      const onData = (chunk: Buffer): void => {
+        if (capped) return
+        if (bytes >= MAX_OUTPUT_BYTES) {
+          // Cap hit: the tail (possibly the final usage/agent_message event) is dropped. Flag it
+          // so the caller knows the parsed result may be incomplete rather than trusting it blindly.
+          capped = true
+          return
+        }
+        bytes += chunk.length
+        chunks.push(chunk)
+        forward?.(chunk)
+      }
+      return { onData, isTruncated: () => capped }
     }
+    const stdoutCollector = makeCollector(stdoutChunks, onStdout)
+    const stderrCollector = makeCollector(stderrChunks)
 
     const fail = (error: Error): void => {
       if (settled) return
       settled = true
       clearTimers()
-      child.kill('SIGKILL')
+      // Group-kill (not just the direct child) so subprocesses Codex spawned don't orphan.
+      signalChild('SIGKILL')
       reject(error)
     }
 
-    child.stdout?.on('data', collect(stdoutChunks, onStdout))
-    child.stderr?.on('data', collect(stderrChunks))
+    child.stdout?.on('data', stdoutCollector.onData)
+    child.stderr?.on('data', stderrCollector.onData)
     child.stdout?.on('error', fail)
     child.stderr?.on('error', fail)
     child.on('error', fail)
@@ -132,6 +148,7 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
         exitCode,
         timedOut,
         aborted,
+        truncated: stdoutCollector.isTruncated(),
       })
     })
   })
