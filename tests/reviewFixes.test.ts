@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, test, vi } from 'vitest'
@@ -30,6 +30,20 @@ describe('cwdLockKey', () => {
 
     // realpath of an existing dir must match itself regardless of trailing indirection
     expect(cwdLockKey(dir)).toBe(cwdLockKey(join(dir, '.')))
+  })
+
+  test('stays stable when the leaf dir does not exist yet, then is created mid-run', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-lock-'))
+    tempDirs.push(dir)
+    const leaf = join(dir, 'scaffolded')
+
+    // Key computed before the dir exists must equal the key after it's created —
+    // otherwise a run that scaffolds its own cwd could let a second run bypass the lock.
+    const before = cwdLockKey(leaf)
+    mkdirSync(leaf)
+    const after = cwdLockKey(leaf)
+
+    expect(before).toBe(after)
   })
 })
 
