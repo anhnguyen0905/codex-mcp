@@ -24,8 +24,11 @@ const formatItem = (item: RawItem): string | null => {
     case 'command_execution':
       return `▸ $ ${item.command ?? ''}  (exit ${item.exit_code ?? '…'})`
     case 'file_change': {
-      const paths = (item.changes ?? []).map((change) => change.path ?? '?').join(', ')
-      return `✎ ${(item.changes ?? []).length} file(s): ${paths}`
+      const changes = Array.isArray(item.changes) ? item.changes : []
+      const paths = changes
+        .map((change) => (typeof change === 'object' && change !== null ? change.path ?? '?' : '?'))
+        .join(', ')
+      return `✎ ${changes.length} file(s): ${paths}`
     }
     case 'error':
       return `✗ ${item.message ?? 'unknown error'}`

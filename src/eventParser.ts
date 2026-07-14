@@ -50,10 +50,15 @@ const toUsage = (raw: RawUsage): CodexUsage => ({
 })
 
 const toFileChanges = (item: RawItem): readonly CodexFileChange[] =>
-  (item.changes ?? []).map((change) => ({
-    path: change.path ?? '',
-    kind: change.kind ?? 'unknown',
-  }))
+  // Defend against malformed input: `changes` may be a non-array, or an array with null/non-object
+  // entries. An unguarded `.map(c => c.path)` would throw and abort the whole parse, discarding an
+  // otherwise-complete run's result.
+  (Array.isArray(item.changes) ? item.changes : [])
+    .filter((change): change is { path?: string; kind?: string } => typeof change === 'object' && change !== null)
+    .map((change) => ({
+      path: change.path ?? '',
+      kind: change.kind ?? 'unknown',
+    }))
 
 const applyItem = (result: CodexResult, item: RawItem): CodexResult => {
   switch (item.type) {
