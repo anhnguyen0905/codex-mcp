@@ -163,6 +163,24 @@ Pass extra directories to index your own collections (`build-skills-index.mjs ~/
 Full procedure (classify → evaluate loaded set → match → vet + budgeted load → embed per Codex
 task → register back) lives in [`skills/skill-selection/SKILL.md`](skills/skill-selection/SKILL.md).
 
+## Parallel execution (large backlogs)
+
+By default Phase 4 runs tasks one at a time. For a big backlog with independent tasks, `/codex-flow`
+can run them **concurrently** — codex-mcp serializes runs per `cwd` but parallelizes across `cwd`s,
+so each concurrent task gets its own git worktree driven by a Claude subagent, then results are
+merged and integration-reviewed per wave.
+
+```bash
+node scripts/task-waves.mjs .codex-flow/TASKS.md   # or: npm run waves
+```
+
+This computes execution **waves** from the backlog's `Depends on:` + `Files:` metadata — a wave
+batches tasks whose dependencies are met and whose files are disjoint (tasks with no declared files
+run alone). If the tool reports width 1 ("fully sequential"), parallelizing won't help. Parallel
+mode is opt-in and costs N× simultaneous quota; see
+[`skills/parallel-execution/SKILL.md`](skills/parallel-execution/SKILL.md) for the playbook
+(worktree per task → per-wave merge → mandatory integration review → quota cap and failure handling).
+
 ### Verifying selection (scope eval)
 
 A 32-scenario eval checks selection across scopes (engineering, data, marketing, product, design,
@@ -242,3 +260,4 @@ Skill-selection scripts (`npm run skills:sync` / `skills:index` / `skills:eval`)
 - `scripts/build-skills-index.mjs` — scan skill dirs → `INDEX.md` (merges remote pointers)
 - `scripts/skill-match.mjs` — deterministic retrieval core (score → rank → token-budget fit)
 - `scripts/skill-eval.mjs` — run the scope scenarios → `docs/skill-selection-eval-report.md`
+- `scripts/task-waves.mjs` — compute parallel execution waves from `TASKS.md` (`npm run waves`)

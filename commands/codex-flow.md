@@ -101,11 +101,19 @@ Show the backlog to the user and get approval before executing. At the same time
 **checkpoint commits after each passed task — yes/no?** (recommended yes on multi-task backlogs;
 gives per-task rollback points).
 
-## Phase 4 — Execution (Codex, one task at a time)
+## Phase 4 — Execution (Codex)
 
 **Load skills first**: `codex-flow:exec-coding-standards` and `codex-flow:exec-self-testing` (blocks to embed into every Codex prompt), plus the language skill matching the project: `codex-flow:exec-typescript`, `codex-flow:exec-python`, `codex-flow:exec-go`, or `codex-flow:exec-jvm`. Codex cannot see Claude's skills — the prompt is the only channel, so these standards blocks MUST be embedded in the prompt text.
 
-For each task in dependency order:
+**Sequential vs parallel**: by default run tasks one at a time in dependency order (below). For a
+large backlog with independent tasks, consider **parallel mode**: run
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/task-waves.mjs" .codex-flow/TASKS.md` to compute execution
+waves from the `Depends on:` + `Files:` metadata. If it reports width > 1 AND the user opts in,
+load `codex-flow:parallel-execution` and follow it (one git worktree + subagent per concurrent
+task, then merge + integration-review per wave). If it reports "fully sequential", or the backlog
+is small, or the user declines, stay sequential. Parallel mode costs N× simultaneous quota.
+
+For each task in dependency order (sequential mode):
 
 1. Call `mcp__codex__codex_execute` with:
    - `prompt`: "Read .codex-flow/PLAN.md for context. Implement task T<n> exactly as specified below, and only this task. Run its acceptance checks before finishing." + the full task text + the standards, testing, and language blocks from the loaded skills + a distilled ≤ 30-line rules block for each skill listed in the task's `Skills:` field (see `codex-flow:skill-selection` Step 6 — never paste a whole SKILL.md)

@@ -1,6 +1,6 @@
 {
   "name": "@anhnguyen0905/codex-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "MCP server bridging Claude Code and OpenAI Codex CLI for plan-execute-review workflows",
   "main": "dist/index.js",
   "repository": {
@@ -25,6 +25,7 @@
     "skills:sync": "node scripts/sync-awesome-skills.mjs --clone",
     "skills:index": "node scripts/build-skills-index.mjs",
     "skills:eval": "node scripts/skill-eval.mjs --report docs/skill-selection-eval-report.md",
+    "waves": "node scripts/task-waves.mjs",
     "doctor": "node scripts/doctor.mjs",
     "prepare": "npm run build",
     "start": "node dist/index.js"
@@ -65,6 +66,7 @@
     "scripts/sync-awesome-skills.mjs",
     "scripts/skill-match.mjs",
     "scripts/skill-eval.mjs",
+    "scripts/task-waves.mjs",
     "skills",
     "commands",
     "tests/fixtures/skill-scenarios.json",

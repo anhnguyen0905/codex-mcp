@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-07-14
+
+### Added
+
+- **Parallel execution mode** for large backlogs: run independent tasks concurrently, each in its own git worktree (codex-mcp serializes per `cwd` but parallelizes across `cwd`s), driven by a Claude subagent, then merged + integration-reviewed per wave.
+  - `scripts/task-waves.mjs` (`npm run waves`) computes execution **waves** from `TASKS.md` — a wave batches tasks whose dependencies are satisfied and whose `Files:` sets are disjoint; tasks with no declared files run alone. Throws on dependency cycles / unknown deps.
+  - `codex-flow:parallel-execution` skill — the playbook (when to use, worktree-per-task, per-wave merge + mandatory integration review, quota cap, failure handling).
+  - Phase 4 gains an opt-in parallel branch: compute waves, and if width > 1 and the user agrees, fan out; otherwise stay sequential. Off by default.
+
+### Notes
+
+- Execution speed levers already in the flow: model-by-complexity (0.5.0), small well-specified tasks, lean prompts with distilled skill blocks, same-domain session reuse, and fewer review round-trips.
+
 ## [0.5.0] - 2026-07-14
 
 ### Added
