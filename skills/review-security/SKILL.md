@@ -7,7 +7,7 @@ description: Security review checklist for Codex output — secrets, injection, 
 
 ## Mandatory triggers (never skip when the diff touches these)
 
-Auth/session logic · user input handling · database queries · file system paths from input · external API calls · crypto · payments · anything reading env/config secrets.
+Auth/session logic · user input handling · database queries · file system paths from input · external API calls · crypto · payments · anything reading env/config secrets · a non-code **deliverable** that could embed secrets, credentials, PII, or internal data that must not leave the workspace (check the content, not just code).
 
 ## Checklist
 

@@ -1,5 +1,5 @@
 ---
-description: "5-phase workflow: Claude interviews → plans architecture → breaks backlog → Codex executes per task → Claude reviews"
+description: "6-phase workflow: preflight → Claude interviews → plans architecture → breaks backlog → Codex executes per task → Claude reviews"
 argument-hint: "<feature or task description>"
 ---
 
@@ -7,7 +7,7 @@ argument-hint: "<feature or task description>"
 
 Task: $ARGUMENTS
 
-Follow these 5 phases strictly. Do NOT write implementation code yourself — Codex does the implementation.
+Follow these six phases (0–5) strictly. Do NOT write implementation code yourself — Codex does the implementation.
 
 Each phase names plugin skills (`codex-flow:*`) to load via the Skill tool before starting the phase — they carry the detailed checklists. If a named skill is unavailable (command installed without the plugin), continue with the phase instructions below as written.
 
@@ -164,7 +164,7 @@ For each task in dependency order (sequential mode):
    Phase 2, amend PLAN.md with user approval, re-slice the affected tasks, then resume.
 6. **If clean**: mark the task done, move to the next task.
 7. **After the last task**: do a whole-feature review pass (optionally `mcp__codex__codex_review` for a second opinion), run the full test suite, AND verify the feature end-to-end by actually exercising the changed behavior (run the app/flow, not only unit tests). Then summarize the delivered change, remaining risks, and suggest a commit message. If per-task checkpoint commits were made, offer to squash the `wip(codex-flow)` commits into one clean commit (or keep them — user's call). Do not commit or squash unless the user asks.
-8. **Retro**: per `codex-flow:skill-selection` Step 7, if the flow produced reusable domain
+8. **Retro**: per `codex-flow:skill-selection` Step 8, if the flow produced reusable domain
    knowledge not covered by any indexed skill, offer to save it as a new skill in the local
    library and rebuild the index.
 

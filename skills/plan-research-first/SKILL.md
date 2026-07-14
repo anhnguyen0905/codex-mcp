@@ -16,7 +16,7 @@ Never design from a blank page. Cheapest code is code you don't write; second ch
 
 ## What to record in PLAN.md
 
-For each significant choice: what was found, what was chosen, and why the alternatives lost — one line each. This stops the "why didn't we just use X?" review round.
+For each significant choice: what was found, what was chosen, and why the alternatives lost — one line each. This stops the "why didn't we just use X?" review round. Record any **new dependency** under PLAN.md's *Risk & blast radius* (with license + maintenance status), and reflect a reused in-repo pattern in the *Contracts* / *Component → files* sections so the backlog slices along it.
 
 ## Guardrails
 

@@ -25,6 +25,11 @@ earlier waves, and no two tasks in the wave touch the same file (`Files:` field)
 declared files run alone (unknown blast radius). The tool prints each wave and its width; a wave
 of width 1 just runs like normal Phase 4.
 
+Wave quality is only as good as the backlog metadata: accurate per-task `Files:` sets (from PLAN.md's
+**Component → files** map) and fixed **Contracts** are what make concurrent tasks genuinely
+independent. If tasks were sliced with vague file lists, fix the backlog before parallelizing —
+don't parallelize on guesses.
+
 Show the wave plan to the user before spawning anything.
 
 ## Step 2 — Per wave: spawn a subagent + worktree per task

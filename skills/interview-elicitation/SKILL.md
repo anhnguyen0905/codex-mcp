@@ -21,6 +21,7 @@ Goal: leave the interview with requirements so unambiguous that a different engi
 - Ask with AskUserQuestion; batch related questions (max 4 per round) instead of one long interrogation.
 - Offer concrete options with a recommended default — users answer choices faster than open questions.
 - Convert every vague answer into a verifiable statement and read it back ("So: uploads over 10 MB are rejected with a visible error — correct?").
+- Write each acceptance criterion **atomic and independently testable** — one behavior per criterion. These become the per-task `Acceptance` lines in the backlog, so a criterion that bundles three behaviors forces an oversized, hard-to-review task later.
 - Record assumptions you had to make as explicit "Assumed:" lines the user can veto.
 
 ## Stop condition
