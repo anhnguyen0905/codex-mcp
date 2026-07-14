@@ -176,8 +176,9 @@ node scripts/task-waves.mjs .codex-flow/TASKS.md   # or: npm run waves
 
 This computes execution **waves** from the backlog's `Depends on:` + `Files:` metadata — a wave
 batches tasks whose dependencies are met and whose files are disjoint (tasks with no declared files
-run alone). If the tool reports width 1 ("fully sequential"), parallelizing won't help. Parallel
-mode is opt-in and costs N× simultaneous quota; see
+run alone). Waves are capped at **10 concurrent subagents** by default (`--max <n>` to lower it);
+a wider ready set splits across consecutive waves. If the tool reports width 1 ("fully
+sequential"), parallelizing won't help. Parallel mode is opt-in and costs N× simultaneous quota; see
 [`skills/parallel-execution/SKILL.md`](skills/parallel-execution/SKILL.md) for the playbook
 (worktree per task → per-wave merge → mandatory integration review → quota cap and failure handling).
 

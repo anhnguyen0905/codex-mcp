@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] - 2026-07-14
+
+### Changed
+
+- Parallel execution caps at **10 concurrent subagents** per wave by default (`computeWaves` `maxConcurrency`, `task-waves.mjs --max <n>`): a wider ready set is split across consecutive ≤10 waves instead of spawning everything at once.
+
 ## [0.6.0] - 2026-07-14
 
 ### Added

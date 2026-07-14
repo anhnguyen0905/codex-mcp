@@ -65,6 +65,8 @@ sequential Phase 5 step 7), then summarize. Offer to squash the per-task/per-wav
   report the failure, and ask the user before retrying (quota is not free).
 - If a merge conflict is non-trivial, stop and surface it — do not let a subagent force-resolve
   another task's code.
-- Cap concurrency to a sane N (e.g. 3–4) even if a wave is wider, to bound quota and review load.
+- Never spawn more than **10 subagents at once** — the wave tool already caps each wave at 10
+  (`--max <n>` to lower it) and flows the rest into the next wave, so a very wide backlog is split
+  into consecutive ≤10 waves. Lower the cap when quota or review load is tight.
 - Keep the option OFF by default: only enter parallel mode when Step 1 shows real width and the
   user opts in.

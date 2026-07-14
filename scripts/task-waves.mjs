@@ -7,11 +7,16 @@
 // touch the same file. Tasks with no declared files run alone (unknown blast
 // radius). See skills/parallel-execution/SKILL.md for the playbook.
 //
-// Usage: node scripts/task-waves.mjs [path/to/TASKS.md]   (default: .codex-flow/TASKS.md)
+// Usage: node scripts/task-waves.mjs [path/to/TASKS.md] [--max <n>]
+//   default file: .codex-flow/TASKS.md   default concurrency cap: 10 subagents/wave
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+
+// Cap on how many subagents/worktrees run at once — a wider ready set is split
+// across consecutive waves so we never spawn more than this many in parallel.
+export const DEFAULT_MAX_CONCURRENCY = 10
 
 const taskNum = (id) => parseInt(id.slice(1), 10)
 const isPlaceholder = (token) => token.includes('<') || token.includes('>')
@@ -54,7 +59,8 @@ export function parseTasks(markdown) {
  * Compute execution waves. Returns { waves: [[id]], maxWidth, parallelizable }.
  * Throws on unknown dependencies or dependency cycles.
  */
-export function computeWaves(tasks) {
+export function computeWaves(tasks, { maxConcurrency = DEFAULT_MAX_CONCURRENCY } = {}) {
+  const cap = maxConcurrency > 0 ? maxConcurrency : Infinity
   const byId = new Map(tasks.map((t) => [t.id, t]))
   for (const t of tasks) {
     for (const dep of t.dependsOn) {
@@ -80,6 +86,7 @@ export function computeWaves(tasks) {
     let exclusiveTaken = false
 
     for (const id of ready) {
+      if (wave.length >= cap) break // concurrency cap → rest flow to the next wave
       const files = byId.get(id).files
       if (files.length === 0) {
         // Unknown blast radius → run alone.
@@ -123,12 +130,16 @@ const isDirectRun =
   process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 
 if (isDirectRun) {
-  const file = path.resolve(process.argv[2] ?? path.join('.codex-flow', 'TASKS.md'))
+  const args = process.argv.slice(2)
+  const maxIdx = args.findIndex((a) => a === '--max')
+  const maxConcurrency = maxIdx >= 0 ? Number(args[maxIdx + 1]) : DEFAULT_MAX_CONCURRENCY
+  const fileArg = args.find((a, i) => a !== '--max' && args[i - 1] !== '--max')
+  const file = path.resolve(fileArg ?? path.join('.codex-flow', 'TASKS.md'))
   fs.readFile(file, 'utf8')
     .then((md) => {
       const tasks = parseTasks(md)
       if (tasks.length === 0) throw new Error(`no tasks found in ${file}`)
-      console.log(renderWaves(computeWaves(tasks)))
+      console.log(renderWaves(computeWaves(tasks, { maxConcurrency })))
     })
     .catch((error) => {
       console.error(`task-waves: ${error.message}`)

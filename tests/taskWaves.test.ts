@@ -120,6 +120,33 @@ describe('computeWaves', () => {
     expect(waves[0]).toEqual(['T2', 'T10'])
   })
 
+  test('caps a wide wave at maxConcurrency and flows the rest into the next wave', () => {
+    const tasks = Array.from({ length: 5 }, (_, i) => ({
+      id: `T${i + 1}`,
+      dependsOn: [],
+      files: [`f${i}.ts`],
+    }))
+
+    const { waves, maxWidth } = computeWaves(tasks, { maxConcurrency: 2 })
+
+    expect(maxWidth).toBe(2)
+    expect(waves).toEqual([['T1', 'T2'], ['T3', 'T4'], ['T5']])
+  })
+
+  test('defaults the concurrency cap to 10', () => {
+    const tasks = Array.from({ length: 12 }, (_, i) => ({
+      id: `T${i + 1}`,
+      dependsOn: [],
+      files: [`f${i}.ts`],
+    }))
+
+    const { maxWidth, waves } = computeWaves(tasks)
+
+    expect(maxWidth).toBe(10)
+    expect(waves[0]).toHaveLength(10)
+    expect(waves[1]).toHaveLength(2)
+  })
+
   test('throws on a dependency cycle', () => {
     const tasks = [
       { id: 'T1', dependsOn: ['T2'], files: ['a.ts'] },
