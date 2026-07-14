@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-07-14
+
+### Added
+
+- **Six new language execution skills** so Phase 4 embeds real idioms for more stacks instead of falling back to the language-agnostic standards block: `codex-flow:exec-rust`, `exec-csharp` (C#/.NET), `exec-php`, `exec-ruby`, `exec-swift`, and `exec-cpp` (C/C++). Joins the existing TypeScript/Python/Go/JVM set.
+- **`codex-flow:exec-deliverable`** — a non-code execution skill (deliverable standards + a verification block that mirrors self-testing) for tasks that produce content rather than code (data analysis, marketing copy, docs, research, plans). Phase 4 now loads it *instead of* `exec-coding-standards` + `exec-self-testing` + the language skill for non-code tasks, so a multi-domain backlog gets the right execution bar per task.
+- **`codex-flow:preflight`** — Phase 0 (health gate, resume check, workspace baseline) extracted into its own skill carrying the detailed checklist, matching every other phase having a named skill.
+
+### Fixed
+
+- **Skill/command drift**: `codex-flow:plan-architecture` PLAN.md template now includes all eight sections the flow executes against (adds Risk & blast radius, Skills used, Known-red baseline, Decision log — previously it taught a 5-section template the reviewer would find incomplete). `codex-flow:plan-backlog` task format now includes the `Skills:` field that Phase 3 and `task-waves.mjs` rely on, plus the "map skills once here" slicing rule.
+
 ## [0.6.1] - 2026-07-14
 
 ### Changed

@@ -13,6 +13,8 @@ Each phase names plugin skills (`codex-flow:*`) to load via the Skill tool befor
 
 ## Phase 0 — Preflight (gate, do this FIRST)
 
+**Load skill first**: `codex-flow:preflight` (health gate, resume check, workspace baseline) — it carries the detailed checklist for the steps below.
+
 Call `mcp__codex__codex_health` before anything else:
 
 - **Tool call fails / server missing** → the MCP server is not set up. Tell the user to follow the
@@ -103,7 +105,9 @@ gives per-task rollback points).
 
 ## Phase 4 — Execution (Codex)
 
-**Load skills first**: `codex-flow:exec-coding-standards` and `codex-flow:exec-self-testing` (blocks to embed into every Codex prompt), plus the language skill matching the project: `codex-flow:exec-typescript`, `codex-flow:exec-python`, `codex-flow:exec-go`, or `codex-flow:exec-jvm`. Codex cannot see Claude's skills — the prompt is the only channel, so these standards blocks MUST be embedded in the prompt text.
+**Load skills first (code tasks)**: `codex-flow:exec-coding-standards` and `codex-flow:exec-self-testing` (blocks to embed into every Codex prompt), plus the language skill matching the project: `codex-flow:exec-typescript`, `codex-flow:exec-python`, `codex-flow:exec-go`, `codex-flow:exec-jvm` (Java/Kotlin), `codex-flow:exec-rust`, `codex-flow:exec-csharp`, `codex-flow:exec-php`, `codex-flow:exec-ruby`, `codex-flow:exec-swift`, or `codex-flow:exec-cpp` (C/C++). If the project's language has no exec skill, use `codex-flow:exec-coding-standards` alone plus any language guidance from the skill index. Codex cannot see Claude's skills — the prompt is the only channel, so these standards blocks MUST be embedded in the prompt text.
+
+**Non-code tasks**: when a task produces content instead of code (data analysis, marketing copy, docs, research, a plan), load `codex-flow:exec-deliverable` INSTEAD of `exec-coding-standards` + `exec-self-testing` + the language skill, and embed its deliverable + verification blocks. A mixed backlog picks per task: code tasks get the coding blocks, content tasks get the deliverable block. The selected domain skills (from Phase 2) are embedded either way.
 
 **Sequential vs parallel**: by default run tasks one at a time in dependency order (below). For a
 large backlog with independent tasks, consider **parallel mode**: run
@@ -116,7 +120,7 @@ is small, or the user declines, stay sequential. Parallel mode costs N× simulta
 For each task in dependency order (sequential mode):
 
 1. Call `mcp__codex__codex_execute` with:
-   - `prompt`: "Read .codex-flow/PLAN.md for context. Implement task T<n> exactly as specified below, and only this task. Run its acceptance checks before finishing." + the full task text + the standards, testing, and language blocks from the loaded skills + a distilled ≤ 30-line rules block for each skill listed in the task's `Skills:` field (see `codex-flow:skill-selection` Step 6 — never paste a whole SKILL.md)
+   - `prompt`: "Read .codex-flow/PLAN.md for context. Implement task T<n> exactly as specified below, and only this task. Run its acceptance checks before finishing." + the full task text + the standards, testing, and language blocks from the loaded skills (or the `exec-deliverable` blocks for a non-code task) + a distilled ≤ 30-line rules block for each skill listed in the task's `Skills:` field (see `codex-flow:skill-selection` Step 6 — never paste a whole SKILL.md)
    - `cwd`: absolute path of the project root
    - `sandbox`: `workspace-write` by default. Use `read-only` for investigation-only tasks; use `danger-full-access` ONLY when the task genuinely needs network or a global install — and tell the user before doing so.
    - `model`: match the task's complexity — a stronger model for architectural, cross-cutting, or subtle-logic tasks; the default (or a faster/cheaper model) for small, mechanical, well-specified tasks. Note the choice in the Decision log.

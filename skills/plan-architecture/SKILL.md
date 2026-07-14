@@ -24,13 +24,20 @@ Never present only one option — the first idea is rarely the best, and the com
 
 ## Step 3 — Write PLAN.md
 
+Use the full structure the flow executes against (all sections — the reviewer reads these back in Phase 5):
+
 ```markdown
 # Plan: <feature>
-## Context        — what the project is; conventions Codex MUST follow (list them explicitly)
-## Objective      — confirmed goal from the interview
-## Architecture   — components touched, data flow, decisions + why (from step 2)
-## Out of scope   — things Codex must NOT do or touch
+## Context             — what the project is; conventions Codex MUST follow (list them explicitly)
+## Objective           — confirmed goal from the interview
+## Architecture        — components touched, data flow, decisions + why (from step 2)
+## Risk & blast radius  — sensitive areas touched (auth, data, migrations, config), what could
+                          break beyond the target files, and the rollback point (Phase 0 baseline ref)
+## Skills used         — domain skills selected via skill-selection (name, path, what each informs)
+## Known-red baseline   — pre-existing test failures recorded in Phase 0 (so review blames only new ones)
+## Out of scope        — things Codex must NOT do or touch
 ## Acceptance criteria — verifiable checks for the whole feature
+## Decision log        — empty, append-only; one line per passed task during execution
 ```
 
 ## Design principles
