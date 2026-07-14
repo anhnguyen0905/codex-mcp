@@ -22,12 +22,38 @@ Decompose the approved plan into `.codex-flow/TASKS.md`. Each task is one Codex 
 The `Files:` and `Depends on:` fields are also what `scripts/task-waves.mjs` reads to compute
 parallel execution waves — keep them accurate and file-level, not vague.
 
+## Sizing: size for one execution AND one review
+
+A task is the unit Codex builds in one run and Claude verifies in one pass — size it for both:
+
+- **One reviewable concern per task**: it should satisfy one clear acceptance check that a reviewer
+  can confirm without holding several unrelated changes in their head. If review would have to juggle
+  two unrelated concerns, that's two tasks.
+- **Bounded blast radius**: prefer a diff a reviewer reads in a single sitting — roughly **≤ ~5 files
+  / a few hundred changed lines**. Bigger diffs review shallowly and risk the 64 KB `diff` cap
+  truncating what the reviewer sees. Too big → split.
+- **~5–30 min of Codex work** as a secondary check: a task you can't describe in a few file-level
+  steps is too big; a one-line tweak is usually too small to be its own review cycle — fold it in.
+- **Self-sufficient**: each task must be doable by a *fresh* Codex session from PLAN.md + the task
+  text alone (a domain shift starts a new session with no prior memory). Put the context it needs in
+  `Steps` and name the files to read — don't rely on "as we did in T2".
+
 ## Slicing rules
 
-- **Right-sized**: ~5–30 minutes of Codex work. Bigger → split; a task you can't describe in a few file-level steps is too big.
-- **Independently verifiable**: each task's acceptance criteria must be checkable when only that task is done (its tests pass, build stays green) — never "works after T5 lands".
-- **Vertical over horizontal** where possible: a thin end-to-end slice (one endpoint + its test) reviews better than "all models, then all controllers".
-- **Dependency-ordered**: a task may only depend on earlier tasks; no cycles. Foundations (types, schemas, migrations) first; risky tasks (migrations, public API changes) isolated into their own task so a failed run has a small blast radius.
+- **Contracts/foundations first**: the shared seams from PLAN.md (types, schemas, interfaces,
+  migrations) become the earliest tasks, so every dependent task builds and reviews against a fixed
+  contract instead of a moving one. Isolate risky tasks (migrations, public API changes) so a failed
+  run has a small blast radius.
+- **Independently verifiable**: each task's acceptance must be checkable when only that task is done
+  (its tests pass, build stays green) — never "works after T5 lands".
+- **Acceptance names the exact check**: state the command the reviewer runs — the test file/pattern,
+  `npm run build`, or a concrete manual probe — not just prose. Phase 5 runs it verbatim.
+- **Vertical over horizontal** where possible: a thin end-to-end slice (one endpoint + its test)
+  reviews better than "all models, then all controllers".
+- **File-disjoint where independent**: tasks with no dependency between them should own disjoint
+  `Files:` sets — that is exactly what lets `task-waves` run them in parallel and keeps reviews from
+  colliding. Tasks that must share a file are serialized; order them and say so.
+- **Dependency-ordered**: a task may only depend on earlier tasks; no cycles.
 - **Tests live inside the task** that adds the behavior — never a trailing "write tests" task.
 - **Map skills once, here**: fill each task's `Skills:` field from PLAN.md's "Skills used" so Phase 4
   embeds a consistent, user-reviewable set per task instead of re-guessing each run (— if none apply).

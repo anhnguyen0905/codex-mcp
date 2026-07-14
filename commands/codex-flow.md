@@ -67,6 +67,11 @@ or ambiguous feature warrants the full elicitation. When in doubt, ask.
    - **Context**: what the project is, conventions Codex must follow
    - **Objective**: the confirmed goal from Phase 1
    - **Architecture**: components/modules touched, data flow, key design decisions and why
+   - **Contracts**: the fixed seams between components — signatures, data shapes, API/event
+     contracts — pinned down before slicing so tasks are independent and review against a stable
+     contract (see `codex-flow:plan-architecture` Step 3)
+   - **Component → files**: each component mapped to the exact files it creates/modifies — the
+     backlog slices along this, and disjoint file sets are what let tasks run in parallel
    - **Risk & blast radius**: sensitive areas the change touches (auth, data, migrations, config),
      what could break beyond the target files, and the rollback point (baseline ref from Phase 0)
    - **Skills used**: the domain skills selected in step 2 (name, path, what each informs)
@@ -92,9 +97,19 @@ Decompose the approved plan into tasks and write `.codex-flow/TASKS.md`:
 - Status: pending
 ```
 
-Rules for slicing:
-- Each task independently verifiable, roughly one Codex run (~5–30 min of work).
-- Order by dependency; a task may only depend on earlier tasks.
+Rules for slicing (see `codex-flow:plan-backlog` for the full sizing guidance):
+- **Size for one execution AND one review**: one reviewable concern per task, a bounded diff (aim
+  ≤ ~5 files / a few hundred lines so review is thorough and stays under the 64 KB diff cap),
+  roughly one Codex run (~5–30 min). Split anything bigger.
+- **Self-sufficient**: each task must be doable by a fresh Codex session from PLAN.md + the task
+  text alone — put needed context in `Steps` and name the files to read, don't rely on prior tasks'
+  session memory.
+- **Contracts/foundations first**: shared seams (types, schemas, interfaces, migrations) from
+  PLAN.md are the earliest tasks so dependents build and review against a fixed contract.
+- **Acceptance names the exact check** the reviewer will run (test file/pattern, build command, or a
+  concrete probe), not just prose.
+- **File-disjoint where independent** so `task-waves` can parallelize; tasks sharing a file serialize.
+- Each task independently verifiable; order by dependency (a task may only depend on earlier tasks).
 - Decide the skill→task mapping ONCE here (the `Skills:` field), from the skills selected in
   Phase 2 — so Phase 4 embeds a consistent, user-reviewable set per task instead of re-guessing.
 - Also mirror the tasks with TaskCreate so the user sees live progress.

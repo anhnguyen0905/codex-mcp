@@ -11,9 +11,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - **`codex-flow:exec-deliverable`** — a non-code execution skill (deliverable standards + a verification block that mirrors self-testing) for tasks that produce content rather than code (data analysis, marketing copy, docs, research, plans). Phase 4 now loads it *instead of* `exec-coding-standards` + `exec-self-testing` + the language skill for non-code tasks, so a multi-domain backlog gets the right execution bar per task.
 - **`codex-flow:preflight`** — Phase 0 (health gate, resume check, workspace baseline) extracted into its own skill carrying the detailed checklist, matching every other phase having a named skill.
 
+### Changed
+
+- **Architecture planning is now contract-first**: `codex-flow:plan-architecture` gains a step to pin down the seams between components (signatures, data shapes, API/event contracts) and a **component → files map** *before* slicing, plus PLAN.md sections for both. Fixed contracts make tasks independent and reviews deterministic; the file map is what the backlog slices along (and what lets `task-waves` parallelize). Added "design for the diff" (localized, sub-64 KB changes) and "design for independence" principles.
+- **Backlog sizing now targets execution *and* review**: `codex-flow:plan-backlog` reframes sizing around one reviewable concern per task and a bounded blast radius (≤ ~5 files / a few hundred lines, under the 64 KB diff cap), requires each task to be self-sufficient for a fresh Codex session, puts contracts/foundations first, requires acceptance to name the exact verification command, and keeps independent tasks file-disjoint for parallel waves. Phase 2/3 of `/codex-flow` updated to match.
+
 ### Fixed
 
-- **Skill/command drift**: `codex-flow:plan-architecture` PLAN.md template now includes all eight sections the flow executes against (adds Risk & blast radius, Skills used, Known-red baseline, Decision log — previously it taught a 5-section template the reviewer would find incomplete). `codex-flow:plan-backlog` task format now includes the `Skills:` field that Phase 3 and `task-waves.mjs` rely on, plus the "map skills once here" slicing rule.
+- **Skill/command drift**: `codex-flow:plan-architecture` PLAN.md template now includes all the sections the flow executes against (adds Risk & blast radius, Skills used, Known-red baseline, Decision log — previously it taught a 5-section template the reviewer would find incomplete). `codex-flow:plan-backlog` task format now includes the `Skills:` field that Phase 3 and `task-waves.mjs` rely on, plus the "map skills once here" slicing rule.
+- `server.json` version synced to the package version (was stale at 0.3.2).
 
 ## [0.6.1] - 2026-07-14
 
