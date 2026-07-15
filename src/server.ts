@@ -16,7 +16,14 @@ const MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000
 const HEALTH_TIMEOUT_MS = 30 * 1000
 
 /** Global cap on concurrent Codex runs across all workspaces (override via CODEX_MCP_MAX_CONCURRENT). */
-const MAX_CONCURRENT_RUNS = Math.max(1, Number(process.env.CODEX_MCP_MAX_CONCURRENT) || 16)
+const DEFAULT_MAX_CONCURRENT_RUNS = 16
+const parseMaxConcurrent = (raw: string | undefined): number => {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_CONCURRENT_RUNS
+  const n = Number(raw)
+  // Validate explicitly rather than `Number(raw) || 16`, which silently swallows a configured 0/NaN.
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : DEFAULT_MAX_CONCURRENT_RUNS
+}
+const MAX_CONCURRENT_RUNS = parseMaxConcurrent(process.env.CODEX_MCP_MAX_CONCURRENT)
 
 /** Read the package version at runtime so the MCP server-info never drifts from package.json. */
 const readVersion = (): string => {
@@ -354,17 +361,25 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
       try {
         const cwd = process.cwd()
         const { signal } = extra
-        const [version, login] = await Promise.all([
-          runFn(['--version'], { cwd, timeoutMs: HEALTH_TIMEOUT_MS, signal }),
-          runFn(['login', 'status'], { cwd, timeoutMs: HEALTH_TIMEOUT_MS, signal }),
-        ])
-        const loginText = `${login.stdout}\n${login.stderr}`
-        const payload = {
-          version: version.stdout.trim(),
-          loggedIn: /logged in/i.test(loginText) && !/not logged in/i.test(loginText),
-          loginStatus: loginText.trim(),
-        }
-        return toToolResult(payload, version.exitCode !== 0)
+        // Gate health too: each call spawns 2 codex processes; without this a burst of health
+        // calls bypasses the global cap and can exhaust process/fd limits. (No cwd lock — health
+        // is read-only and doesn't touch a workspace.)
+        return await withConcurrencyLimit(async () => {
+          const [version, login] = await Promise.all([
+            runFn(['--version'], { cwd, timeoutMs: HEALTH_TIMEOUT_MS, signal }),
+            runFn(['login', 'status'], { cwd, timeoutMs: HEALTH_TIMEOUT_MS, signal }),
+          ])
+          const ok = (r: RunOutcome): boolean => r.exitCode === 0 && !r.timedOut && !(r.aborted ?? false)
+          const loginText = `${login.stdout}\n${login.stderr}`
+          const payload = {
+            version: version.stdout.trim(),
+            // Only claim logged-in when the login probe itself succeeded — a hung/killed
+            // `codex login status` must not be reported as authenticated.
+            loggedIn: ok(login) && /logged in/i.test(loginText) && !/not logged in/i.test(loginText),
+            loginStatus: loginText.trim(),
+          }
+          return toToolResult(payload, !ok(version))
+        })
       } catch (error) {
         return errorResult(error)
       }
