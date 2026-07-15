@@ -172,3 +172,48 @@ describe('renderWaves', () => {
     expect(out).toContain('T3')
   })
 })
+
+describe('parseTasks — hardening', () => {
+  test('a following non-task section does not bleed into the last task', () => {
+    // Without the header reset, "## Notes" bullets would overwrite T1.files/dependsOn.
+    const md = `## T1: real
+- Files: real.ts
+
+## Notes
+- Files: notes.md
+- Depends on: T1
+`
+    const tasks = parseTasks(md)
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]).toMatchObject({ id: 'T1', files: ['real.ts'], dependsOn: [] })
+  })
+
+  test('recognizes a lowercase dependency reference', () => {
+    const tasks = parseTasks('## T2: x\n- Depends on: t1\n- Files: a.ts\n')
+    expect(tasks[0].dependsOn).toEqual(['T1'])
+  })
+})
+
+describe('computeWaves — hardening', () => {
+  test('rejects duplicate task ids', () => {
+    const tasks = [
+      { id: 'T1', dependsOn: [], files: ['a.ts'] },
+      { id: 'T1', dependsOn: [], files: ['b.ts'] },
+    ]
+    expect(() => computeWaves(tasks)).toThrow(/duplicate.*T1/i)
+  })
+
+  test('falls back to the documented default when maxConcurrency is invalid', () => {
+    // 12 disjoint tasks; a broken cap that becomes Infinity would put them all in one wave.
+    const tasks = Array.from({ length: 12 }, (_, i) => ({
+      id: `T${i + 1}`,
+      dependsOn: [],
+      files: [`f${i}.ts`],
+    }))
+    for (const bad of [0, -1, NaN, 'abc' as unknown as number, undefined as unknown as number]) {
+      const { waves, maxWidth } = computeWaves(tasks, { maxConcurrency: bad })
+      expect(maxWidth).toBeLessThanOrEqual(10) // default cap enforced
+      expect(waves.flat()).toHaveLength(12)
+    }
+  })
+})

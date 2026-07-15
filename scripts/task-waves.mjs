@@ -27,17 +27,29 @@ export function parseTasks(markdown) {
   let current = null
 
   for (const raw of (markdown ?? '').split(/\r?\n/)) {
-    const header = raw.match(/^##\s+(T\d+):\s*(.*)$/)
-    if (header) {
-      current = { id: header[1], title: header[2].trim(), dependsOn: [], files: [] }
+    // Any `##` header ends the previous task's scope. Without this, bullets in a following
+    // documentation section (e.g. "## Notes") would silently overwrite the last task's
+    // Depends-on/Files (and even inject a self-cycle).
+    const anyHeader = raw.match(/^##\s+/)
+    const taskHeader = raw.match(/^##\s+(T\d+):\s*(.*)$/i)
+    if (taskHeader) {
+      current = { id: taskHeader[1].toUpperCase(), title: taskHeader[2].trim(), dependsOn: [], files: [] }
       tasks.push(current)
+      continue
+    }
+    if (anyHeader) {
+      current = null
       continue
     }
     if (!current) continue
 
     const dep = raw.match(/^\s*-\s*Depends on:\s*(.*)$/i)
     if (dep) {
-      current.dependsOn = (dep[1].match(/T\d+/g) ?? []).filter((t) => !isPlaceholder(t))
+      // Case-insensitive so "t1" is recognized, and anchored to the Depends-on line only —
+      // we already scoped this to the deps regex, so free-text "Ticket T42" elsewhere is safe.
+      current.dependsOn = (dep[1].match(/\bT\d+\b/gi) ?? [])
+        .map((t) => t.toUpperCase())
+        .filter((t) => !isPlaceholder(t))
       continue
     }
     const files = raw.match(/^\s*-\s*Files:\s*(.*)$/i)
@@ -60,8 +72,15 @@ export function parseTasks(markdown) {
  * Throws on unknown dependencies or dependency cycles.
  */
 export function computeWaves(tasks, { maxConcurrency = DEFAULT_MAX_CONCURRENCY } = {}) {
-  const cap = maxConcurrency > 0 ? maxConcurrency : Infinity
-  const byId = new Map(tasks.map((t) => [t.id, t]))
+  // Validate the cap explicitly: non-numeric / <=0 must fall back to the documented default,
+  // not disable the cap by silently becoming Infinity (violates the "never >10 subagents" contract).
+  const cap = Number.isFinite(maxConcurrency) && maxConcurrency >= 1 ? Math.floor(maxConcurrency) : DEFAULT_MAX_CONCURRENCY
+  // Detect duplicate task ids up front — Map/Set keyed on id would otherwise silently drop one.
+  const byId = new Map()
+  for (const t of tasks) {
+    if (byId.has(t.id)) throw new Error(`duplicate task id ${t.id}`)
+    byId.set(t.id, t)
+  }
   for (const t of tasks) {
     for (const dep of t.dependsOn) {
       if (!byId.has(dep)) throw new Error(`${t.id} has unknown dependency ${dep}`)
@@ -132,7 +151,18 @@ const isDirectRun =
 if (isDirectRun) {
   const args = process.argv.slice(2)
   const maxIdx = args.findIndex((a) => a === '--max')
-  const maxConcurrency = maxIdx >= 0 ? Number(args[maxIdx + 1]) : DEFAULT_MAX_CONCURRENCY
+  let maxConcurrency = DEFAULT_MAX_CONCURRENCY
+  if (maxIdx >= 0) {
+    const rawMax = args[maxIdx + 1]
+    const parsed = rawMax === undefined ? NaN : Number(rawMax)
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      // Never silently disable the documented cap on `--max` typos (missing value, "--max abc",
+      // "--max 0", "--max -5"). Fail loudly so the operator learns instead of over-spawning.
+      console.error(`task-waves: --max requires a positive integer (got: ${rawMax ?? '<missing>'})`)
+      process.exit(2)
+    }
+    maxConcurrency = parsed
+  }
   const fileArg = args.find((a, i) => a !== '--max' && args[i - 1] !== '--max')
   const file = path.resolve(fileArg ?? path.join('.codex-flow', 'TASKS.md'))
   fs.readFile(file, 'utf8')
