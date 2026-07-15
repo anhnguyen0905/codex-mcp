@@ -75,7 +75,19 @@ describe('captureWorkspaceDiff', () => {
     const diff = await captureWorkspaceDiff(repo, { maxStatusBytes: 64 })
 
     expect(diff?.statusTruncated).toBe(true)
-    expect(diff?.status.length).toBeLessThanOrEqual(64)
+    expect(Buffer.byteLength(diff?.status ?? '', 'utf8')).toBeLessThanOrEqual(64)
+  })
+
+  test('truncates the patch by BYTES (not UTF-16 length) without leaving a broken multibyte tail', async () => {
+    const repo = makeRepo()
+    // multibyte content: each 'é' is 2 UTF-8 bytes; String.length would under-count vs bytes
+    writeFileSync(join(repo, 'a.txt'), `${'é'.repeat(2000)}\n`)
+
+    const diff = await captureWorkspaceDiff(repo, { maxPatchBytes: 100 })
+
+    expect(diff?.truncated).toBe(true)
+    expect(Buffer.byteLength(diff?.patch ?? '', 'utf8')).toBeLessThanOrEqual(100)
+    expect(diff?.patch.endsWith('�')).toBe(false) // no split-codepoint replacement char
   })
 
   test('returns null outside a git repo', async () => {

@@ -74,12 +74,24 @@ export const captureWorkspaceDiff = async (
   }
 
   const trimmedStatus = status.trimEnd()
-  const statusTruncated = trimmedStatus.length > maxStatusBytes
-  const truncated = patch.length > maxPatchBytes
+  const s = truncateToBytes(trimmedStatus, maxStatusBytes)
+  const p = truncateToBytes(patch, maxPatchBytes)
   return {
-    status: statusTruncated ? trimmedStatus.slice(0, maxStatusBytes) : trimmedStatus,
-    statusTruncated,
-    patch: truncated ? patch.slice(0, maxPatchBytes) : patch,
-    truncated,
+    status: s.text,
+    statusTruncated: s.truncated,
+    patch: p.text,
+    truncated: p.truncated,
   }
+}
+
+/**
+ * Truncate to a real UTF-8 byte budget (not UTF-16 code-unit `.length`, which under-counts multibyte
+ * and let the payload grow up to ~3x), dropping any trailing partial codepoint left by the byte cut.
+ */
+const truncateToBytes = (value: string, maxBytes: number): { text: string; truncated: boolean } => {
+  const buf = Buffer.from(value, 'utf8')
+  if (buf.length <= maxBytes) return { text: value, truncated: false }
+  let text = buf.subarray(0, maxBytes).toString('utf8')
+  if (text.endsWith('�')) text = text.slice(0, -1) // strip a split multibyte tail
+  return { text, truncated: true }
 }
