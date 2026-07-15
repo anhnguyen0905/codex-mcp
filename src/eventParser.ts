@@ -24,13 +24,13 @@ interface RawUsage {
   reasoning_output_tokens?: number
 }
 
-const EMPTY_RESULT: CodexResult = {
-  sessionId: null,
-  agentMessage: null,
-  fileChanges: [],
-  commands: [],
-  usage: null,
-  errors: [],
+interface MutableResult {
+  sessionId: string | null
+  agentMessage: string | null
+  fileChanges: CodexFileChange[]
+  commands: CodexCommand[]
+  usage: CodexUsage | null
+  errors: string[]
 }
 
 const parseLine = (line: string): RawEvent | null => {
@@ -60,43 +60,56 @@ const toFileChanges = (item: RawItem): readonly CodexFileChange[] =>
       kind: change.kind ?? 'unknown',
     }))
 
-const applyItem = (result: CodexResult, item: RawItem): CodexResult => {
+// Mutating appliers: earlier this used {...result, X:[...result.X, ...Y]} inside a reduce, which is
+// O(n^2) in the number of events (every line re-copies all accumulated arrays). Push in place → O(n).
+const applyItem = (result: MutableResult, item: RawItem): void => {
   switch (item.type) {
     case 'agent_message':
-      return { ...result, agentMessage: item.text ?? null }
+      result.agentMessage = item.text ?? null
+      return
     case 'file_change':
-      return { ...result, fileChanges: [...result.fileChanges, ...toFileChanges(item)] }
-    case 'command_execution': {
-      const command: CodexCommand = { command: item.command ?? '', exitCode: item.exit_code ?? null }
-      return { ...result, commands: [...result.commands, command] }
-    }
+      result.fileChanges.push(...toFileChanges(item))
+      return
+    case 'command_execution':
+      result.commands.push({ command: item.command ?? '', exitCode: item.exit_code ?? null })
+      return
     case 'error':
-      return { ...result, errors: [...result.errors, item.message ?? 'unknown error'] }
-    default:
-      return result
+      result.errors.push(item.message ?? 'unknown error')
+      return
   }
 }
 
-const applyEvent = (result: CodexResult, event: RawEvent): CodexResult => {
+const applyEvent = (result: MutableResult, event: RawEvent): void => {
   switch (event.type) {
     case 'thread.started':
-      return { ...result, sessionId: event.thread_id ?? null }
+      result.sessionId = event.thread_id ?? null
+      return
     case 'item.completed':
-      return event.item ? applyItem(result, event.item) : result
+      if (event.item) applyItem(result, event.item)
+      return
     case 'turn.completed':
-      return event.usage ? { ...result, usage: toUsage(event.usage) } : result
+      if (event.usage) result.usage = toUsage(event.usage)
+      return
     case 'turn.failed':
-      return { ...result, errors: [...result.errors, event.error?.message ?? 'turn failed'] }
-    default:
-      return result
+      result.errors.push(event.error?.message ?? 'turn failed')
+      return
   }
 }
 
-export const parseEvents = (jsonl: string): CodexResult =>
-  jsonl
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map(parseLine)
-    .filter((event): event is RawEvent => event !== null)
-    .reduce(applyEvent, EMPTY_RESULT)
+export const parseEvents = (jsonl: string): CodexResult => {
+  const result: MutableResult = {
+    sessionId: null,
+    agentMessage: null,
+    fileChanges: [],
+    commands: [],
+    usage: null,
+    errors: [],
+  }
+  for (const line of jsonl.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.length === 0) continue
+    const event = parseLine(trimmed)
+    if (event) applyEvent(result, event)
+  }
+  return result
+}
