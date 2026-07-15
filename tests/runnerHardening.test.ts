@@ -119,6 +119,23 @@ describe('runCodex hardening', () => {
     expect(result.truncated).toBe(false)
   })
 
+  test('settles shortly after exit even when close never fires (lingering pipe holder)', async () => {
+    vi.useFakeTimers()
+    try {
+      const child = makeChild()
+      const spawnFn = vi.fn(() => child)
+      const p = runCodex(['exec', 'hi'], { spawnFn: spawnFn as never, cwd: '/repo' })
+      child.stdout.emit('data', Buffer.from('{"type":"thread.started","thread_id":"x"}\n'))
+      child.emit('exit', 0, null) // process exits, but a descendant keeps the pipe open → no 'close'
+      await vi.advanceTimersByTimeAsync(2000) // EXIT_SETTLE_GRACE_MS
+      const result = await p
+      expect(result.stdout).toContain('thread.started')
+      expect(result.exitCode).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test('a noisy stderr does not evict or truncate stdout (per-stream byte budgets)', async () => {
     const child = makeChild()
     const spawnFn = vi.fn(() => {
