@@ -36,13 +36,32 @@ const TAIL_SCRIPT = join(HERE, '..', 'scripts', 'tail-progress.mjs')
  * non-Linux platforms or when none is found (headless / SSH), in which case no window opens and
  * the caller relies on the `liveLog` file plus in-session MCP progress notifications.
  */
+let cachedLinuxTerminal: LinuxTerminal | undefined | false = false // false = not yet detected
 const detectLinuxTerminal = (): LinuxTerminal | undefined => {
   if (process.platform !== 'linux') return undefined
+  if (cachedLinuxTerminal !== false) return cachedLinuxTerminal
   for (const terminal of LINUX_TERMINALS) {
-    const found = spawnSync('command', ['-v', terminal.command], { shell: true })
-    if (found.status === 0) return terminal
+    // timeout so a hung `command -v` can't block the event loop; detection is cached across runs.
+    const found = spawnSync('command', ['-v', terminal.command], { shell: true, timeout: 1000 })
+    if (found.status === 0) {
+      cachedLinuxTerminal = terminal
+      return terminal
+    }
   }
+  cachedLinuxTerminal = undefined
   return undefined
+}
+
+/** Throw if `path` exists and is a symlink — we must never mkdir/write through a planted symlink. */
+const assertNotSymlink = (path: string, label: string): void => {
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      throw new Error(`${label} is a symlink — refusing to write live logs through it`)
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('refusing')) throw err
+    // ENOENT (doesn't exist yet) is fine — fall through.
+  }
 }
 
 /**
@@ -94,24 +113,21 @@ const writeCommandFile = (logDir: string, stamp: string, logPath: string): strin
  */
 export const createLiveView = (cwd: string): LiveView => {
   try {
-    // Refuse a symlinked control dir: `mkdirSync`/writes would otherwise follow it and drop an
-    // executable `.command` + the run transcript at an attacker-chosen path outside cwd.
+    // Refuse a symlinked control dir OR nested `live` dir: `mkdirSync`/writes would otherwise
+    // follow it (mkdir -p does NOT fail on an existing symlink-to-dir) and drop an executable
+    // `.command` + the run transcript at an attacker-chosen path outside cwd.
     const controlDir = join(cwd, '.codex-flow')
-    try {
-      if (lstatSync(controlDir).isSymbolicLink()) {
-        throw new Error('.codex-flow is a symlink — refusing to write live logs through it')
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('refusing')) throw err
-      // ENOENT (doesn't exist yet) is fine — fall through and create it.
-    }
+    assertNotSymlink(controlDir, '.codex-flow')
     const logDir = join(controlDir, 'live')
+    assertNotSymlink(logDir, '.codex-flow/live') // pre-existing symlink at the leaf
     mkdirSync(logDir, { recursive: true })
+    assertNotSymlink(logDir, '.codex-flow/live') // mkdir -p left an existing symlink in place
     pruneOldLogs(logDir, MAX_LOG_FILES)
     // Include the pid so two runs started in the same millisecond don't share (and interleave) a log file.
     const stamp = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`
     const logPath = join(logDir, `${stamp}.jsonl`)
-    const stream: WriteStream = createWriteStream(logPath, { flags: 'a' })
+    // 0o600: the transcript can contain file contents/secrets Codex read during the run.
+    const stream: WriteStream = createWriteStream(logPath, { flags: 'a', mode: 0o600 })
     // A mid-run write error (disk full, EPIPE, revoked perms) emits 'error'; without a listener
     // Node would throw it as an unhandled event and crash the whole MCP server. Swallow it and
     // stop writing — a broken live log must never fail the actual Codex run.
