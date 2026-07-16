@@ -46,6 +46,7 @@ describe('codex-mcp server', () => {
     const names = tools.map((tool) => tool.name).sort()
 
     expect(names).toEqual([
+      'codex_batch',
       'codex_continue',
       'codex_execute',
       'codex_health',
