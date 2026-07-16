@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-07-16
+
+### Added
+
+- **`design-fundamentals` skill** — design skills set for non-code (design) tasks, imported from [bergside/typeui](https://github.com/bergside/typeui) (MIT). One SKILL.md plus five reference modules: `ui-principles.md` (visual hierarchy, layout rhythm, color, depth), `spacing-principles.md` (4-point grid, proximity, spacing tiers), `ux-principles.md` (30 UX laws, control state contracts, touch targets), `typography-principles.md` (type scales, readability, responsive type), and `accessibility.md` (WCAG 2.1/2.2). Intended as a *reference* to consult on design requests — not the sole authority; agents should still apply their own design judgment and research.
+
 ## [0.8.0] - 2026-07-16
 
 ### Added
