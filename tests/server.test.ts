@@ -45,7 +45,7 @@ describe('codex-mcp server', () => {
     const { tools } = await client.listTools()
     const names = tools.map((tool) => tool.name).sort()
 
-    expect(names).toEqual(['codex_continue', 'codex_execute', 'codex_health', 'codex_review'])
+    expect(names).toEqual(['codex_continue', 'codex_execute', 'codex_health', 'codex_review', 'codex_sessions'])
   })
 
   test('codex_execute runs codex and returns a structured result', async () => {

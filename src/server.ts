@@ -9,6 +9,7 @@ import { parseEvents } from './eventParser.js'
 import { createLiveView, type LiveView } from './liveView.js'
 import { combineSinks, createProgressNotifier, type ProgressSink } from './progressNotifier.js'
 import { captureWorkspaceDiff, type DiffFn } from './workspaceDiff.js'
+import { listSessions, MAX_LIMIT as MAX_SESSIONS_LIMIT } from './sessionStore.js'
 import { SANDBOX_MODES, type RunOutcome } from './types.js'
 
 const MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000
@@ -54,6 +55,20 @@ const continueShape = {
     .boolean()
     .optional()
     .describe('Open a Terminal window streaming live progress (default: env CODEX_MCP_TERMINAL=1)'),
+}
+
+const sessionsShape = {
+  cwd: z
+    .string()
+    .optional()
+    .describe('Filter to sessions whose recorded cwd matches this path exactly.'),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_SESSIONS_LIMIT)
+    .optional()
+    .describe(`Cap on returned sessions (default 50, hard cap ${MAX_SESSIONS_LIMIT}).`),
 }
 
 const reviewShape = {
@@ -277,6 +292,26 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
             signal: extra.signal,
           })
         })
+      } catch (error) {
+        return errorResult(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'codex_sessions',
+    {
+      title: 'List prior Codex sessions',
+      description:
+        'Discover Codex sessions stored locally under ~/.codex/sessions/. Returns sessionId, cwd, ' +
+        'and last activity for each, newest first. sessionId can be passed to codex_continue to resume. ' +
+        'Filter by cwd to find sessions from a specific workspace.',
+      inputSchema: sessionsShape,
+    },
+    async (input) => {
+      try {
+        const sessions = await listSessions({ cwd: input.cwd, limit: input.limit })
+        return toToolResult({ sessions, total: sessions.length }, false)
       } catch (error) {
         return errorResult(error)
       }
