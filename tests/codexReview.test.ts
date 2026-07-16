@@ -21,7 +21,14 @@ describe('codex_review tool', () => {
     const { tools } = await client.listTools()
     const names = tools.map((tool) => tool.name).sort()
 
-    expect(names).toEqual(['codex_continue', 'codex_execute', 'codex_health', 'codex_review', 'codex_sessions'])
+    expect(names).toEqual([
+      'codex_continue',
+      'codex_execute',
+      'codex_health',
+      'codex_metrics',
+      'codex_review',
+      'codex_sessions',
+    ])
   })
 
   test('always runs in the read-only sandbox with a review prompt', async () => {
