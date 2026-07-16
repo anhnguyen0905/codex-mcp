@@ -9,6 +9,7 @@ import { parseEvents } from './eventParser.js'
 import { createLiveView, type LiveView } from './liveView.js'
 import { combineSinks, createProgressNotifier, type ProgressSink } from './progressNotifier.js'
 import { captureWorkspaceDiff, type DiffFn } from './workspaceDiff.js'
+import { aggregate, appendMetric, parsePricing, readMetrics, type MetricEntry } from './metricsLog.js'
 import { SANDBOX_MODES, type RunOutcome } from './types.js'
 
 const MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000
@@ -56,6 +57,20 @@ const continueShape = {
     .describe('Open a Terminal window streaming live progress (default: env CODEX_MCP_TERMINAL=1)'),
 }
 
+const metricsShape = {
+  since: z
+    .string()
+    .optional()
+    .describe('ISO 8601 lower bound — only entries at or after this timestamp are aggregated.'),
+  until: z.string().optional().describe('ISO 8601 upper bound.'),
+  tool: z
+    .enum(['codex_execute', 'codex_continue', 'codex_review', 'codex_batch'])
+    .optional()
+    .describe('Filter by which tool produced the run.'),
+  cwd: z.string().optional().describe('Filter by exact cwd.'),
+  sessionId: z.string().optional().describe('Filter by session id.'),
+}
+
 const reviewShape = {
   cwd: z.string().describe('Absolute path of the workspace to review'),
   focus: z
@@ -89,6 +104,8 @@ interface RunAndReportDeps {
   view: LiveView
   diffFn: DiffFn
   progressSink?: ProgressSink
+  /** Which tool invoked runAndReport, so the metric log can attribute the run. */
+  tool: MetricEntry['tool']
 }
 
 const safeDiff = async (diffFn: DiffFn, cwd: string) => {
@@ -100,10 +117,11 @@ const safeDiff = async (diffFn: DiffFn, cwd: string) => {
 }
 
 const runAndReport = async (
-  { runFn, view, diffFn, progressSink }: RunAndReportDeps,
+  { runFn, view, diffFn, progressSink, tool }: RunAndReportDeps,
   args: string[],
   options: Omit<RunOptions, 'spawnFn' | 'onStdout'>,
 ) => {
+  const startedAt = Date.now()
   try {
     const onStdout = combineSinks(view.onStdout, progressSink)
     const outcome = await runFn(args, { ...options, onStdout })
@@ -122,6 +140,18 @@ const runAndReport = async (
       stderr: outcome.stderr.slice(-2000),
       liveLog: view.logPath,
     }
+    // Passive metrics — one JSONL line per completed run, best-effort (never fails the run).
+    appendMetric({
+      ts: new Date().toISOString(),
+      tool,
+      cwd: options.cwd,
+      sessionId: parsed.sessionId,
+      exitCode: outcome.exitCode,
+      durationMs: Date.now() - startedAt,
+      usage: parsed.usage,
+      timedOut: outcome.timedOut,
+      aborted,
+    })
     return toToolResult(payload, isError)
   } finally {
     view.close()
@@ -213,7 +243,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         const args = buildExecuteArgs(input)
         return await withCwdLock(input.cwd, () => {
           const view = openView(input.cwd, input.terminal)
-          return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
+          return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra), tool: 'codex_execute' }, args, {
             cwd: input.cwd,
             timeoutMs: input.timeoutMs,
             signal: extra.signal,
@@ -240,7 +270,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         const args = buildContinueArgs(input)
         return await withCwdLock(input.cwd, () => {
           const view = openView(input.cwd, input.terminal)
-          return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
+          return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra), tool: 'codex_continue' }, args, {
             cwd: input.cwd,
             timeoutMs: input.timeoutMs,
             signal: extra.signal,
@@ -271,12 +301,34 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         })
         return await withCwdLock(input.cwd, () => {
           const view = openView(input.cwd, input.terminal)
-          return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
+          return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra), tool: 'codex_review' }, args, {
             cwd: input.cwd,
             timeoutMs: input.timeoutMs,
             signal: extra.signal,
           })
         })
+      } catch (error) {
+        return errorResult(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'codex_metrics',
+    {
+      title: 'Aggregated Codex run metrics',
+      description:
+        'Roll up token/duration/failure counts from the local metrics log (~/.codex-mcp/metrics.jsonl). ' +
+        'Set CODEX_MCP_PRICING (JSON: {inputPer1M, cachedInputPer1M, outputPer1M, reasoningOutputPer1M}) ' +
+        'to include estCostUsd.',
+      inputSchema: metricsShape,
+    },
+    async (input) => {
+      try {
+        const entries = readMetrics()
+        const pricing = parsePricing(process.env.CODEX_MCP_PRICING)
+        const agg = aggregate(entries, input, pricing)
+        return toToolResult(agg, false)
       } catch (error) {
         return errorResult(error)
       }
