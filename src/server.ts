@@ -11,6 +11,7 @@ import { createLiveView, type LiveView } from './liveView.js'
 import { combineSinks, createProgressNotifier, type ProgressSink } from './progressNotifier.js'
 import { captureWorkspaceDiff, type DiffFn } from './workspaceDiff.js'
 import { listSessions, MAX_LIMIT as MAX_SESSIONS_LIMIT } from './sessionStore.js'
+import { writeNotes, type NotesRequest } from './notesWriter.js'
 import { SANDBOX_MODES, type RunOutcome } from './types.js'
 
 const MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000
@@ -64,6 +65,10 @@ const executeShape = {
     .boolean()
     .optional()
     .describe('Open a Terminal window streaming live progress (default: env CODEX_MCP_TERMINAL=1)'),
+  writeNotes: z
+    .boolean()
+    .optional()
+    .describe('Persist a markdown summary of this run to <cwd>/.codex-flow/notes/<sessionId>.md (default false).'),
 }
 
 const continueShape = {
@@ -77,6 +82,10 @@ const continueShape = {
     .boolean()
     .optional()
     .describe('Open a Terminal window streaming live progress (default: env CODEX_MCP_TERMINAL=1)'),
+  writeNotes: z
+    .boolean()
+    .optional()
+    .describe('Persist a markdown summary of this run to <cwd>/.codex-flow/notes/<sessionId>.md (default false).'),
 }
 
 const sessionsShape = {
@@ -105,6 +114,10 @@ const reviewShape = {
     .boolean()
     .optional()
     .describe('Open a Terminal window streaming live progress (default: env CODEX_MCP_TERMINAL=1)'),
+  writeNotes: z
+    .boolean()
+    .optional()
+    .describe('Persist a markdown summary of this run to <cwd>/.codex-flow/notes/<sessionId>.md (default false).'),
 }
 
 const buildReviewPrompt = (focus?: string): string =>
@@ -126,6 +139,8 @@ interface RunAndReportDeps {
   view: LiveView
   diffFn: DiffFn
   progressSink?: ProgressSink
+  /** When provided, writeNotes() runs after payload is built (best-effort; errors are logged, not thrown). */
+  notes?: Omit<NotesRequest, 'sessionId' | 'parsed' | 'exitCode'>
 }
 
 const safeDiff = async (diffFn: DiffFn, cwd: string) => {
@@ -145,7 +160,7 @@ const tailString = (value: string, n: number): string => {
 }
 
 const runAndReport = async (
-  { runFn, view, diffFn, progressSink }: RunAndReportDeps,
+  { runFn, view, diffFn, progressSink, notes }: RunAndReportDeps,
   args: string[],
   options: Omit<RunOptions, 'spawnFn' | 'onStdout'>,
 ) => {
@@ -158,6 +173,20 @@ const runAndReport = async (
     // Skip the diff for cancelled/timed-out runs: it delays releasing the cwd lock,
     // and the caller is about to retry or give up anyway.
     const shouldDiff = !aborted && !outcome.timedOut
+    let notesPath: string | null = null
+    if (notes && parsed.sessionId) {
+      try {
+        notesPath = writeNotes({
+          ...notes,
+          sessionId: parsed.sessionId,
+          parsed,
+          exitCode: outcome.exitCode,
+        })
+      } catch (err) {
+        // best-effort: a broken notes write must never fail the actual run.
+        console.error(`codex-mcp: writeNotes failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     const payload = {
       ...parsed,
       diff: shouldDiff ? await safeDiff(diffFn, options.cwd) : null,
@@ -167,6 +196,7 @@ const runAndReport = async (
       outputTruncated: outcome.truncated ?? false,
       stderr: tailString(outcome.stderr, 2000),
       liveLog: view.logPath,
+      notesPath,
     }
     return toToolResult(payload, isError)
   } finally {
@@ -287,14 +317,21 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     async (input, extra) => {
       try {
         const args = buildExecuteArgs(input)
+        const startedAt = new Date().toISOString()
         return await withConcurrencyLimit(() =>
           withCwdLock(input.cwd, () => {
             const view = openView(input.cwd, input.terminal)
-            return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
-              cwd: input.cwd,
-              timeoutMs: input.timeoutMs,
-              signal: extra.signal,
-            })
+            return runAndReport(
+              {
+                runFn,
+                view,
+                diffFn,
+                progressSink: progressSinkFor(extra),
+                notes: input.writeNotes ? { cwd: input.cwd, prompt: input.prompt, mode: 'execute', startedAt } : undefined,
+              },
+              args,
+              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal },
+            )
           }),
         )
       } catch (error) {
@@ -316,14 +353,21 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
       try {
         assertAbsoluteCwd(input.cwd)
         const args = buildContinueArgs(input)
+        const startedAt = new Date().toISOString()
         return await withConcurrencyLimit(() =>
           withCwdLock(input.cwd, () => {
             const view = openView(input.cwd, input.terminal)
-            return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
-              cwd: input.cwd,
-              timeoutMs: input.timeoutMs,
-              signal: extra.signal,
-            })
+            return runAndReport(
+              {
+                runFn,
+                view,
+                diffFn,
+                progressSink: progressSinkFor(extra),
+                notes: input.writeNotes ? { cwd: input.cwd, prompt: input.prompt, mode: 'continue', startedAt } : undefined,
+              },
+              args,
+              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal },
+            )
           }),
         )
       } catch (error) {
@@ -349,14 +393,22 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
           sandbox: 'read-only',
           model: input.model,
         })
+        const startedAt = new Date().toISOString()
+        const notePrompt = input.focus ?? 'review workspace changes'
         return await withConcurrencyLimit(() =>
           withCwdLock(input.cwd, () => {
             const view = openView(input.cwd, input.terminal)
-            return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
-              cwd: input.cwd,
-              timeoutMs: input.timeoutMs,
-              signal: extra.signal,
-            })
+            return runAndReport(
+              {
+                runFn,
+                view,
+                diffFn,
+                progressSink: progressSinkFor(extra),
+                notes: input.writeNotes ? { cwd: input.cwd, prompt: notePrompt, mode: 'review', startedAt } : undefined,
+              },
+              args,
+              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal },
+            )
           }),
         )
       } catch (error) {
