@@ -47,15 +47,30 @@ export interface TerminalLaunch {
   args: string[]
 }
 
-const escapeAppleScript = (value: string): string => value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+const escapeAppleScript = (value: string): string =>
+  value
+    // A literal newline in `do script "..."` is executed as a Return keystroke (command injection);
+    // there's no safe way to embed one, so collapse CR/LF to a space before escaping.
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
 
 const escapePowerShell = (value: string): string => value.replace(/'/g, "''")
+
+/**
+ * Escape a value for interpolation inside a POSIX double-quoted shell string ("..."). Without this,
+ * a workspace path containing `"`, backtick, `$` or `\` would break out and let a shell execute
+ * arbitrary code when the viewer opens. Only backslash, double-quote, backtick and dollar are
+ * special inside double quotes.
+ */
+export const escapeDoubleQuotedShell = (value: string): string => value.replace(/[\\"`$]/g, '\\$&')
 
 const buildDarwinLaunch = ({ nodeBin, tailScript, logPath, commandFile }: TerminalPaths): TerminalLaunch => {
   if (commandFile) {
     return { command: 'open', args: ['-a', 'Terminal', commandFile] }
   }
-  const shellCommand = `"${nodeBin}" "${tailScript}" "${logPath}"`
+  const dq = escapeDoubleQuotedShell
+  const shellCommand = `"${dq(nodeBin)}" "${dq(tailScript)}" "${dq(logPath)}"`
   const escaped = escapeAppleScript(shellCommand)
   return {
     command: 'osascript',
@@ -69,7 +84,10 @@ const buildDarwinLaunch = ({ nodeBin, tailScript, logPath, commandFile }: Termin
 }
 
 const buildWindowsLaunch = ({ nodeBin, tailScript, logPath }: TerminalPaths): TerminalLaunch => {
-  const argumentList = [tailScript, logPath].map((value) => `'${escapePowerShell(value)}'`).join(',')
+  // Embed real double-quotes inside each ArgumentList element: Windows PowerShell 5.1's
+  // Start-Process joins the array with bare spaces to build the child's command line, so a path
+  // containing a space (very common on Windows) would otherwise be split into extra argv tokens.
+  const argumentList = [tailScript, logPath].map((value) => `'"${escapePowerShell(value)}"'`).join(',')
   return {
     command: 'powershell.exe',
     args: [
@@ -111,6 +129,10 @@ export const openTerminal = (logPath: string, options: OpenTerminalOptions): boo
 
   try {
     const child = spawnFn(launch.command, launch.args, { stdio: 'ignore', detached: true })
+    // spawn reports a missing/unrunnable launcher (ENOENT/EACCES) via an async 'error' event, not
+    // a throw. Without a listener Node would rethrow it as an unhandled event and crash the whole
+    // MCP server — swallow it, the viewer is best-effort.
+    child.on?.('error', () => {})
     child.unref()
     return true
   } catch {

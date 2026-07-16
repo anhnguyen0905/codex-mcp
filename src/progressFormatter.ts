@@ -24,8 +24,13 @@ const formatItem = (item: RawItem): string | null => {
     case 'command_execution':
       return `▸ $ ${item.command ?? ''}  (exit ${item.exit_code ?? '…'})`
     case 'file_change': {
-      const paths = (item.changes ?? []).map((change) => change.path ?? '?').join(', ')
-      return `✎ ${(item.changes ?? []).length} file(s): ${paths}`
+      // Count only valid entries, matching eventParser.toFileChanges (which drops null/non-object),
+      // so the live view's file count never disagrees with the parsed result.
+      const changes = (Array.isArray(item.changes) ? item.changes : []).filter(
+        (change) => typeof change === 'object' && change !== null,
+      )
+      const paths = changes.map((change) => change.path ?? '?').join(', ')
+      return `✎ ${changes.length} file(s): ${paths}`
     }
     case 'error':
       return `✗ ${item.message ?? 'unknown error'}`

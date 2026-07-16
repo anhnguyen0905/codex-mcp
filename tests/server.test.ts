@@ -190,4 +190,17 @@ describe('codex-mcp server', () => {
     expect(payload.version).toContain('0.144.1')
     expect(payload.loggedIn).toBe(true)
   })
+
+  test('codex_health does not claim logged-in when the login probe timed out', async () => {
+    runFn
+      .mockResolvedValueOnce({ stdout: 'codex-cli 0.144.1', stderr: '', exitCode: 0, timedOut: false })
+      // login probe hung/killed: text looks logged-in but the run itself did not succeed
+      .mockResolvedValueOnce({ stdout: 'Logged in using ChatGPT', stderr: '', exitCode: null, timedOut: true })
+    const client = await connect(runFn)
+
+    const result = await client.callTool({ name: 'codex_health', arguments: {} })
+    const payload = parsePayload(result)
+
+    expect(payload.loggedIn).toBe(false)
+  })
 })

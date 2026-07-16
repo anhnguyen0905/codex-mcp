@@ -1,5 +1,6 @@
-import { realpathSync } from 'node:fs'
-import { resolve as resolvePath } from 'node:path'
+import { readFileSync, realpathSync } from 'node:fs'
+import { basename, dirname, join, resolve as resolvePath } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { ServerNotification } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
@@ -13,6 +14,27 @@ import { SANDBOX_MODES, type RunOutcome } from './types.js'
 
 const MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000
 const HEALTH_TIMEOUT_MS = 30 * 1000
+
+/** Global cap on concurrent Codex runs across all workspaces (override via CODEX_MCP_MAX_CONCURRENT). */
+const DEFAULT_MAX_CONCURRENT_RUNS = 16
+const parseMaxConcurrent = (raw: string | undefined): number => {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_CONCURRENT_RUNS
+  const n = Number(raw)
+  // Validate explicitly rather than `Number(raw) || 16`, which silently swallows a configured 0/NaN.
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : DEFAULT_MAX_CONCURRENT_RUNS
+}
+const MAX_CONCURRENT_RUNS = parseMaxConcurrent(process.env.CODEX_MCP_MAX_CONCURRENT)
+
+/** Read the package version at runtime so the MCP server-info never drifts from package.json. */
+const readVersion = (): string => {
+  try {
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
+    const version: unknown = JSON.parse(readFileSync(pkgPath, 'utf8')).version
+    return typeof version === 'string' ? version : '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
 
 type RunFn = (args: string[], options: Omit<RunOptions, 'spawnFn'>) => Promise<RunOutcome>
 type LiveViewFactory = (cwd: string) => LiveView
@@ -99,6 +121,14 @@ const safeDiff = async (diffFn: DiffFn, cwd: string) => {
   }
 }
 
+/** Keep the last `n` chars without leaving a dangling low surrogate that would corrupt on encode. */
+const tailString = (value: string, n: number): string => {
+  if (value.length <= n) return value
+  const sliced = value.slice(-n)
+  const first = sliced.charCodeAt(0)
+  return first >= 0xdc00 && first <= 0xdfff ? sliced.slice(1) : sliced
+}
+
 const runAndReport = async (
   { runFn, view, diffFn, progressSink }: RunAndReportDeps,
   args: string[],
@@ -119,7 +149,8 @@ const runAndReport = async (
       exitCode: outcome.exitCode,
       timedOut: outcome.timedOut,
       aborted,
-      stderr: outcome.stderr.slice(-2000),
+      outputTruncated: outcome.truncated ?? false,
+      stderr: tailString(outcome.stderr, 2000),
       liveLog: view.logPath,
     }
     return toToolResult(payload, isError)
@@ -158,13 +189,22 @@ const CASE_INSENSITIVE_PLATFORMS: ReadonlySet<NodeJS.Platform> = new Set(['win32
  * (falling back to path resolution when the dir can't be inspected) and fold case on platforms
  * whose default filesystems are case-insensitive, so "C:\Repo" and "c:\repo" share one lock.
  */
-export const cwdLockKey = (cwd: string, platform: NodeJS.Platform = process.platform): string => {
-  let resolved: string
+const realpathStable = (path: string): string => {
   try {
-    resolved = realpathSync.native(cwd)
+    return realpathSync.native(path)
   } catch {
-    resolved = resolvePath(cwd)
+    // Leaf may not exist yet (e.g. a task that scaffolds a new dir). Realpath the deepest
+    // existing ancestor and re-attach the missing tail so the key is identical before and
+    // after the dir is created — otherwise a run that creates cwd mid-flight would let a
+    // second run compute a divergent (now-resolvable) key and bypass the lock.
+    const parent = dirname(path)
+    if (parent === path) return resolvePath(path) // filesystem root: nothing left to resolve
+    return join(realpathStable(parent), basename(path))
   }
+}
+
+export const cwdLockKey = (cwd: string, platform: NodeJS.Platform = process.platform): string => {
+  const resolved = realpathStable(resolvePath(cwd))
   return CASE_INSENSITIVE_PLATFORMS.has(platform) ? resolved.toLowerCase() : resolved
 }
 
@@ -190,6 +230,26 @@ const createCwdGuard = () => {
   }
 }
 
+/**
+ * Global backstop on how many Codex runs can be in flight at once across ALL workspaces. The
+ * per-cwd guard doesn't bound this (distinct cwds each get their own lock), so a burst of
+ * many-cwd calls could otherwise exhaust memory/file descriptors. Fails fast past the cap.
+ */
+const createConcurrencyGate = (max: number) => {
+  let active = 0
+  return async <T>(run: () => Promise<T>): Promise<T> => {
+    if (active >= max) {
+      throw new Error(`Too many concurrent Codex runs (max ${max}). Wait for one to finish and retry.`)
+    }
+    active += 1
+    try {
+      return await run()
+    } finally {
+      active -= 1
+    }
+  }
+}
+
 export const createServer = (deps: ServerDeps = {}): McpServer => {
   const runFn: RunFn = deps.runFn ?? runCodex
   const diffFn: DiffFn = deps.diffFn ?? captureWorkspaceDiff
@@ -197,7 +257,8 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
   const openView = (cwd: string, requested?: boolean): LiveView =>
     terminalEnabled(requested) ? liveViewFactory(cwd) : NULL_VIEW
   const withCwdLock = createCwdGuard()
-  const server = new McpServer({ name: 'codex-mcp', version: '0.3.0' })
+  const withConcurrencyLimit = createConcurrencyGate(MAX_CONCURRENT_RUNS)
+  const server = new McpServer({ name: 'codex-mcp', version: readVersion() })
 
   server.registerTool(
     'codex_execute',
@@ -211,14 +272,16 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     async (input, extra) => {
       try {
         const args = buildExecuteArgs(input)
-        return await withCwdLock(input.cwd, () => {
-          const view = openView(input.cwd, input.terminal)
-          return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
-            cwd: input.cwd,
-            timeoutMs: input.timeoutMs,
-            signal: extra.signal,
-          })
-        })
+        return await withConcurrencyLimit(() =>
+          withCwdLock(input.cwd, () => {
+            const view = openView(input.cwd, input.terminal)
+            return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
+              cwd: input.cwd,
+              timeoutMs: input.timeoutMs,
+              signal: extra.signal,
+            })
+          }),
+        )
       } catch (error) {
         return errorResult(error)
       }
@@ -238,14 +301,16 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
       try {
         assertAbsoluteCwd(input.cwd)
         const args = buildContinueArgs(input)
-        return await withCwdLock(input.cwd, () => {
-          const view = openView(input.cwd, input.terminal)
-          return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
-            cwd: input.cwd,
-            timeoutMs: input.timeoutMs,
-            signal: extra.signal,
-          })
-        })
+        return await withConcurrencyLimit(() =>
+          withCwdLock(input.cwd, () => {
+            const view = openView(input.cwd, input.terminal)
+            return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
+              cwd: input.cwd,
+              timeoutMs: input.timeoutMs,
+              signal: extra.signal,
+            })
+          }),
+        )
       } catch (error) {
         return errorResult(error)
       }
@@ -269,14 +334,16 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
           sandbox: 'read-only',
           model: input.model,
         })
-        return await withCwdLock(input.cwd, () => {
-          const view = openView(input.cwd, input.terminal)
-          return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
-            cwd: input.cwd,
-            timeoutMs: input.timeoutMs,
-            signal: extra.signal,
-          })
-        })
+        return await withConcurrencyLimit(() =>
+          withCwdLock(input.cwd, () => {
+            const view = openView(input.cwd, input.terminal)
+            return runAndReport({ runFn, view, diffFn, progressSink: progressSinkFor(extra) }, args, {
+              cwd: input.cwd,
+              timeoutMs: input.timeoutMs,
+              signal: extra.signal,
+            })
+          }),
+        )
       } catch (error) {
         return errorResult(error)
       }
@@ -290,20 +357,29 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
       description: 'Report installed Codex CLI version and login status.',
       inputSchema: {},
     },
-    async () => {
+    async (_input, extra) => {
       try {
         const cwd = process.cwd()
-        const [version, login] = await Promise.all([
-          runFn(['--version'], { cwd, timeoutMs: HEALTH_TIMEOUT_MS }),
-          runFn(['login', 'status'], { cwd, timeoutMs: HEALTH_TIMEOUT_MS }),
-        ])
-        const loginText = `${login.stdout}\n${login.stderr}`
-        const payload = {
-          version: version.stdout.trim(),
-          loggedIn: /logged in/i.test(loginText) && !/not logged in/i.test(loginText),
-          loginStatus: loginText.trim(),
-        }
-        return toToolResult(payload, version.exitCode !== 0)
+        const { signal } = extra
+        // Gate health too: each call spawns 2 codex processes; without this a burst of health
+        // calls bypasses the global cap and can exhaust process/fd limits. (No cwd lock — health
+        // is read-only and doesn't touch a workspace.)
+        return await withConcurrencyLimit(async () => {
+          const [version, login] = await Promise.all([
+            runFn(['--version'], { cwd, timeoutMs: HEALTH_TIMEOUT_MS, signal }),
+            runFn(['login', 'status'], { cwd, timeoutMs: HEALTH_TIMEOUT_MS, signal }),
+          ])
+          const ok = (r: RunOutcome): boolean => r.exitCode === 0 && !r.timedOut && !(r.aborted ?? false)
+          const loginText = `${login.stdout}\n${login.stderr}`
+          const payload = {
+            version: version.stdout.trim(),
+            // Only claim logged-in when the login probe itself succeeded — a hung/killed
+            // `codex login status` must not be reported as authenticated.
+            loggedIn: ok(login) && /logged in/i.test(loginText) && !/not logged in/i.test(loginText),
+            loginStatus: loginText.trim(),
+          }
+          return toToolResult(payload, !ok(version))
+        })
       } catch (error) {
         return errorResult(error)
       }

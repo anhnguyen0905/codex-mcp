@@ -4,6 +4,8 @@ import type { RunOutcome } from './types.js'
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000
 export const SIGKILL_GRACE_MS = 5 * 1000
 export const MAX_OUTPUT_BYTES = 10 * 1024 * 1024
+/** After the codex process 'exit's, wait at most this long for stdio 'close' (EOF) before force-settling. */
+export const EXIT_SETTLE_GRACE_MS = 2 * 1000
 
 type SpawnFn = typeof spawn
 
@@ -70,18 +72,25 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
 
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
-    let bufferedBytes = 0
     let timedOut = false
     let aborted = false
     let settled = false
     let killTimer: NodeJS.Timeout | undefined
+    let forceTimer: NodeJS.Timeout | undefined
+    let exitTimer: NodeJS.Timeout | undefined
 
     let terminating = false
     const terminate = (): void => {
       if (terminating) return
       terminating = true
       signalChild('SIGTERM')
-      killTimer = setTimeout(() => signalChild('SIGKILL'), sigkillGraceMs)
+      killTimer = setTimeout(() => {
+        signalChild('SIGKILL')
+        // A descendant that escaped the process group (setsid / double-fork) can hold the stdio
+        // pipe open so 'close' never fires; force-settle so the promise (and the cwd lock +
+        // concurrency slot it holds) can't hang forever after the kill.
+        forceTimer = setTimeout(() => settle(null), sigkillGraceMs)
+      }, sigkillGraceMs)
     }
 
     const timer = setTimeout(() => {
@@ -98,31 +107,35 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
     const clearTimers = (): void => {
       clearTimeout(timer)
       if (killTimer) clearTimeout(killTimer)
+      if (forceTimer) clearTimeout(forceTimer)
+      if (exitTimer) clearTimeout(exitTimer)
       signal?.removeEventListener('abort', onAbort)
     }
 
-    const collect = (chunks: Buffer[], forward?: (chunk: Buffer) => void) => (chunk: Buffer) => {
-      forward?.(chunk)
-      if (bufferedBytes >= MAX_OUTPUT_BYTES) return
-      bufferedBytes += chunk.length
-      chunks.push(chunk)
+    // Each stream gets its OWN byte budget: a noisy stderr must not evict stdout (the stream
+    // that gets parsed), and `truncated` must reflect only stdout. Forwarding to the live view /
+    // progress sink is also capped, so a runaway stream can't fill the disk after the buffer cap.
+    const makeCollector = (chunks: Buffer[], forward?: (chunk: Buffer) => void) => {
+      let bytes = 0
+      let capped = false
+      const onData = (chunk: Buffer): void => {
+        if (capped) return
+        if (bytes >= MAX_OUTPUT_BYTES) {
+          // Cap hit: the tail (possibly the final usage/agent_message event) is dropped. Flag it
+          // so the caller knows the parsed result may be incomplete rather than trusting it blindly.
+          capped = true
+          return
+        }
+        bytes += chunk.length
+        chunks.push(chunk)
+        forward?.(chunk)
+      }
+      return { onData, isTruncated: () => capped }
     }
+    const stdoutCollector = makeCollector(stdoutChunks, onStdout)
+    const stderrCollector = makeCollector(stderrChunks)
 
-    const fail = (error: Error): void => {
-      if (settled) return
-      settled = true
-      clearTimers()
-      child.kill('SIGKILL')
-      reject(error)
-    }
-
-    child.stdout?.on('data', collect(stdoutChunks, onStdout))
-    child.stderr?.on('data', collect(stderrChunks))
-    child.stdout?.on('error', fail)
-    child.stderr?.on('error', fail)
-    child.on('error', fail)
-
-    child.on('close', (exitCode) => {
+    const settle = (exitCode: number | null): void => {
       if (settled) return
       settled = true
       clearTimers()
@@ -132,7 +145,34 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
         exitCode,
         timedOut,
         aborted,
+        truncated: stdoutCollector.isTruncated(),
       })
+    }
+
+    const fail = (error: Error): void => {
+      if (settled) return
+      settled = true
+      clearTimers()
+      // Group-kill (not just the direct child) so subprocesses Codex spawned don't orphan.
+      signalChild('SIGKILL')
+      reject(error)
+    }
+
+    child.stdout?.on('data', stdoutCollector.onData)
+    child.stderr?.on('data', stderrCollector.onData)
+    child.stdout?.on('error', fail)
+    child.stderr?.on('error', fail)
+    child.on('error', fail)
+
+    // Normal path: 'close' fires once the process exited AND all stdio reached EOF.
+    child.on('close', (exitCode) => settle(exitCode))
+
+    // 'exit' fires when the codex process itself exits; 'close' can lag (or never come) if a
+    // lingering descendant keeps the inherited stdout/stderr pipe open. Bound that wait so a
+    // finished run doesn't stall for the full timeout holding the lock/slot.
+    child.on('exit', () => {
+      if (settled || exitTimer) return
+      exitTimer = setTimeout(() => settle(null), EXIT_SETTLE_GRACE_MS)
     })
   })
 }

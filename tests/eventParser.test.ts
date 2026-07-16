@@ -123,6 +123,23 @@ describe('parseEvents', () => {
     })
   })
 
+  test('survives malformed file_change items without crashing the whole parse', () => {
+    const jsonl = [
+      line({ type: 'thread.started', thread_id: 'sess-1' }),
+      line({ type: 'item.completed', item: { type: 'file_change', changes: [null] } }),
+      line({ type: 'item.completed', item: { type: 'file_change', changes: 'oops' } }),
+      line({ type: 'item.completed', item: { type: 'file_change', changes: [{ path: 'ok.ts', kind: 'edit' }] } }),
+      line({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }),
+    ].join('\n')
+
+    const result = parseEvents(jsonl)
+
+    // The bad items are skipped, but the good ones (and the rest of the run) still parse.
+    expect(result.sessionId).toBe('sess-1')
+    expect(result.agentMessage).toBe('done')
+    expect(result.fileChanges).toEqual([{ path: 'ok.ts', kind: 'edit' }])
+  })
+
   test('ignores unknown event and item types', () => {
     const jsonl = [
       line({ type: 'turn.started' }),

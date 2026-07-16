@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder'
 import { formatEvent } from './progressFormatter.js'
 
 export type ProgressSink = (chunk: Buffer) => void
@@ -7,12 +8,21 @@ export type ProgressSender = (message: string, progress: number) => void
  * Turn Codex's raw JSONL stdout stream into human-readable progress callbacks.
  * Buffers partial lines across chunks; unparseable or uninteresting lines are skipped.
  */
+// A single unterminated JSONL line must not grow the pending buffer without bound (progress is
+// forwarded even after the runner's byte cap). 1MB is far above any real event line.
+const MAX_PENDING_BYTES = 1024 * 1024
+
 export const createProgressNotifier = (send: ProgressSender): ProgressSink => {
+  // Decode across chunks so a multi-byte UTF-8 char split at a chunk boundary isn't mangled.
+  const decoder = new StringDecoder('utf8')
   let pending = ''
   let progress = 0
   return (chunk: Buffer) => {
-    const lines = (pending + chunk.toString('utf8')).split('\n')
+    const lines = (pending + decoder.write(chunk)).split('\n')
     pending = lines.pop() ?? ''
+    // Runaway line with no newline: stop buffering it (progress is cosmetic; the parsed result
+    // is built separately in eventParser from the full stdout).
+    if (pending.length > MAX_PENDING_BYTES) pending = ''
     for (const line of lines) {
       const formatted = formatEvent(line)
       if (formatted !== null) {

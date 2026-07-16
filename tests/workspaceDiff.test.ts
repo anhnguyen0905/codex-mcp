@@ -52,7 +52,42 @@ describe('captureWorkspaceDiff', () => {
 
     const diff = await captureWorkspaceDiff(repo)
 
-    expect(diff).toEqual({ status: '', patch: '', truncated: false })
+    expect(diff).toEqual({ status: '', statusTruncated: false, patch: '', truncated: false })
+  })
+
+  test('keeps a valid status when the repo has no commits yet (unborn HEAD)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-unborn-'))
+    tempDirs.push(dir)
+    git(dir, 'init', '-q')
+    writeFileSync(join(dir, 'new.txt'), 'brand new\n')
+
+    // `git diff HEAD` fails here (no HEAD), but status must still survive — not swallowed to null.
+    const diff = await captureWorkspaceDiff(dir)
+
+    expect(diff).not.toBeNull()
+    expect(diff?.status).toContain('new.txt')
+  })
+
+  test('truncates an oversized status and flags it', async () => {
+    const repo = makeRepo()
+    for (let i = 0; i < 50; i++) writeFileSync(join(repo, `f${i}.txt`), 'x\n')
+
+    const diff = await captureWorkspaceDiff(repo, { maxStatusBytes: 64 })
+
+    expect(diff?.statusTruncated).toBe(true)
+    expect(Buffer.byteLength(diff?.status ?? '', 'utf8')).toBeLessThanOrEqual(64)
+  })
+
+  test('truncates the patch by BYTES (not UTF-16 length) without leaving a broken multibyte tail', async () => {
+    const repo = makeRepo()
+    // multibyte content: each 'é' is 2 UTF-8 bytes; String.length would under-count vs bytes
+    writeFileSync(join(repo, 'a.txt'), `${'é'.repeat(2000)}\n`)
+
+    const diff = await captureWorkspaceDiff(repo, { maxPatchBytes: 100 })
+
+    expect(diff?.truncated).toBe(true)
+    expect(Buffer.byteLength(diff?.patch ?? '', 'utf8')).toBeLessThanOrEqual(100)
+    expect(diff?.patch.endsWith('�')).toBe(false) // no split-codepoint replacement char
   })
 
   test('returns null outside a git repo', async () => {
