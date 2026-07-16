@@ -43,7 +43,8 @@ describe('appendMetric', () => {
     expect(JSON.parse(lines[1]).sessionId).toBe('b')
   })
 
-  test('creates the log with mode 0o600', () => {
+  // POSIX permissions don't exist on Windows: statSync().mode reports 0o666 regardless.
+  test.skipIf(process.platform === 'win32')('creates the log with mode 0o600', () => {
     const logPath = mkLog()
     appendMetric(entry(), { logPath })
     const mode = statSync(logPath).mode & 0o777

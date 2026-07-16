@@ -50,7 +50,8 @@ describe('writeNotes', () => {
     expect(content).toContain('npm test')
   })
 
-  test('creates the file with mode 0o600 (transcript may hold secrets)', () => {
+  // POSIX permissions don't exist on Windows: statSync().mode reports 0o666 regardless.
+  test.skipIf(process.platform === 'win32')('creates the file with mode 0o600 (transcript may hold secrets)', () => {
     const cwd = mkCwd()
     const path = writeNotes(req(cwd))!
     const mode = statSync(path).mode & 0o777
