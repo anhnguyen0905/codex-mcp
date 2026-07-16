@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-07-16
+
+### Added
+
+- **`codex_batch` tool** (PR #3) — fan out up to 50 tasks across distinct cwds (typically git worktrees) in parallel, with a bounded worker pool (`maxConcurrency`, default 10), optional `failFast` cancellation, per-cwd locks, and duplicate-cwd rejection at input validation. Returns one `codex_execute`-shaped result per task in input order. Internals: the run pipeline was refactored into a shared `runOnce` so batch reuses the exact same execution/diff/metrics path as the single-task tools.
+- **Opt-in `writeNotes` option** (PR #5) on `codex_execute` / `codex_continue` / `codex_review` — persists a markdown summary of the run (task, agent message, files touched, commands run) to `<cwd>/.codex-flow/notes/<sessionId>.md`. `continue` appends a continuation block. Symlink-refusal on both dirs, `0o600` file mode, session-id allowlist, best-effort (a failed write never fails the run). Payload gains `notesPath`.
+- **Passive metrics log + `codex_metrics` tool** (PR #6) — every completed run appends one JSONL line (tool, cwd, sessionId, duration, token usage, exit/timeout/abort/truncation flags) to `~/.codex-mcp/metrics.jsonl` (override via `CODEX_MCP_METRICS_LOG`; 10MB rotation, `0o600`). `codex_metrics` aggregates with `since`/`until`/`tool`/`cwd`/`sessionId` filters; `estCostUsd` is computed only when `CODEX_MCP_PRICING` (JSON per-1M-token rates) is set. Batch tasks are attributed as `tool: "codex_batch"`.
+
+### Fixed (integration hardening during merge)
+
+- **Batch respects the server-wide concurrency cap**: each batch task passes through the global `CODEX_MCP_MAX_CONCURRENT` gate, and the batch worker pool is clamped to that cap — the global gate is fail-fast, so an unclamped pool (up to 32) over the global default (16) would have made excess tasks error out instead of queue.
+- **Batch tasks no longer share the caller's MCP `progressToken`**: N parallel notifiers racing one token produced a non-monotonic, unattributable progress stream; batch now runs without a per-task progress sink (live logs remain available per workspace).
+- **Metrics record `truncated`**: `appendMetric` now persists the output-truncation flag that `MetricEntry` already modeled, so `codex_metrics` can surface truncation frequency.
+
 ## [0.7.0] - 2026-07-14
 
 ### Added

@@ -117,7 +117,13 @@ concurrent subagents** (`--max <n>` to lower). Opt-in; costs N× simultaneous qu
 | `codex_execute` | Start a new Codex session executing a task/plan |
 | `codex_continue` | Resume a session with follow-up (e.g. review feedback) |
 | `codex_review` | Read-only review of uncommitted workspace changes |
+| `codex_batch` | Run up to 50 tasks in parallel across distinct workspaces (worktrees) |
+| `codex_sessions` | List prior Codex sessions (from `~/.codex/sessions/`), filterable by cwd |
+| `codex_metrics` | Aggregate token/duration/failure metrics from the local run log |
 | `codex_health` | Check Codex CLI version and login status |
+
+`codex_execute` / `codex_continue` / `codex_review` accept `writeNotes: true` to persist a markdown
+summary of the run to `<cwd>/.codex-flow/notes/<sessionId>.md`.
 
 Sandbox modes: `read-only`, `workspace-write` (default), `danger-full-access`. Default execution
 timeout is 30 min (`timeoutMs` caps at 2 h). Runs into the same `cwd` are serialized; different

@@ -264,6 +264,7 @@ const runOnce = async (
       usage: parsed.usage,
       timedOut: outcome.timedOut,
       aborted,
+      truncated: outcome.truncated ?? false,
     })
     return { payload, isError }
   } finally {
@@ -576,9 +577,11 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
           // cannot exceed the server-wide CODEX_MCP_MAX_CONCURRENT cap.
           return withConcurrencyLimit(() =>
             withCwdLock(spec.cwd, async () => {
-              // Batch mode: no per-task terminal window (would spam N desktop windows).
+              // Batch mode: no per-task terminal window (would spam N desktop windows) and no
+              // progress sink — N tasks sharing one progressToken would interleave counters
+              // into a non-monotonic stream the client can't attribute to a task.
               const { payload, isError } = await runOnce(
-                { runFn, view: NULL_VIEW, diffFn, progressSink: progressSinkFor(extra), tool: 'codex_batch' },
+                { runFn, view: NULL_VIEW, diffFn, tool: 'codex_batch' },
                 args,
                 { cwd: spec.cwd, timeoutMs: spec.timeoutMs, signal },
               )
@@ -600,10 +603,13 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
           )
         }
         const tasks = input.tasks as readonly BatchTaskSpec[]
+        // Clamp to the server-wide cap: the global gate is fail-fast, so letting the batch
+        // pool exceed it would make the excess workers error out instead of queue.
+        const maxConcurrency = Math.min(input.maxConcurrency ?? DEFAULT_BATCH_CONCURRENCY, MAX_CONCURRENT_RUNS)
         const results = await runBatch(
           tasks,
           runOneTask,
-          { maxConcurrency: input.maxConcurrency, failFast: input.failFast },
+          { maxConcurrency, failFast: input.failFast },
           extra.signal,
         )
         const anyError = results.some((r) => r.isError)
