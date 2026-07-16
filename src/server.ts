@@ -10,6 +10,13 @@ import { createLiveView, type LiveView } from './liveView.js'
 import { combineSinks, createProgressNotifier, type ProgressSink } from './progressNotifier.js'
 import { captureWorkspaceDiff, type DiffFn } from './workspaceDiff.js'
 import { SANDBOX_MODES, type RunOutcome } from './types.js'
+import {
+  DEFAULT_BATCH_CONCURRENCY,
+  MAX_ALLOWED_CONCURRENCY,
+  runBatch,
+  type BatchTaskResult,
+  type BatchTaskSpec,
+} from './batchRunner.js'
 
 const MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000
 const HEALTH_TIMEOUT_MS = 30 * 1000
@@ -56,6 +63,35 @@ const continueShape = {
     .describe('Open a Terminal window streaming live progress (default: env CODEX_MCP_TERMINAL=1)'),
 }
 
+const batchTaskShape = z.object({
+  cwd: z.string(),
+  prompt: z.string(),
+  sandbox: sandboxSchema.optional(),
+  model: z.string().optional(),
+  timeoutMs: timeoutSchema,
+})
+
+const batchShape = {
+  tasks: z
+    .array(batchTaskShape)
+    .min(1)
+    .max(50)
+    .describe(
+      'Tasks to run in parallel, one per workspace. Each task uses its own cwd (must be unique in the batch).',
+    ),
+  maxConcurrency: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_ALLOWED_CONCURRENCY)
+    .optional()
+    .describe(`Cap on parallel tasks (default ${DEFAULT_BATCH_CONCURRENCY}, hard cap ${MAX_ALLOWED_CONCURRENCY}).`),
+  failFast: z
+    .boolean()
+    .optional()
+    .describe('If true, cancel remaining tasks on the first failure. Default false (continue-on-error).'),
+}
+
 const reviewShape = {
   cwd: z.string().describe('Absolute path of the workspace to review'),
   focus: z
@@ -99,11 +135,12 @@ const safeDiff = async (diffFn: DiffFn, cwd: string) => {
   }
 }
 
-const runAndReport = async (
+/** Run one Codex invocation and return the raw payload; shared by codex_execute/continue/review/batch. */
+const runOnce = async (
   { runFn, view, diffFn, progressSink }: RunAndReportDeps,
   args: string[],
   options: Omit<RunOptions, 'spawnFn' | 'onStdout'>,
-) => {
+): Promise<{ payload: RunPayload; isError: boolean }> => {
   try {
     const onStdout = combineSinks(view.onStdout, progressSink)
     const outcome = await runFn(args, { ...options, onStdout })
@@ -113,7 +150,7 @@ const runAndReport = async (
     // Skip the diff for cancelled/timed-out runs: it delays releasing the cwd lock,
     // and the caller is about to retry or give up anyway.
     const shouldDiff = !aborted && !outcome.timedOut
-    const payload = {
+    const payload: RunPayload = {
       ...parsed,
       diff: shouldDiff ? await safeDiff(diffFn, options.cwd) : null,
       exitCode: outcome.exitCode,
@@ -122,10 +159,28 @@ const runAndReport = async (
       stderr: outcome.stderr.slice(-2000),
       liveLog: view.logPath,
     }
-    return toToolResult(payload, isError)
+    return { payload, isError }
   } finally {
     view.close()
   }
+}
+
+type RunPayload = ReturnType<typeof parseEvents> & {
+  diff: Awaited<ReturnType<DiffFn>> | null
+  exitCode: number | null
+  timedOut: boolean
+  aborted: boolean
+  stderr: string
+  liveLog: string | null
+}
+
+const runAndReport = async (
+  deps: RunAndReportDeps,
+  args: string[],
+  options: Omit<RunOptions, 'spawnFn' | 'onStdout'>,
+) => {
+  const { payload, isError } = await runOnce(deps, args, options)
+  return toToolResult(payload, isError)
 }
 
 const errorResult = (error: unknown) =>
@@ -277,6 +332,69 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
             signal: extra.signal,
           })
         })
+      } catch (error) {
+        return errorResult(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'codex_batch',
+    {
+      title: 'Run multiple Codex tasks in parallel across workspaces',
+      description:
+        'Fan out N tasks across N cwds (typically git worktrees) with a bounded concurrency limit. ' +
+        'Each task uses its own per-cwd lock, so callers must supply distinct cwds. ' +
+        'Returns one result entry per input task in input order.',
+      inputSchema: batchShape,
+    },
+    async (input, extra) => {
+      try {
+        const runOneTask = async (
+          spec: BatchTaskSpec,
+          taskIndex: number,
+          signal: AbortSignal,
+        ): Promise<BatchTaskResult> => {
+          const args = buildExecuteArgs({
+            prompt: spec.prompt,
+            cwd: spec.cwd,
+            sandbox: spec.sandbox ?? 'workspace-write',
+            model: spec.model,
+          })
+          return withCwdLock(spec.cwd, async () => {
+            // Batch mode: no per-task terminal window (would spam N desktop windows).
+            const { payload, isError } = await runOnce(
+              { runFn, view: NULL_VIEW, diffFn, progressSink: progressSinkFor(extra) },
+              args,
+              { cwd: spec.cwd, timeoutMs: spec.timeoutMs, signal },
+            )
+            const { diff, exitCode, timedOut, aborted, stderr, liveLog, ...parsed } = payload
+            return {
+              taskIndex,
+              cwd: spec.cwd,
+              parsed,
+              diff,
+              exitCode,
+              timedOut,
+              aborted,
+              stderr,
+              liveLog,
+              isError,
+            }
+          })
+        }
+        const tasks = input.tasks as readonly BatchTaskSpec[]
+        const results = await runBatch(
+          tasks,
+          runOneTask,
+          { maxConcurrency: input.maxConcurrency, failFast: input.failFast },
+          extra.signal,
+        )
+        const anyError = results.some((r) => r.isError)
+        return toToolResult(
+          { tasks: results, total: results.length, failed: results.filter((r) => r.isError).length },
+          anyError,
+        )
       } catch (error) {
         return errorResult(error)
       }
