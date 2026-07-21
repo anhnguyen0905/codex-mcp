@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, test, vi } from 'vitest'
-import { resolveCodexBinary, runCodex } from '../src/codexRunner.js'
+import { MAX_OUTPUT_BYTES, resolveCodexBinary, runCodex } from '../src/codexRunner.js'
 
 describe('resolveCodexBinary', () => {
   test('uses plain "codex" on posix platforms', () => {
@@ -116,5 +116,66 @@ describe('runCodex', () => {
     })
 
     await expect(runCodex(['exec', 'hi'], { spawnFn, cwd: '/repo' })).rejects.toThrow('ENOENT')
+  })
+})
+
+/** Fake spawn that emits the given stdout buffers as separate 'data' events, then closes. */
+const makeChunkedSpawn = (stdoutChunks: Buffer[]) => {
+  return vi.fn(() => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter
+      stderr: EventEmitter
+      kill: (signal?: string) => void
+    }
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.kill = () => child.emit('close', null)
+    setTimeout(() => {
+      for (const chunk of stdoutChunks) child.stdout.emit('data', chunk)
+      child.emit('close', 0)
+    }, 0)
+    return child
+  })
+}
+
+describe('runCodex output cap', () => {
+  test('a single chunk larger than the cap is sliced to exactly MAX_OUTPUT_BYTES and flagged truncated', async () => {
+    const oversized = Buffer.alloc(MAX_OUTPUT_BYTES + 1024 * 1024, 0x61) // 11MB of 'a'
+    const spawnFn = makeChunkedSpawn([oversized])
+
+    const result = await runCodex(['exec', 'hi'], { spawnFn, cwd: '/repo' })
+
+    expect(Buffer.byteLength(result.stdout, 'utf8')).toBe(MAX_OUTPUT_BYTES)
+    expect(result.truncated).toBe(true)
+  })
+
+  test('chunks totaling under the cap are kept intact and not flagged truncated', async () => {
+    const spawnFn = makeChunkedSpawn([Buffer.from('hello '), Buffer.from('world')])
+
+    const result = await runCodex(['exec', 'hi'], { spawnFn, cwd: '/repo' })
+
+    expect(result.stdout).toBe('hello world')
+    expect(result.truncated).toBe(false)
+  })
+
+  test('a chunk landing exactly on the cap boundary keeps every byte and is not truncated', async () => {
+    const exact = Buffer.alloc(MAX_OUTPUT_BYTES, 0x61)
+    const spawnFn = makeChunkedSpawn([exact])
+
+    const result = await runCodex(['exec', 'hi'], { spawnFn, cwd: '/repo' })
+
+    expect(Buffer.byteLength(result.stdout, 'utf8')).toBe(MAX_OUTPUT_BYTES)
+    expect(result.truncated).toBe(false)
+  })
+
+  test('a chunk arriving after the cap is filled is dropped and flagged truncated', async () => {
+    const exact = Buffer.alloc(MAX_OUTPUT_BYTES, 0x61)
+    const spawnFn = makeChunkedSpawn([exact, Buffer.from('tail')])
+
+    const result = await runCodex(['exec', 'hi'], { spawnFn, cwd: '/repo' })
+
+    expect(Buffer.byteLength(result.stdout, 'utf8')).toBe(MAX_OUTPUT_BYTES)
+    expect(result.stdout).not.toContain('tail')
+    expect(result.truncated).toBe(true)
   })
 })

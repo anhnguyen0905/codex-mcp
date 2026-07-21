@@ -120,9 +120,20 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
       let capped = false
       const onData = (chunk: Buffer): void => {
         if (capped) return
-        if (bytes >= MAX_OUTPUT_BYTES) {
-          // Cap hit: the tail (possibly the final usage/agent_message event) is dropped. Flag it
-          // so the caller knows the parsed result may be incomplete rather than trusting it blindly.
+        const remaining = MAX_OUTPUT_BYTES - bytes
+        if (remaining <= 0) {
+          // Cap already full: the tail (possibly the final usage/agent_message event) is dropped.
+          // Flag it so the caller knows the parsed result may be incomplete.
+          capped = true
+          return
+        }
+        if (chunk.length > remaining) {
+          // A single oversized chunk must not blow past the cap: keep exactly the bytes that fit,
+          // drop the rest, and flag truncation so the caller doesn't trust the parse blindly.
+          const head = chunk.subarray(0, remaining)
+          bytes += head.length
+          chunks.push(head)
+          forward?.(head)
           capped = true
           return
         }
