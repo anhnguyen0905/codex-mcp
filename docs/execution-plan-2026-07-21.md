@@ -1,6 +1,8 @@
 # Execution Plan — Full Pipeline Hardening (2026-07-21)
 
-> **Tiến độ (cập nhật 2026-07-21):** ✅ Wave 0 (8/8) · ✅ Wave 1 (6/6) · ✅ Wave 2 (2/2) · ✅ Wave 3 (promote + 7 fix, trừ HTTP hardening dời sang W5) · ⬜ Wave 4 · ⬜ Wave 5. Tag v0.9.0 đã rewrite về commit version-consistent. Toàn bộ thay đổi đã qua code review (APPROVE, 0 finding) và push lên main.
+> **Tiến độ (cập nhật 2026-07-21):** ✅ Wave 0 (8/8) · ✅ Wave 1 (6/6) · ✅ Wave 2 (2/2) · ✅ Wave 3 (promote + 7 fix, trừ HTTP hardening dời sang W5) · ✅ Wave 4 (7/7) · ⬜ Wave 5. Tag v0.9.0 đã rewrite về commit version-consistent. Toàn bộ thay đổi đã qua code review (APPROVE) và push lên main.
+>
+> **Ghi chú cho Wave 5 (từ phát hiện Wave 4):** (a) parser nên handle event `turn.started` (hiện là unknown event duy nhất trong fixture 0.144.6) để canary nhạy hơn; (b) CLI warnings đến dưới dạng `item.type: "error"` — cân nhắc phân biệt warning/fatal trong `errors[]`; (c) HTTP hardening crawler (size limit, redirect check, HTTPS-only) còn nợ từ W3.
 
 Nguồn: `docs/full-pipeline-review-2026-07-21.md`. Trước khi lập plan, toàn bộ finding đã được re-verify độc lập trên working tree hiện tại.
 
