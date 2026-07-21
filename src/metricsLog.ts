@@ -22,6 +22,8 @@ export interface MetricEntry {
   errorCount?: number
   /** Primary failure kind: 'exit' | 'timeout' | 'abort' | 'turn-failed'. Absent on legacy lines / successes. */
   errorKind?: string
+  /** Server-generated UUID for this run, matching the tool result payload. Absent on legacy lines. */
+  runId?: string
 }
 
 /** Per-1M-token USD pricing, JSON-encoded in CODEX_MCP_PRICING env (opt-in). */

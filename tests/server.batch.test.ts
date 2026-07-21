@@ -97,6 +97,50 @@ describe('codex_batch tool', () => {
     expect(payload.tasks[1].outputTruncated).toBe(false)
   })
 
+  test('each task result carries schemaVersion and a derived status', async () => {
+    const completed = [
+      okJsonl('done'),
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } }),
+    ].join('\n')
+    const runFn = vi.fn(async (_args: string[], opts: { cwd: string }): Promise<RunOutcome> => {
+      if (opts.cwd === '/w/1') return { stdout: completed, stderr: '', exitCode: 0, timedOut: false }
+      if (opts.cwd === '/w/2') return { stdout: '', stderr: 'boom', exitCode: 1, timedOut: false }
+      // exit 0 but no completion marker → partial
+      return { stdout: okJsonl('mid'), stderr: '', exitCode: 0, timedOut: false }
+    })
+    const client = await connect(runFn)
+
+    const r = await client.callTool({
+      name: 'codex_batch',
+      arguments: {
+        tasks: [
+          { cwd: '/w/1', prompt: 'a' },
+          { cwd: '/w/2', prompt: 'b' },
+          { cwd: '/w/3', prompt: 'c' },
+        ],
+      },
+    })
+    const payload = parse(r)
+
+    expect(payload.tasks.map((t) => t.schemaVersion)).toEqual([1, 1, 1])
+    expect(payload.tasks.map((t) => t.status)).toEqual(['success', 'failed', 'partial'])
+    expect(payload.tasks.map((t) => t.isError)).toEqual([false, true, false])
+  })
+
+  test('batch tasks deliver their prompt over stdin', async () => {
+    const runFn = vi.fn(async (): Promise<RunOutcome> => ({ stdout: okJsonl('s'), stderr: '', exitCode: 0, timedOut: false }))
+    const client = await connect(runFn)
+
+    await client.callTool({
+      name: 'codex_batch',
+      arguments: { tasks: [{ cwd: '/w/1', prompt: 'the batch prompt' }] },
+    })
+
+    const [args, opts] = runFn.mock.calls[0] as [string[], { stdinInput?: string }]
+    expect(args.slice(-2)).toEqual(['--', '-'])
+    expect(opts.stdinInput).toBe('the batch prompt')
+  })
+
   test('rejects duplicate cwds up front', async () => {
     const runFn = vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0, timedOut: false }) as RunOutcome)
     const client = await connect(runFn)

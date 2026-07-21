@@ -5,6 +5,20 @@ description: Review verdict process — severity levels, the codex_continue feed
 
 # Review Feedback Process
 
+## Run status gate (before reviewing content)
+
+Every `codex_execute`/`codex_continue`/`codex_review` result carries `schemaVersion: 1` and a
+`status` field:
+
+- `success` — completion marker seen, event stream parsed cleanly: review normally.
+- `partial` (isError false) — the stream ended without a completion marker or had parse errors:
+  treat Codex's output as suspect. Verify from the `diff` field and by running the acceptance
+  checks yourself; prefer re-running via `codex_continue` over reviewing an incomplete result.
+- `failed` / `aborted` (isError true) — do not review; handle as a failed run (report to the user,
+  ask before retrying).
+
+`unknownEvents` and `outputTruncated` are informational only — they never downgrade `status`.
+
 ## Severity levels
 
 | Level | Meaning | Action |

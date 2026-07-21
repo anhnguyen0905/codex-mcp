@@ -1,5 +1,6 @@
+import { RESULT_SCHEMA_VERSION, type RunStatus } from './runStatus.js'
 import type { CodexResult, SandboxMode } from './types.js'
-import type { WorkspaceDiff } from './workspaceDiff.js'
+import type { RunAttribution, WorkspaceDiff } from './workspaceDiff.js'
 
 export interface BatchTaskSpec {
   cwd: string
@@ -12,8 +13,16 @@ export interface BatchTaskSpec {
 export interface BatchTaskResult {
   taskIndex: number
   cwd: string
+  /** Payload schema version (RESULT_SCHEMA_VERSION). */
+  schemaVersion: number
+  /** Run classification: success | partial | failed | aborted (see runStatus.ts). */
+  status: RunStatus
   parsed: CodexResult
+  /** Server-generated UUID for this task's run. Absent when the task never started. */
+  runId?: string
   diff: WorkspaceDiff | null
+  /** Snapshot-based attribution of workspace changes (changedByRun vs preExisting). */
+  attribution?: RunAttribution | null
   exitCode: number | null
   timedOut: boolean
   aborted: boolean
@@ -56,6 +65,8 @@ const emptyParsed = (): CodexResult => ({
 const skippedResult = (task: BatchTaskSpec, taskIndex: number, error: string): BatchTaskResult => ({
   taskIndex,
   cwd: task.cwd,
+  schemaVersion: RESULT_SCHEMA_VERSION,
+  status: 'aborted',
   parsed: emptyParsed(),
   diff: null,
   exitCode: null,
@@ -122,7 +133,8 @@ export const runBatch = async (
       } catch (err) {
         results[i] = {
           ...skippedResult(task, i, err instanceof Error ? err.message : String(err)),
-          aborted: false, // this task ran and threw — not aborted pre-start
+          status: 'failed', // this task ran and threw — a failure, not a pre-start abort
+          aborted: false,
         }
         if (failFast && !localAbort.signal.aborted) localAbort.abort()
       }

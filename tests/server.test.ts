@@ -186,6 +186,49 @@ describe('codex-mcp server', () => {
     expect(factory).not.toHaveBeenCalled()
   })
 
+  test('delivers the prompt over stdin with a `-` argv marker (execute)', async () => {
+    const client = await connect(runFn)
+
+    await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'implement plan', cwd: '/repo' },
+    })
+
+    const [args, opts] = runFn.mock.calls[0]
+    expect(args.slice(-2)).toEqual(['--', '-'])
+    expect(args).not.toContain('implement plan')
+    expect(opts.stdinInput).toBe('implement plan')
+  })
+
+  test('delivers the prompt over stdin with a `-` argv marker (continue)', async () => {
+    const client = await connect(runFn)
+
+    await client.callTool({
+      name: 'codex_continue',
+      arguments: { sessionId: 'sess-1', prompt: 'fix findings', cwd: '/repo' },
+    })
+
+    const [args, opts] = runFn.mock.calls[0]
+    expect(args.slice(-2)).toEqual(['--', '-'])
+    expect(args).not.toContain('fix findings')
+    expect(opts.stdinInput).toBe('fix findings')
+  })
+
+  test('rejects a prompt over the 5MB stdin limit with a clean validation error', async () => {
+    const client = await connect(runFn)
+    const oversized = 'a'.repeat(5 * 1024 * 1024 + 1)
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: oversized, cwd: '/repo' },
+    })
+    const payload = parsePayload(result)
+
+    expect(result.isError).toBe(true)
+    expect(payload.error).toMatch(/5MB/i)
+    expect(runFn).not.toHaveBeenCalled()
+  })
+
   test('codex_health reports version and login status', async () => {
     runFn
       .mockResolvedValueOnce({ stdout: 'codex-cli 0.144.1', stderr: '', exitCode: 0, timedOut: false })
@@ -210,5 +253,215 @@ describe('codex-mcp server', () => {
     const payload = parsePayload(result)
 
     expect(payload.loggedIn).toBe(false)
+  })
+})
+
+describe('run status model', () => {
+  let runFn: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    runFn = vi.fn(async () => okOutcome)
+  })
+
+  test('a clean run with a completion marker reports schemaVersion 1 and status success', async () => {
+    const client = await connect(runFn)
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'implement plan', cwd: '/repo' },
+    })
+    const payload = parsePayload(result)
+
+    expect(result.isError).toBe(false)
+    expect(payload.schemaVersion).toBe(1)
+    expect(payload.status).toBe('success')
+    expect(payload.sawCompletion).toBe(true)
+    expect(payload.parseErrors).toBe(0)
+    expect(payload.unknownEvents).toBe(0)
+  })
+
+  test('an empty stdout with exit code 0 yields status partial, never a clean success', async () => {
+    runFn.mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 0, timedOut: false })
+    const client = await connect(runFn)
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'implement plan', cwd: '/repo' },
+    })
+    const payload = parsePayload(result)
+
+    expect(payload.status).toBe('partial')
+    expect(payload.sawCompletion).toBe(false)
+    // The Claude reviewer decides next steps — partial is NOT a tool error.
+    expect(result.isError).toBe(false)
+  })
+
+  test('parse errors in the stream downgrade an otherwise clean run to partial', async () => {
+    runFn.mockResolvedValueOnce({
+      stdout: `not json\n${jsonlFixture}`,
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+    })
+    const client = await connect(runFn)
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'implement plan', cwd: '/repo' },
+    })
+    const payload = parsePayload(result)
+
+    expect(payload.status).toBe('partial')
+    expect(payload.parseErrors).toBe(1)
+    expect(result.isError).toBe(false)
+  })
+
+  test('unknown event types are surfaced but do not downgrade success', async () => {
+    runFn.mockResolvedValueOnce({
+      stdout: `${JSON.stringify({ type: 'mystery.event' })}\n${jsonlFixture}`,
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+    })
+    const client = await connect(runFn)
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'implement plan', cwd: '/repo' },
+    })
+    const payload = parsePayload(result)
+
+    expect(payload.status).toBe('success')
+    expect(payload.unknownEvents).toBe(1)
+  })
+
+  test('raw-tail truncation is informational when the parser saw the full stream', async () => {
+    // The runner's parser is lossless; a rotated raw tail alone must not mark the run partial.
+    runFn.mockResolvedValueOnce({
+      stdout: '(raw tail rotated)',
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+      truncated: true,
+      parsed: {
+        sessionId: 'sess-t',
+        agentMessage: 'done',
+        fileChanges: [],
+        commands: [],
+        usage: null,
+        errors: [],
+        parseErrors: 0,
+        unknownEvents: 0,
+        sawCompletion: true,
+      },
+    })
+    const client = await connect(runFn)
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'implement plan', cwd: '/repo' },
+    })
+    const payload = parsePayload(result)
+
+    expect(payload.status).toBe('success')
+    expect(payload.outputTruncated).toBe(true)
+    expect(result.isError).toBe(false)
+  })
+
+  test('non-zero exit reports status failed with isError true', async () => {
+    runFn.mockResolvedValueOnce({ stdout: '', stderr: 'boom', exitCode: 1, timedOut: false })
+    const client = await connect(runFn)
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'implement plan', cwd: '/repo' },
+    })
+    const payload = parsePayload(result)
+
+    expect(payload.status).toBe('failed')
+    expect(result.isError).toBe(true)
+  })
+
+  test('a Codex-emitted turn failure reports status failed even with exit code 0', async () => {
+    runFn.mockResolvedValueOnce({
+      stdout: JSON.stringify({ type: 'turn.failed', error: { message: 'model exploded' } }),
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+    })
+    const client = await connect(runFn)
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'implement plan', cwd: '/repo' },
+    })
+    const payload = parsePayload(result)
+
+    expect(payload.status).toBe('failed')
+    expect(result.isError).toBe(true)
+  })
+
+  test('an aborted run reports status aborted with isError true', async () => {
+    runFn.mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: null, timedOut: false, aborted: true })
+    const client = await connect(runFn)
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'implement plan', cwd: '/repo' },
+    })
+    const payload = parsePayload(result)
+
+    expect(payload.status).toBe('aborted')
+    expect(result.isError).toBe(true)
+  })
+
+  test('codex_continue and codex_review results also carry the status model', async () => {
+    const client = await connect(runFn)
+
+    const cont = parsePayload(
+      await client.callTool({
+        name: 'codex_continue',
+        arguments: { sessionId: 'sess-1', prompt: 'fix', cwd: '/repo' },
+      }),
+    )
+    const review = parsePayload(
+      await client.callTool({ name: 'codex_review', arguments: { cwd: '/repo' } }),
+    )
+
+    expect(cont.schemaVersion).toBe(1)
+    expect(cont.status).toBe('success')
+    expect(review.schemaVersion).toBe(1)
+    expect(review.status).toBe('success')
+  })
+
+  test('prefers the runner-parsed event stream over re-parsing stdout when provided', async () => {
+    runFn.mockResolvedValueOnce({
+      stdout: '', // raw tail empty — the parser result is the source of truth
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+      parsed: {
+        sessionId: 'sess-streamed',
+        agentMessage: 'streamed done',
+        fileChanges: [],
+        commands: [],
+        usage: null,
+        errors: [],
+        parseErrors: 0,
+        unknownEvents: 0,
+        sawCompletion: true,
+      },
+    })
+    const client = await connect(runFn)
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'implement plan', cwd: '/repo' },
+    })
+    const payload = parsePayload(result)
+
+    expect(payload.sessionId).toBe('sess-streamed')
+    expect(payload.agentMessage).toBe('streamed done')
+    expect(payload.status).toBe('success')
   })
 })

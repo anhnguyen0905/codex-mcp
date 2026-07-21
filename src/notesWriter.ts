@@ -18,6 +18,8 @@ export interface NotesRequest {
   parsed: CodexResult
   exitCode: number | null
   startedAt: string // ISO
+  /** Server-generated UUID for this run, matching the tool result payload and metric entry. */
+  runId?: string
 }
 
 // Session ids are UUIDs in practice, but validate to be safe: only allow chars that can't be a
@@ -81,6 +83,7 @@ const renderInitialBody = (req: NotesRequest, completedAt: string): string =>
     `- Started: ${req.startedAt}`,
     `- Completed: ${completedAt}`,
     `- Exit: ${req.exitCode ?? 'null'}`,
+    ...(req.runId ? [`- Run: ${req.runId}`] : []),
     `- Task: ${promptFirstLine(req.prompt)}`,
     ``,
     `## Summary`,
@@ -104,6 +107,7 @@ const renderContinuationBlock = (req: NotesRequest, completedAt: string): string
     ``,
     `- Task: ${promptFirstLine(req.prompt)}`,
     `- Exit: ${req.exitCode ?? 'null'}`,
+    ...(req.runId ? [`- Run: ${req.runId}`] : []),
     ``,
     req.parsed.agentMessage ?? '_no agent message_',
     ``,

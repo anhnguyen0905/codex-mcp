@@ -141,10 +141,18 @@ For each task in dependency order (sequential mode):
    - `model`: match the task's complexity — a stronger model for architectural, cross-cutting, or subtle-logic tasks; the default (or a faster/cheaper model) for small, mechanical, well-specified tasks. Note the choice in the Decision log.
    - `timeoutMs`: scale to task size (default 30 min)
    - `terminal`: `true` — opens a live-progress terminal window when supported; progress also streams into the session via MCP notifications
-2. **Save the returned `sessionId`** — reviews in Phase 5 go back into this session. Reuse one session (`codex_continue`) while consecutive tasks build on each other in the SAME domain; start a fresh `codex_execute` when a task is independent OR shifts domain (e.g. backend → data pipeline → marketing copy) — a fresh session gets the new task's distilled skill blocks instead of inheriting stale context from the previous domain.
-3. Update the task's Status in TASKS.md and TaskUpdate after each run.
-4. Run Phase 5 review for the task BEFORE starting the next one.
-5. When the task passes review: append one line to PLAN.md's **Decision log** (deviations from the
+2. **Check the returned `status` field** before anything else:
+   - `success` → proceed normally.
+   - `partial` (not a tool error) → the run ended without a completion marker or with unparseable
+     event lines, so Codex's own account of the run is suspect. Inspect `diff`/`attribution` and the
+     live log, and prefer re-running the task (or explicitly verifying its acceptance checks
+     yourself) before treating it as done.
+   - `failed` / `aborted` (tool error) → handle as a failed run: report it and ask the user before
+     retrying (see Rules below).
+3. **Save the returned `sessionId`** — reviews in Phase 5 go back into this session. Reuse one session (`codex_continue`) while consecutive tasks build on each other in the SAME domain; start a fresh `codex_execute` when a task is independent OR shifts domain (e.g. backend → data pipeline → marketing copy) — a fresh session gets the new task's distilled skill blocks instead of inheriting stale context from the previous domain.
+4. Update the task's Status in TASKS.md and TaskUpdate after each run.
+5. Run Phase 5 review for the task BEFORE starting the next one.
+6. When the task passes review: append one line to PLAN.md's **Decision log** (deviations from the
    plan, decisions made, surprises) so later tasks and fresh Codex sessions inherit the context —
    and, if the user opted in at Phase 3, make the checkpoint commit
    (`wip(codex-flow): T<n> <title>`).
@@ -163,7 +171,7 @@ For each task in dependency order (sequential mode):
    requirement) rather than Codex mis-implementing it, do NOT burn review rounds — go back to
    Phase 2, amend PLAN.md with user approval, re-slice the affected tasks, then resume.
 6. **If clean**: mark the task done, move to the next task.
-7. **After the last task**: do a whole-feature review pass (optionally `mcp__codex__codex_review` for a second opinion), run the full test suite, AND verify the feature end-to-end by actually exercising the changed behavior (run the app/flow, not only unit tests). Then summarize the delivered change, remaining risks, and suggest a commit message. If per-task checkpoint commits were made, offer to squash the `wip(codex-flow)` commits into one clean commit (or keep them — user's call). Do not commit or squash unless the user asks.
+7. **After the last task**: do a whole-feature review pass (optionally `mcp__codex__codex_review` for a second opinion — pass the Phase-0 baseline ref as `baselineRef` so the review covers `baseline..HEAD`, including checkpoint/merge commits, plus current uncommitted changes), run the full test suite, AND verify the feature end-to-end by actually exercising the changed behavior (run the app/flow, not only unit tests). Then summarize the delivered change, remaining risks, and suggest a commit message. If per-task checkpoint commits were made, offer to squash the `wip(codex-flow)` commits into one clean commit (or keep them — user's call). Do not commit or squash unless the user asks.
 8. **Retro**: per `codex-flow:skill-selection` Step 8, if the flow produced reusable domain
    knowledge not covered by any indexed skill, offer to save it as a new skill in the local
    library and rebuild the index.

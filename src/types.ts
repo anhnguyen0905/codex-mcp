@@ -49,6 +49,10 @@ export interface RunOutcome {
   timedOut: boolean
   /** True when the run was cancelled via AbortSignal (e.g. user pressed Esc in the MCP client). */
   aborted?: boolean
-  /** True when stdout exceeded the buffer cap and the tail was dropped — the parsed result may be incomplete. */
+  /**
+   * True when the raw `stdout` field dropped OLD bytes (tail-only retention). The streamed
+   * parse (`parsed` on RunOutcomeWithEvents) still saw the full stream, so this is
+   * informational for the raw field — it does not mean parser-level event data was lost.
+   */
   truncated?: boolean
 }

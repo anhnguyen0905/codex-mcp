@@ -1,15 +1,33 @@
+import { randomUUID } from 'node:crypto'
 import { readFileSync, realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { ServerNotification } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
-import { assertAbsoluteCwd, buildContinueArgs, buildExecuteArgs } from './argsBuilder.js'
-import { runCodex, type RunOptions } from './codexRunner.js'
-import { parseEvents } from './eventParser.js'
+import {
+  assertAbsoluteCwd,
+  buildContinueInvocation,
+  buildExecuteInvocation,
+  type CodexInvocation,
+} from './argsBuilder.js'
+import { runCodex, type RunOptions, type RunOutcomeWithEvents } from './codexRunner.js'
+import { parseEvents, type ParsedEvents } from './eventParser.js'
+import { deriveRunStatus, isErrorStatus, RESULT_SCHEMA_VERSION, type RunStatus } from './runStatus.js'
 import { createLiveView, type LiveView } from './liveView.js'
 import { combineSinks, createProgressNotifier, type ProgressSink } from './progressNotifier.js'
-import { captureWorkspaceDiff, type DiffFn } from './workspaceDiff.js'
+import {
+  attributeWorkspaceDiff,
+  captureWorkspaceDiff,
+  captureWorkspaceSnapshot,
+  verifyGitRef,
+  type AttributeFn,
+  type DiffFn,
+  type RunAttribution,
+  type SnapshotFn,
+  type WorkspaceSnapshot,
+} from './workspaceDiff.js'
+import { acquireWorkspaceLease, type LeaseFn } from './workspaceLease.js'
 import { listSessions, MAX_LIMIT as MAX_SESSIONS_LIMIT } from './sessionStore.js'
 import { writeNotes, type NotesRequest } from './notesWriter.js'
 import { aggregate, appendMetric, parsePricing, readMetrics, type MetricEntry } from './metricsLog.js'
@@ -46,15 +64,25 @@ const readVersion = (): string => {
   }
 }
 
-type RunFn = (args: string[], options: Omit<RunOptions, 'spawnFn'>) => Promise<RunOutcome>
+type RunFn = (args: string[], options: Omit<RunOptions, 'spawnFn'>) => Promise<RunOutcomeWithEvents>
 type LiveViewFactory = (cwd: string) => LiveView
 
 const NULL_VIEW: LiveView = { onStdout: undefined, close: () => {}, logPath: null }
+
+type VerifyRefFn = (cwd: string, ref: string) => Promise<boolean>
 
 export interface ServerDeps {
   runFn?: RunFn
   liveViewFactory?: LiveViewFactory
   diffFn?: DiffFn
+  /** Before-run workspace snapshot (dirty-file content hashes) used to attribute changes. */
+  snapshotFn?: SnapshotFn
+  /** Post-run classifier: changedByRun vs preExisting against the snapshot. */
+  attributeFn?: AttributeFn
+  /** Verifies a codex_review baselineRef resolves to a commit. */
+  verifyRefFn?: VerifyRefFn
+  /** Cross-process workspace lease (default: lease files under ~/.codex-mcp/locks). */
+  leaseFn?: LeaseFn
 }
 
 const terminalEnabled = (requested?: boolean): boolean =>
@@ -153,8 +181,25 @@ const batchShape = {
     .describe('If true, cancel remaining tasks on the first failure. Default false (continue-on-error).'),
 }
 
+/**
+ * Plausible git ref/rev expression: must not start with `-` (would be parsed as a git flag)
+ * and must not contain whitespace, colons, or backslashes.
+ */
+const GIT_REF_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_./@{}^~-]*$/
+const MAX_REF_LENGTH = 256
+
 const reviewShape = {
   cwd: z.string().describe('Absolute path of the workspace to review'),
+  baselineRef: z
+    .string()
+    .min(1)
+    .max(MAX_REF_LENGTH)
+    .regex(GIT_REF_PATTERN, 'baselineRef must be a plausible git ref (no leading "-", no whitespace)')
+    .optional()
+    .describe(
+      'Optional git ref to review from: Codex reviews `git diff <baselineRef>..HEAD` plus current ' +
+        'uncommitted changes, so checkpoint/merge commits made since the baseline are covered.',
+    ),
   focus: z
     .string()
     .optional()
@@ -171,9 +216,14 @@ const reviewShape = {
     .describe('Persist a markdown summary of this run to <cwd>/.codex-flow/notes/<sessionId>.md (default false).'),
 }
 
-const buildReviewPrompt = (focus?: string): string =>
+const buildReviewPrompt = (focus?: string, baselineRef?: string): string =>
   [
-    'Review the uncommitted changes in this workspace (inspect `git status` and `git diff HEAD`).',
+    ...(baselineRef
+      ? [
+          `Review all changes since baseline ${baselineRef}: inspect \`git diff ${baselineRef}..HEAD\``,
+          'for committed changes AND `git status` / `git diff HEAD` for current uncommitted changes.',
+        ]
+      : ['Review the uncommitted changes in this workspace (inspect `git status` and `git diff HEAD`).']),
     'Report findings ordered by severity (CRITICAL/HIGH/MEDIUM/LOW) with file:line references,',
     'covering correctness, security, error handling and maintainability.',
     'Do not modify any files — this is a read-only review.',
@@ -189,9 +239,13 @@ interface RunAndReportDeps {
   runFn: RunFn
   view: LiveView
   diffFn: DiffFn
+  snapshotFn: SnapshotFn
+  attributeFn: AttributeFn
+  /** Server-generated UUID identifying this run in the payload, notes, and metric entry. */
+  runId: string
   progressSink?: ProgressSink
   /** When provided, writeNotes() runs after payload is built (best-effort; errors are logged, not thrown). */
-  notes?: Omit<NotesRequest, 'sessionId' | 'parsed' | 'exitCode'>
+  notes?: Omit<NotesRequest, 'sessionId' | 'parsed' | 'exitCode' | 'runId'>
   /** Which tool invoked runAndReport, so the metric log can attribute the run. */
   tool: MetricEntry['tool']
 }
@@ -199,6 +253,26 @@ interface RunAndReportDeps {
 const safeDiff = async (diffFn: DiffFn, cwd: string) => {
   try {
     return await diffFn(cwd)
+  } catch {
+    return null
+  }
+}
+
+const safeSnapshot = async (snapshotFn: SnapshotFn, cwd: string): Promise<WorkspaceSnapshot | null> => {
+  try {
+    return await snapshotFn(cwd)
+  } catch {
+    return null
+  }
+}
+
+const safeAttribute = async (
+  attributeFn: AttributeFn,
+  cwd: string,
+  snapshot: WorkspaceSnapshot | null,
+): Promise<RunAttribution | null> => {
+  try {
+    return await attributeFn(cwd, snapshot)
   } catch {
     return null
   }
@@ -230,20 +304,26 @@ const deriveErrorKind = (
 
 /** Run one Codex invocation and return the raw payload; shared by codex_execute/continue/review/batch. */
 const runOnce = async (
-  { runFn, view, diffFn, progressSink, notes, tool }: RunAndReportDeps,
+  { runFn, view, diffFn, snapshotFn, attributeFn, runId, progressSink, notes, tool }: RunAndReportDeps,
   args: string[],
   options: Omit<RunOptions, 'spawnFn' | 'onStdout'>,
 ): Promise<{ payload: RunPayload; isError: boolean }> => {
   const startedAt = Date.now()
   try {
+    // Before-run snapshot of already-dirty files so post-run changes can be attributed
+    // (pre-existing dirt vs changes this run actually made). Best-effort — never fails the run.
+    const snapshot = await safeSnapshot(snapshotFn, options.cwd)
     const onStdout = combineSinks(view.onStdout, progressSink)
     const outcome = await runFn(args, { ...options, onStdout })
-    const parsed = parseEvents(outcome.stdout)
+    // Prefer the runner's lossless streamed parse (it saw bytes the raw stdout tail may have
+    // rotated out). Fallback re-parse only covers injected fakes that return a bare RunOutcome.
+    const parsed: ParsedEvents = outcome.parsed ?? parseEvents(outcome.stdout)
     const aborted = outcome.aborted ?? false
-    const isError = outcome.timedOut || aborted || outcome.exitCode !== 0 || parsed.errors.length > 0
-    // Skip the diff for cancelled/timed-out runs: it delays releasing the cwd lock,
-    // and the caller is about to retry or give up anyway.
-    const shouldDiff = !aborted && !outcome.timedOut
+    const status = deriveRunStatus(
+      { exitCode: outcome.exitCode, timedOut: outcome.timedOut, aborted },
+      parsed,
+    )
+    const isError = isErrorStatus(status)
     let notesPath: string | null = null
     if (notes && parsed.sessionId) {
       try {
@@ -252,18 +332,27 @@ const runOnce = async (
           sessionId: parsed.sessionId,
           parsed,
           exitCode: outcome.exitCode,
+          runId,
         })
       } catch (err) {
         // best-effort: a broken notes write must never fail the actual run.
         console.error(`codex-mcp: writeNotes failed: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
+    // Capture the diff even on timeout/abort: the workspace may be half-mutated and the caller
+    // needs to see (and attribute) what changed before deciding to retry or roll back.
     const payload: RunPayload = {
       ...parsed,
-      diff: shouldDiff ? await safeDiff(diffFn, options.cwd) : null,
+      schemaVersion: RESULT_SCHEMA_VERSION,
+      status,
+      runId,
+      diff: await safeDiff(diffFn, options.cwd),
+      attribution: await safeAttribute(attributeFn, options.cwd, snapshot),
       exitCode: outcome.exitCode,
       timedOut: outcome.timedOut,
       aborted,
+      // Raw-tail rotation only (informational): the streamed parse saw the full stream, so a
+      // rotated raw tail never downgrades `status` by itself.
       outputTruncated: outcome.truncated ?? false,
       stderr: tailString(outcome.stderr, 2000),
       liveLog: view.logPath,
@@ -283,6 +372,7 @@ const runOnce = async (
       truncated: outcome.truncated ?? false,
       errorCount: parsed.errors.length,
       errorKind: deriveErrorKind(outcome, aborted, parsed.errors.length),
+      runId,
     })
     return { payload, isError }
   } finally {
@@ -290,8 +380,12 @@ const runOnce = async (
   }
 }
 
-type RunPayload = ReturnType<typeof parseEvents> & {
+type RunPayload = ParsedEvents & {
+  schemaVersion: number
+  status: RunStatus
+  runId: string
   diff: Awaited<ReturnType<DiffFn>> | null
+  attribution: RunAttribution | null
   exitCode: number | null
   timedOut: boolean
   aborted: boolean
@@ -362,10 +456,12 @@ export const cwdLockKey = (cwd: string, platform: NodeJS.Platform = process.plat
 /**
  * Serializes Codex runs per workspace: two concurrent runs writing into the same cwd would
  * race on files and git state, so the second call fails fast with a clear message.
+ * Layered: the in-memory slot (fast path, this process) is taken first, then the
+ * cross-process lease file; both are released in reverse order in the same finally.
  */
-const createCwdGuard = () => {
+const createCwdGuard = (leaseFn: LeaseFn) => {
   const active = new Set<string>()
-  return async <T>(cwd: string, run: () => Promise<T>): Promise<T> => {
+  return async <T>(cwd: string, runId: string, run: () => Promise<T>): Promise<T> => {
     const key = cwdLockKey(cwd)
     if (active.has(key)) {
       throw new Error(
@@ -374,7 +470,12 @@ const createCwdGuard = () => {
     }
     active.add(key)
     try {
-      return await run()
+      const lease = await leaseFn(cwd, runId)
+      try {
+        return await run()
+      } finally {
+        lease.release()
+      }
     } finally {
       active.delete(key)
     }
@@ -404,10 +505,14 @@ const createConcurrencyGate = (max: number) => {
 export const createServer = (deps: ServerDeps = {}): McpServer => {
   const runFn: RunFn = deps.runFn ?? runCodex
   const diffFn: DiffFn = deps.diffFn ?? captureWorkspaceDiff
+  const snapshotFn: SnapshotFn = deps.snapshotFn ?? captureWorkspaceSnapshot
+  const attributeFn: AttributeFn = deps.attributeFn ?? attributeWorkspaceDiff
+  const verifyRefFn: VerifyRefFn = deps.verifyRefFn ?? verifyGitRef
+  const leaseFn: LeaseFn = deps.leaseFn ?? acquireWorkspaceLease
   const liveViewFactory: LiveViewFactory = deps.liveViewFactory ?? createLiveView
   const openView = (cwd: string, requested?: boolean): LiveView =>
     terminalEnabled(requested) ? liveViewFactory(cwd) : NULL_VIEW
-  const withCwdLock = createCwdGuard()
+  const withCwdLock = createCwdGuard(leaseFn)
   const withConcurrencyLimit = createConcurrencyGate(MAX_CONCURRENT_RUNS)
   const server = new McpServer({ name: 'codex-mcp', version: readVersion() })
 
@@ -422,22 +527,28 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     },
     async (input, extra) => {
       try {
-        const args = buildExecuteArgs(input)
+        // Prompt travels over stdin (`-- -`); an over-limit prompt throws here and surfaces as a
+        // clean tool validation error via the catch below.
+        const { args, stdinInput }: CodexInvocation = buildExecuteInvocation(input)
         const startedAt = new Date().toISOString()
+        const runId = randomUUID()
         return await withConcurrencyLimit(() =>
-          withCwdLock(input.cwd, () => {
+          withCwdLock(input.cwd, runId, () => {
             const view = openView(input.cwd, input.terminal)
             return runAndReport(
               {
                 runFn,
                 view,
                 diffFn,
+                snapshotFn,
+                attributeFn,
+                runId,
                 progressSink: progressSinkFor(extra),
                 notes: input.writeNotes ? { cwd: input.cwd, prompt: input.prompt, mode: 'execute', startedAt } : undefined,
                 tool: 'codex_execute',
               },
               args,
-              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal },
+              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal, stdinInput },
             )
           }),
         )
@@ -459,22 +570,26 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     async (input, extra) => {
       try {
         assertAbsoluteCwd(input.cwd)
-        const args = buildContinueArgs(input)
+        const { args, stdinInput }: CodexInvocation = buildContinueInvocation(input)
         const startedAt = new Date().toISOString()
+        const runId = randomUUID()
         return await withConcurrencyLimit(() =>
-          withCwdLock(input.cwd, () => {
+          withCwdLock(input.cwd, runId, () => {
             const view = openView(input.cwd, input.terminal)
             return runAndReport(
               {
                 runFn,
                 view,
                 diffFn,
+                snapshotFn,
+                attributeFn,
+                runId,
                 progressSink: progressSinkFor(extra),
                 notes: input.writeNotes ? { cwd: input.cwd, prompt: input.prompt, mode: 'continue', startedAt } : undefined,
                 tool: 'codex_continue',
               },
               args,
-              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal },
+              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal, stdinInput },
             )
           }),
         )
@@ -495,28 +610,43 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     },
     async (input, extra) => {
       try {
-        const args = buildExecuteArgs({
-          prompt: buildReviewPrompt(input.focus),
+        const { args, stdinInput }: CodexInvocation = buildExecuteInvocation({
+          prompt: buildReviewPrompt(input.focus, input.baselineRef),
           cwd: input.cwd,
           sandbox: 'read-only',
           model: input.model,
         })
+        if (input.baselineRef !== undefined) {
+          const refExists = await verifyRefFn(input.cwd, input.baselineRef)
+          if (!refExists) {
+            return errorResult(
+              new Error(
+                `baselineRef "${input.baselineRef}" does not resolve to a commit in ${input.cwd}. ` +
+                  'Pass a valid ref (e.g. the Phase-0 baseline SHA) or omit baselineRef.',
+              ),
+            )
+          }
+        }
         const startedAt = new Date().toISOString()
         const notePrompt = input.focus ?? 'review workspace changes'
+        const runId = randomUUID()
         return await withConcurrencyLimit(() =>
-          withCwdLock(input.cwd, () => {
+          withCwdLock(input.cwd, runId, () => {
             const view = openView(input.cwd, input.terminal)
             return runAndReport(
               {
                 runFn,
                 view,
                 diffFn,
+                snapshotFn,
+                attributeFn,
+                runId,
                 progressSink: progressSinkFor(extra),
                 notes: input.writeNotes ? { cwd: input.cwd, prompt: notePrompt, mode: 'review', startedAt } : undefined,
                 tool: 'codex_review',
               },
               args,
-              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal },
+              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal, stdinInput },
             )
           }),
         )
@@ -585,31 +715,49 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
           taskIndex: number,
           signal: AbortSignal,
         ): Promise<BatchTaskResult> => {
-          const args = buildExecuteArgs({
+          const { args, stdinInput }: CodexInvocation = buildExecuteInvocation({
             prompt: spec.prompt,
             cwd: spec.cwd,
             sandbox: spec.sandbox ?? 'workspace-write',
             model: spec.model,
           })
+          const runId = randomUUID()
           // Each batch task also passes through the global concurrency gate so a batch
           // cannot exceed the server-wide CODEX_MCP_MAX_CONCURRENT cap.
           return withConcurrencyLimit(() =>
-            withCwdLock(spec.cwd, async () => {
+            withCwdLock(spec.cwd, runId, async () => {
               // Batch mode: no per-task terminal window (would spam N desktop windows) and no
               // progress sink — N tasks sharing one progressToken would interleave counters
               // into a non-monotonic stream the client can't attribute to a task.
               const { payload, isError } = await runOnce(
-                { runFn, view: NULL_VIEW, diffFn, tool: 'codex_batch' },
+                { runFn, view: NULL_VIEW, diffFn, snapshotFn, attributeFn, runId, tool: 'codex_batch' },
                 args,
-                { cwd: spec.cwd, timeoutMs: spec.timeoutMs, signal },
+                { cwd: spec.cwd, timeoutMs: spec.timeoutMs, signal, stdinInput },
               )
-              const { diff, exitCode, timedOut, aborted, outputTruncated, stderr, liveLog, notesPath, ...parsed } =
-                payload
+              const {
+                schemaVersion,
+                status,
+                diff,
+                attribution,
+                runId: taskRunId,
+                exitCode,
+                timedOut,
+                aborted,
+                outputTruncated,
+                stderr,
+                liveLog,
+                notesPath,
+                ...parsed
+              } = payload
               return {
                 taskIndex,
                 cwd: spec.cwd,
+                schemaVersion,
+                status,
                 parsed,
+                runId: taskRunId,
                 diff,
+                attribution,
                 exitCode,
                 timedOut,
                 aborted,

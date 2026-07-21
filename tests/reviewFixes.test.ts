@@ -70,7 +70,7 @@ describe('combineSinks isolation', () => {
   })
 })
 
-describe('diff skipping on cancelled runs', () => {
+describe('diff capture on cancelled runs', () => {
   const connect = async (runFn: unknown, diffFn: unknown) => {
     const server = createServer({ runFn: runFn as never, diffFn: diffFn as never })
     const client = new Client({ name: 'test-client', version: '0.0.1' })
@@ -79,7 +79,9 @@ describe('diff skipping on cancelled runs', () => {
     return client
   }
 
-  test('does not capture a diff when the run was aborted', async () => {
+  // The workspace may be half-mutated when a run is cancelled — the diff must still be
+  // captured so the caller can see (and roll back) what changed before the interruption.
+  test('captures the diff when the run was aborted', async () => {
     const runFn = vi.fn(async (): Promise<RunOutcome> => ({
       stdout: '',
       stderr: '',
@@ -93,11 +95,11 @@ describe('diff skipping on cancelled runs', () => {
     const result = await client.callTool({ name: 'codex_execute', arguments: { prompt: 'go', cwd: '/repo' } })
     const payload = JSON.parse((result.content as Array<{ text: string }>)[0].text)
 
-    expect(diffFn).not.toHaveBeenCalled()
-    expect(payload.diff).toBeNull()
+    expect(diffFn).toHaveBeenCalledWith('/repo')
+    expect(payload.diff).toEqual({ status: '', patch: '', truncated: false })
   })
 
-  test('does not capture a diff when the run timed out', async () => {
+  test('captures the diff when the run timed out', async () => {
     const runFn = vi.fn(async (): Promise<RunOutcome> => ({
       stdout: '',
       stderr: '',
@@ -109,6 +111,6 @@ describe('diff skipping on cancelled runs', () => {
 
     await client.callTool({ name: 'codex_execute', arguments: { prompt: 'go', cwd: '/repo' } })
 
-    expect(diffFn).not.toHaveBeenCalled()
+    expect(diffFn).toHaveBeenCalledWith('/repo')
   })
 })
