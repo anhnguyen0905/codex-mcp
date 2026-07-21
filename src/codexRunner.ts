@@ -1,9 +1,16 @@
 import { spawn } from 'node:child_process'
+import { createIncrementalParser, type ParsedEvents } from './eventParser.js'
 import type { RunOutcome } from './types.js'
 
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000
 export const SIGKILL_GRACE_MS = 5 * 1000
 export const MAX_OUTPUT_BYTES = 10 * 1024 * 1024
+/**
+ * Raw stdout retention for debugging/payload: only the newest bytes are kept (tail rotation).
+ * The incremental parser sees the FULL stream regardless, so `parsed` never loses events —
+ * `truncated` only means "the raw `stdout` field dropped old bytes".
+ */
+export const RAW_STDOUT_TAIL_BYTES = 1 * 1024 * 1024
 /** After the codex process 'exit's, wait at most this long for stdio 'close' (EOF) before force-settling. */
 export const EXIT_SETTLE_GRACE_MS = 2 * 1000
 
@@ -27,18 +34,29 @@ export interface RunOptions {
   timeoutMs?: number
   spawnFn?: SpawnFn
   sigkillGraceMs?: number
+  /** How long to wait after 'exit' for stdio 'close' before killing lingerers and force-settling. */
+  exitSettleGraceMs?: number
   onStdout?: (chunk: Buffer) => void
+  /** When set, the child gets a stdin pipe and this content is written to it (prompt-via-stdin mode). */
+  stdinInput?: string
   /** Cancels the run: the codex process gets SIGTERM, then SIGKILL after a grace period. */
   signal?: AbortSignal
 }
 
-export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcome> => {
+/** RunOutcome plus the incrementally parsed event stream (additive — server may ignore it). */
+export interface RunOutcomeWithEvents extends RunOutcome {
+  parsed?: ParsedEvents
+}
+
+export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcomeWithEvents> => {
   const {
     cwd,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     spawnFn = spawn,
     sigkillGraceMs = SIGKILL_GRACE_MS,
+    exitSettleGraceMs = EXIT_SETTLE_GRACE_MS,
     onStdout,
+    stdinInput,
     signal,
   } = options
 
@@ -53,7 +71,7 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
   return new Promise((resolve, reject) => {
     const child = spawnFn(resolveCodexBinary(process.platform, process.env), args, {
       cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [stdinInput === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       env: process.env,
       detached: useProcessGroup,
     })
@@ -70,8 +88,36 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
       child.kill(signal)
     }
 
-    const stdoutChunks: Buffer[] = []
+    /**
+     * Best-effort kill of the whole process tree — descendants included, even after the direct
+     * child already exited. POSIX: SIGKILL to the process group. Windows: `taskkill /T /F`.
+     */
+    const killProcessTree = (): void => {
+      if (process.platform === 'win32') {
+        if (typeof child.pid !== 'number') return
+        try {
+          // Uses the real spawn (not spawnFn, which fakes the codex child in tests).
+          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+            .on('error', () => {
+              // best-effort: taskkill missing or tree already gone
+            })
+        } catch {
+          // best-effort: spawning taskkill itself failed
+        }
+        return
+      }
+      signalChild('SIGKILL')
+    }
+
+    if (stdinInput !== undefined && child.stdin) {
+      // EPIPE (child exited before/while reading the prompt) must not become an unhandled
+      // 'error' crash: the exit/close path already reports the failure via the exit code.
+      child.stdin.on('error', () => {})
+      child.stdin.end(stdinInput)
+    }
+
     const stderrChunks: Buffer[] = []
+    const parser = createIncrementalParser()
     let timedOut = false
     let aborted = false
     let settled = false
@@ -112,51 +158,89 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
       signal?.removeEventListener('abort', onAbort)
     }
 
-    // Each stream gets its OWN byte budget: a noisy stderr must not evict stdout (the stream
-    // that gets parsed), and `truncated` must reflect only stdout. Forwarding to the live view /
-    // progress sink is also capped, so a runaway stream can't fill the disk after the buffer cap.
-    const makeCollector = (chunks: Buffer[], forward?: (chunk: Buffer) => void) => {
+    // stderr keeps its head-capped budget: a noisy stderr must not grow unbounded, and its cap
+    // is independent of stdout so chatter on one stream never evicts the other.
+    const makeCollector = (chunks: Buffer[]) => {
       let bytes = 0
       let capped = false
       const onData = (chunk: Buffer): void => {
         if (capped) return
         const remaining = MAX_OUTPUT_BYTES - bytes
         if (remaining <= 0) {
-          // Cap already full: the tail (possibly the final usage/agent_message event) is dropped.
-          // Flag it so the caller knows the parsed result may be incomplete.
           capped = true
           return
         }
         if (chunk.length > remaining) {
-          // A single oversized chunk must not blow past the cap: keep exactly the bytes that fit,
-          // drop the rest, and flag truncation so the caller doesn't trust the parse blindly.
+          // A single oversized chunk must not blow past the cap: keep exactly the bytes that fit.
           const head = chunk.subarray(0, remaining)
           bytes += head.length
           chunks.push(head)
-          forward?.(head)
           capped = true
           return
         }
         bytes += chunk.length
         chunks.push(chunk)
-        forward?.(chunk)
       }
-      return { onData, isTruncated: () => capped }
+      return { onData }
     }
-    const stdoutCollector = makeCollector(stdoutChunks, onStdout)
+    // Raw stdout keeps only the newest `maxBytes` (tail rotation) — enough for debugging without
+    // buffering a multi-GB stream. The parse is NOT affected: the parser is fed upstream of this.
+    const makeTailCollector = (maxBytes: number) => {
+      const chunks: Buffer[] = []
+      let bytes = 0
+      let rotated = false
+      const onData = (chunk: Buffer): void => {
+        const tail = chunk.length > maxBytes ? chunk.subarray(chunk.length - maxBytes) : chunk
+        if (tail.length < chunk.length) rotated = true
+        chunks.push(tail)
+        bytes += tail.length
+        // Evict oldest bytes until the tail fits the budget again.
+        while (bytes > maxBytes) {
+          const head = chunks[0]
+          const overflow = bytes - maxBytes
+          if (head.length <= overflow) {
+            chunks.shift()
+            bytes -= head.length
+          } else {
+            chunks[0] = head.subarray(overflow)
+            bytes -= overflow
+          }
+          rotated = true
+        }
+      }
+      return { onData, didRotate: () => rotated, concat: () => Buffer.concat(chunks) }
+    }
+    // The parser is LOSSLESS: it sees every stdout byte before tail-capping, so `outcome.parsed`
+    // is authoritative even when the raw `stdout` tail rotated. Forwarding to the live view /
+    // progress sink stays capped so a runaway stream can't fill the disk.
+    let forwardedBytes = 0
+    const onStdoutData = (chunk: Buffer): void => {
+      parser.push(chunk)
+      stdoutTail.onData(chunk)
+      if (!onStdout) return
+      const remaining = MAX_OUTPUT_BYTES - forwardedBytes
+      if (remaining <= 0) return
+      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk
+      forwardedBytes += slice.length
+      onStdout(slice)
+    }
+    const stdoutTail = makeTailCollector(RAW_STDOUT_TAIL_BYTES)
     const stderrCollector = makeCollector(stderrChunks)
 
     const settle = (exitCode: number | null): void => {
       if (settled) return
       settled = true
       clearTimers()
+      parser.end()
       resolve({
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+        stdout: stdoutTail.concat().toString('utf8'),
         stderr: Buffer.concat(stderrChunks).toString('utf8'),
         exitCode,
         timedOut,
         aborted,
-        truncated: stdoutCollector.isTruncated(),
+        // Raw-tail rotation only: the parse (`parsed`) saw the full stream regardless.
+        truncated: stdoutTail.didRotate(),
+        parsed: parser.result(),
       })
     }
 
@@ -169,7 +253,7 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
       reject(error)
     }
 
-    child.stdout?.on('data', stdoutCollector.onData)
+    child.stdout?.on('data', onStdoutData)
     child.stderr?.on('data', stderrCollector.onData)
     child.stdout?.on('error', fail)
     child.stderr?.on('error', fail)
@@ -181,9 +265,16 @@ export const runCodex = (args: string[], options: RunOptions): Promise<RunOutcom
     // 'exit' fires when the codex process itself exits; 'close' can lag (or never come) if a
     // lingering descendant keeps the inherited stdout/stderr pipe open. Bound that wait so a
     // finished run doesn't stall for the full timeout holding the lock/slot.
-    child.on('exit', () => {
+    child.on('exit', (exitCode) => {
       if (settled || exitTimer) return
-      exitTimer = setTimeout(() => settle(null), EXIT_SETTLE_GRACE_MS)
+      exitTimer = setTimeout(() => {
+        // Pipes are still open past the grace window: descendants outlived the CLI. Kill the
+        // whole tree BEFORE settling — settle releases the caller's cwd lock, and an orphan
+        // must not keep mutating the workspace after that. The child's real exit code is
+        // preserved (a lingering pipe is not a run failure).
+        killProcessTree()
+        settle(exitCode)
+      }, exitSettleGraceMs)
     })
   })
 }

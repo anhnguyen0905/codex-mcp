@@ -1,6 +1,26 @@
+import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, test, vi } from 'vitest'
-import { runCodex } from '../src/codexRunner.js'
+import { RAW_STDOUT_TAIL_BYTES, runCodex } from '../src/codexRunner.js'
+
+const DEATH_POLL_INTERVAL_MS = 25
+
+/** Polls `kill(pid, 0)` until it throws ESRCH (process gone) or the deadline passes. */
+const isDeadWithin = async (pid: number, timeoutMs: number): Promise<boolean> => {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return true // ESRCH: the process no longer exists
+    }
+    if (Date.now() >= deadline) return false
+    await new Promise((r) => setTimeout(r, DEATH_POLL_INTERVAL_MS))
+  }
+}
 
 type FakeChild = EventEmitter & {
   stdout: EventEmitter
@@ -85,7 +105,7 @@ describe('runCodex hardening', () => {
     expect(seen).toEqual(['line-1\n', 'line-2\n'])
   })
 
-  test('stops buffering output beyond the byte cap', async () => {
+  test('retains only the raw stdout tail beyond the cap while later bytes still arrive', async () => {
     const child = makeChild()
     const spawnFn = vi.fn(() => {
       setTimeout(() => {
@@ -98,9 +118,10 @@ describe('runCodex hardening', () => {
 
     const result = await runCodex(['exec', 'hi'], { spawnFn: spawnFn as never, cwd: '/repo' })
 
-    expect(result.stdout).not.toContain('OVERFLOW')
-    expect(result.stdout.length).toBe(10 * 1024 * 1024)
-    // Dropped tail is flagged so the caller knows the event stream may be incomplete.
+    // Raw retention is tail-only: the NEWEST bytes are kept, old head bytes rotate out.
+    expect(result.stdout.endsWith('OVERFLOW')).toBe(true)
+    expect(result.stdout.length).toBe(RAW_STDOUT_TAIL_BYTES)
+    // Rotation is flagged so callers know the raw field (not the parse) is incomplete.
     expect(result.truncated).toBe(true)
   })
 
@@ -123,18 +144,53 @@ describe('runCodex hardening', () => {
     vi.useFakeTimers()
     try {
       const child = makeChild()
+      const kills: string[] = []
+      child.kill = (signal?: string) => {
+        kills.push(signal ?? 'SIGTERM')
+      }
       const spawnFn = vi.fn(() => child)
       const p = runCodex(['exec', 'hi'], { spawnFn: spawnFn as never, cwd: '/repo' })
       child.stdout.emit('data', Buffer.from('{"type":"thread.started","thread_id":"x"}\n'))
-      child.emit('exit', 0, null) // process exits, but a descendant keeps the pipe open → no 'close'
+      child.emit('exit', 3, null) // process exits, but a descendant keeps the pipe open → no 'close'
       await vi.advanceTimersByTimeAsync(2000) // EXIT_SETTLE_GRACE_MS
       const result = await p
       expect(result.stdout).toContain('thread.started')
-      expect(result.exitCode).toBeNull()
+      // The real exit code is preserved — lingering pipes must not fake a null (false failure)...
+      expect(result.exitCode).toBe(3)
+      // ...and the orphaned tree is killed before the settle releases the cwd lock/slot.
+      expect(kills).toContain('SIGKILL')
     } finally {
       vi.useRealTimers()
     }
   })
+
+  test.skipIf(process.platform === 'win32')(
+    'kills lingering descendants and preserves the real exit code when a grandchild holds the pipe open',
+    async () => {
+      // Arrange: parent exits 7 immediately, but `sleep` inherits the stdout pipe and lingers.
+      const dir = mkdtempSync(join(tmpdir(), 'codex-runner-tree-'))
+      const pidFile = join(dir, 'grandchild.pid')
+      const script = `sleep 30 & echo $! > "${pidFile}"; echo done; exit 7`
+      const spawnFn = ((_cmd: string, _args: string[], opts: object) =>
+        spawn('sh', ['-c', script], opts as never)) as never
+
+      // Act
+      const result = await runCodex(['exec', 'hi'], {
+        spawnFn,
+        cwd: dir,
+        exitSettleGraceMs: 150,
+      })
+
+      // Assert: real exit code survives the forced settle...
+      expect(result.exitCode).toBe(7)
+      expect(result.stdout).toContain('done')
+      // ...and the descendant is dead immediately after settle resolves.
+      const grandchildPid = Number(readFileSync(pidFile, 'utf8').trim())
+      expect(Number.isInteger(grandchildPid) && grandchildPid > 0).toBe(true)
+      expect(await isDeadWithin(grandchildPid, 1000)).toBe(true)
+    },
+    10_000,
+  )
 
   test('a noisy stderr does not evict or truncate stdout (per-stream byte budgets)', async () => {
     const child = makeChild()
