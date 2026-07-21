@@ -31,8 +31,10 @@ export interface StatusParse {
  * - `success`  — completion marker seen and the stream parsed cleanly.
  *
  * Deliberately NOT inputs: `unknownEvents` (new CLI versions add benign event types — surfaced
- * in the payload but never downgrades status) and raw-tail truncation (the runner's parser is
- * lossless, so a rotated raw stdout tail loses no parser-level data).
+ * in the payload but never downgrades status), raw-tail truncation (the runner's parser is
+ * lossless, so a rotated raw stdout tail loses no parser-level data), and `warnings` (warning-ish
+ * messages ride in ParsedEvents/payload for visibility but never affect classification — a
+ * warnings-only run still classifies by its completion marker).
  */
 export const deriveRunStatus = (outcome: StatusOutcome, parsed: StatusParse): RunStatus => {
   if (outcome.aborted) return 'aborted'

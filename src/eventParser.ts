@@ -33,6 +33,19 @@ export interface ParsedEvents extends CodexResult {
   unknownEvents: number
   /** True when a terminal event (turn.completed / turn.failed) was seen — false means the stream ended mid-turn. */
   sawCompletion: boolean
+  /**
+   * Warning-ish messages that should NOT fail the run. Plumbing only for now — always empty.
+   *
+   * Investigated for codex-cli 0.144.6: `item.type: "error"` items carry only `{ id, message }` —
+   * no severity/level field exists in the protocol (verified against the shipped binary's serde
+   * field names and live captures, including MCP-server startup-failure probes, which emitted no
+   * error items at all). With no protocol-level discriminator we fail closed: every error item
+   * stays in `errors[]` (which fails the run) rather than being reclassified by message-content
+   * heuristics. If a future CLI adds an explicit severity field, classify on it here.
+   */
+  warnings: string[]
+  /** Number of turn.started events seen (a run can span multiple turns). */
+  turnCount: number
 }
 
 interface MutableResult {
@@ -45,6 +58,8 @@ interface MutableResult {
   parseErrors: number
   unknownEvents: number
   sawCompletion: boolean
+  warnings: string[]
+  turnCount: number
 }
 
 const freshResult = (): MutableResult => ({
@@ -57,6 +72,8 @@ const freshResult = (): MutableResult => ({
   parseErrors: 0,
   unknownEvents: 0,
   sawCompletion: false,
+  warnings: [],
+  turnCount: 0,
 })
 
 /** Immutable snapshot of the accumulator, safe to hand to callers. */
@@ -70,6 +87,8 @@ const snapshot = (result: MutableResult): ParsedEvents => ({
   parseErrors: result.parseErrors,
   unknownEvents: result.unknownEvents,
   sawCompletion: result.sawCompletion,
+  warnings: [...result.warnings],
+  turnCount: result.turnCount,
 })
 
 const parseLine = (line: string): RawEvent | null => {
@@ -125,6 +144,11 @@ const applyEvent = (result: MutableResult, event: RawEvent): boolean => {
   switch (event.type) {
     case 'thread.started':
       result.sessionId = event.thread_id ?? null
+      return true
+    case 'turn.started':
+      // Turn boundary marker (emitted since codex-cli 0.144.x). No state to extract beyond the
+      // count — handling it keeps unknownEvents an honest canary for genuinely new event types.
+      result.turnCount += 1
       return true
     case 'item.completed':
       return event.item ? applyItem(result, event.item) : false

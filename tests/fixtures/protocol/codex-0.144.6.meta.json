@@ -3,5 +3,5 @@
   "capturedAt": "2026-07-21T05:56:15.159Z",
   "prompt": "Reply with exactly: pong. Do not run commands.",
   "synthetic": false,
-  "expectedUnknownEvents": 1
+  "expectedUnknownEvents": 0
 }

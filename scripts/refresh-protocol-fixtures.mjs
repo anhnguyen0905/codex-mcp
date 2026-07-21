@@ -31,7 +31,7 @@ const CODEX_BIN = process.env.CODEX_BIN ?? 'codex'
  * Event/item types handled by src/eventParser.ts (applyEvent/applyItem). Anything else is
  * counted as an unknown event, matching ParsedEvents.unknownEvents. Keep in sync with the parser.
  */
-const KNOWN_EVENT_TYPES = new Set(['thread.started', 'turn.completed', 'turn.failed'])
+const KNOWN_EVENT_TYPES = new Set(['thread.started', 'turn.started', 'turn.completed', 'turn.failed'])
 const KNOWN_ITEM_TYPES = new Set(['agent_message', 'file_change', 'command_execution', 'error'])
 
 const fail = (message, code = 1) => {

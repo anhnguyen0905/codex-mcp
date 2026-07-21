@@ -1,3 +1,14 @@
+/**
+ * Synthetic end-of-run marker appended to the live log by liveView when a run settles. Not a
+ * Codex CLI event — it never reaches the event parser (the live log is write-only output).
+ * Keep the literal in sync with scripts/tail-progress.mjs, which detects it without importing
+ * this module so the watcher works even when dist/ is not built.
+ */
+export const LIVE_RUN_FINISHED_TYPE = 'live.run_finished'
+
+/** Stream-derived terminal state for the live log marker (liveView cannot see exit codes). */
+export type LiveRunFinishedStatus = 'completed' | 'failed' | 'interrupted'
+
 interface RawItem {
   type?: string
   text?: string
@@ -13,6 +24,9 @@ interface RawEvent {
   item?: RawItem
   usage?: { input_tokens?: number; output_tokens?: number }
   error?: { message?: string }
+  /** live.run_finished marker fields (written by liveView, not the Codex CLI). */
+  status?: string
+  sessionId?: string | null
 }
 
 const time = (): string => new Date().toLocaleTimeString()
@@ -49,6 +63,8 @@ const formatByType = (event: RawEvent): string | null => {
       return `✓ turn complete (in:${event.usage?.input_tokens ?? 0} out:${event.usage?.output_tokens ?? 0})`
     case 'turn.failed':
       return `✗ turn failed: ${event.error?.message ?? 'unknown'}`
+    case LIVE_RUN_FINISHED_TYPE:
+      return `=== run ${event.sessionId ?? '?'} finished: ${event.status ?? 'unknown'} ===`
     default:
       return null
   }

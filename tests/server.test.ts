@@ -353,6 +353,8 @@ describe('run status model', () => {
         parseErrors: 0,
         unknownEvents: 0,
         sawCompletion: true,
+        warnings: [],
+        turnCount: 1,
       },
     })
     const client = await connect(runFn)
@@ -450,6 +452,8 @@ describe('run status model', () => {
         parseErrors: 0,
         unknownEvents: 0,
         sawCompletion: true,
+        warnings: [],
+        turnCount: 1,
       },
     })
     const client = await connect(runFn)

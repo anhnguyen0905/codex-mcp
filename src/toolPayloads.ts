@@ -134,6 +134,8 @@ const parsedEventsShape = {
   parseErrors: z.number(),
   unknownEvents: z.number(),
   sawCompletion: z.boolean(),
+  warnings: z.array(z.string()),
+  turnCount: z.number(),
 }
 
 /** outputSchema for codex_execute / codex_continue / codex_review results. */
@@ -159,6 +161,8 @@ const batchParsedSchema = z.object({
   parseErrors: z.number().optional(),
   unknownEvents: z.number().optional(),
   sawCompletion: z.boolean().optional(),
+  warnings: z.array(z.string()).optional(),
+  turnCount: z.number().optional(),
 })
 
 const batchTaskResultSchema = z.object({

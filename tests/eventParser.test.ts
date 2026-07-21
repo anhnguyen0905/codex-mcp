@@ -123,6 +123,8 @@ describe('parseEvents', () => {
       parseErrors: 0,
       unknownEvents: 0,
       sawCompletion: false,
+      warnings: [],
+      turnCount: 0,
     })
   })
 
@@ -145,7 +147,6 @@ describe('parseEvents', () => {
 
   test('ignores unknown event and item types', () => {
     const jsonl = [
-      line({ type: 'turn.started' }),
       line({ type: 'item.completed', item: { type: 'reasoning', text: 'thinking...' } }),
       line({ type: 'some.future.event', payload: 1 }),
     ].join('\n')
@@ -154,6 +155,52 @@ describe('parseEvents', () => {
 
     expect(result.agentMessage).toBeNull()
     expect(result.errors).toEqual([])
+  })
+
+  test('handles turn.started as a known event (not counted as unknown)', () => {
+    const jsonl = [
+      line({ type: 'thread.started', thread_id: 'sess-1' }),
+      line({ type: 'turn.started' }),
+      line({ type: 'turn.completed', usage: { input_tokens: 1 } }),
+    ].join('\n')
+
+    const result = parseEvents(jsonl)
+
+    expect(result.unknownEvents).toBe(0)
+    expect(result.sawCompletion).toBe(true)
+  })
+
+  test('counts one turn per turn.started event', () => {
+    const jsonl = [
+      line({ type: 'turn.started' }),
+      line({ type: 'turn.completed', usage: { input_tokens: 1 } }),
+      line({ type: 'turn.started' }),
+      line({ type: 'turn.completed', usage: { input_tokens: 2 } }),
+    ].join('\n')
+
+    const result = parseEvents(jsonl)
+
+    expect(result.turnCount).toBe(2)
+  })
+})
+
+describe('parseEvents warnings plumbing', () => {
+  test('exposes an empty warnings array (no protocol-level discriminator exists in 0.144.6)', () => {
+    const result = parseEvents(line({ type: 'turn.completed', usage: { input_tokens: 1 } }))
+
+    expect(result.warnings).toEqual([])
+  })
+
+  test('keeps every error item in errors[] (fail-closed: never reclassified as warning)', () => {
+    const jsonl = [
+      line({ type: 'item.completed', item: { type: 'error', message: 'MCP client for `x` failed to start' } }),
+      line({ type: 'turn.completed', usage: { input_tokens: 1 } }),
+    ].join('\n')
+
+    const result = parseEvents(jsonl)
+
+    expect(result.errors).toEqual(['MCP client for `x` failed to start'])
+    expect(result.warnings).toEqual([])
   })
 })
 
@@ -181,7 +228,7 @@ describe('parseEvents counters', () => {
 
   test('counts unhandled event types and item types as unknownEvents', () => {
     const jsonl = [
-      line({ type: 'turn.started' }),
+      line({ type: 'turn.started' }), // known since 0.144.6 canary — must NOT count as unknown
       line({ type: 'item.completed', item: { type: 'reasoning', text: 'thinking...' } }),
       line({ type: 'some.future.event', payload: 1 }),
       line({ type: 'thread.started', thread_id: 'x' }),
@@ -189,7 +236,7 @@ describe('parseEvents counters', () => {
 
     const result = parseEvents(jsonl)
 
-    expect(result.unknownEvents).toBe(3)
+    expect(result.unknownEvents).toBe(2)
     expect(result.parseErrors).toBe(0)
   })
 

@@ -66,6 +66,16 @@ describe('deriveRunStatus', () => {
 
     expect(status).toBe('success')
   })
+
+  test('warnings never affect status — a warnings-only run classifies by its completion marker', () => {
+    // warnings ride in ParsedEvents (payload surface) but are NOT a StatusParse input:
+    // a run that produced only warnings and a clean completion marker stays success.
+    const parsedWithWarnings = { ...cleanParse, warnings: ['startup warning: something benign'] }
+
+    const status = deriveRunStatus(okOutcome, parsedWithWarnings)
+
+    expect(status).toBe('success')
+  })
 })
 
 describe('isErrorStatus', () => {

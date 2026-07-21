@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { formatEvent } from '../src/progressFormatter.js'
+import { formatEvent, LIVE_RUN_FINISHED_TYPE } from '../src/progressFormatter.js'
 
 const line = (value: unknown): string => JSON.stringify(value)
 
@@ -62,5 +62,10 @@ describe('formatEvent', () => {
   test('returns null for empty input', () => {
     expect(formatEvent('')).toBeNull()
     expect(formatEvent('   ')).toBeNull()
+  })
+
+  test('formats the live end-of-run marker with session id and status', () => {
+    const out = formatEvent(line({ type: LIVE_RUN_FINISHED_TYPE, status: 'completed', sessionId: 'sess-9' }))
+    expect(out).toContain('=== run sess-9 finished: completed ===')
   })
 })
