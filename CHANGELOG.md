@@ -3,6 +3,36 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-07-21
+
+Production-hardening release: every P0/P1/P2 finding from the 2026-07-21 full pipeline review is closed (see `docs/full-pipeline-review-2026-07-21.md` and `docs/execution-plan-2026-07-21.md`).
+
+### Added
+
+- **Run status model** — payloads carry `schemaVersion: 1` and `status: success | partial | failed | aborted`; a run missing its completion marker (e.g. empty stdout with exit 0) is `partial`, never a clean success. `parseErrors`, `unknownEvents`, `sawCompletion`, `warnings`, `turnCount` are surfaced.
+- **Structured tool contract** — every tool emits `structuredContent` with a Zod `outputSchema`; the text block stays byte-identical for backward compatibility.
+- **Run attribution** — before/after workspace snapshots classify `changedByRun` vs `preExisting` by content hash, include bounded untracked-file content, survive timeout/abort, and thread a `runId` through payloads, metrics, and notes.
+- **Baseline-range review** — `codex_review` accepts `baselineRef` and reviews `baselineRef..HEAD` plus uncommitted changes, so checkpoint commits are never invisible to a final review.
+- **Cross-process workspace lease** — per-cwd locking now also holds a lease file under `~/.codex-mcp/locks` (outside cloud-synced workspaces) with stale dead-pid reclaim.
+- **Skill supply-chain controls** — remote skill clones land in an unindexed quarantine; vetting pins commit + content sha256 in `vetted.json` and any drift flips the entry back to unvetted; symlinked `SKILL.md` files are rejected.
+- **Telemetry** — metrics gain `model`, `taskId`, `queueMs`, `timeToFirstProgressMs`, `errorCount`/`errorKind`, a per-model breakdown, and opt-in cost estimation that never prices unknown models.
+- **Protocol canary** — a real codex-cli 0.144.6 JSONL fixture pins the protocol; CLI upgrades that change event shapes fail tests loudly with refresh instructions (`scripts/refresh-protocol-fixtures.mjs`).
+- **Release/packaging gates** — CI enforces version consistency across package/lock/server/plugin/changelog/tag, byte-equality of the `/codex-flow` command mirror, coverage thresholds, and a packed-tarball install smoke that asserts the installed server answers JSON-RPC initialize.
+- **Benchmark harness** — SLO-asserted local benchmarks (`scripts/bench-*.mjs`, `docs/benchmarks.md`) covering 50MB streams, 50-task batches, cancellation latency, and metrics/session scale.
+- **Live-log completion marker** — the live view appends a `live.run_finished` marker on settle and `tail-progress` exits automatically when it appears.
+- **`fb-video-crawler` promoted** to a tracked deliverable with its own CI (Python 3.11–3.13): label-aware metric parsing (never positional), og:url video-ID cross-check, honest partial-comment results (`has_more`/`truncated`/`stop_reason`), HTML void-element parsing, CSV formula-injection escaping, atomic writes, and a hardened HTTP boundary (5MB cap, validated HTTPS-only redirects, accurate final retry errors).
+
+### Changed
+
+- Prompts are delivered to the Codex CLI via stdin (`-- -`) with a 5MB cap instead of riding argv.
+- The JSONL stream is parsed incrementally and losslessly; raw stdout retention drops to a 1MB rotating tail.
+- Progress notifications coalesce to at most one per 250ms with an immediate final flush.
+- `codex_batch` with `failFast: false` reports per-task status plus a summary instead of flagging the whole tool as an error; batch progress is attributed per task.
+- Session listing filters by canonical cwd and orders by real last activity; `codex_health` distinguishes probe timeout/failure from a clean not-logged-in.
+- Descendant processes are killed before locks release; the child's real exit code is preserved.
+- Notes writes are atomic and refuse symlinked note files; output caps truncate at exact byte boundaries.
+- `.mcp.json` runs the local build instead of `@latest`.
+
 ## [0.9.0] - 2026-07-16
 
 ### Added
