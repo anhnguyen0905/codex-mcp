@@ -37,7 +37,12 @@ Show the wave plan to the user before spawning anything.
 For each task in the wave (width > 1):
 
 1. Create an isolated worktree for the task — use the `Agent` tool with `isolation: "worktree"`
-   (or `EnterWorktree`), branched off the Phase 0 baseline ref. Each worktree is a distinct `cwd`.
+   (or `EnterWorktree`). Each worktree is a distinct `cwd`. Branch point depends on the wave:
+   - **Wave 1**: branch from the Phase 0 baseline ref.
+   - **Wave N (N>1)**: branch from the CURRENT integration branch HEAD — i.e. only after wave
+     N−1 has been merged and its wave integration review/tests passed (Step 3). Branching later
+     waves off the baseline would run them on stale code missing earlier waves' merged output.
+   The Phase 0 baseline ref is kept for audit/rollback only — never as a branch point after wave 1.
 2. In each subagent, run the **normal Phase 4 execution** for its ONE task: embed the standards +
    the task's `Skills:` blocks, call `codex_execute` with that worktree as `cwd`, pick `model` by
    task complexity, save the `sessionId`.
@@ -56,7 +61,8 @@ Because each `cwd` differs, the per-workspace concurrency guard allows all of th
    result + a quick end-to-end probe. Branches never saw each other, so a green-in-isolation task
    can still break in combination — this pass is mandatory, not optional.
 4. Append merged outcomes to PLAN.md's Decision log, then compute the next wave (dependencies of
-   later tasks are now satisfied).
+   later tasks are now satisfied). The next wave's worktrees branch from the integration branch
+   HEAD as it stands now — post-merge, post-review — so they build on this wave's output.
 
 ## Step 4 — Final integration
 
