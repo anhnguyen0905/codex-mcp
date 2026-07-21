@@ -2,22 +2,54 @@
 // few relevant skills for a task instead of blind-loading whole collections.
 //
 // Usage:
-//   node scripts/build-skills-index.mjs [skillRootDir ...] [--out <file>]
+//   node scripts/build-skills-index.mjs [skillRootDir ...] [--out <file>] [--remote <file>]
+//   node scripts/build-skills-index.mjs --vet <SKILL.md path> [--manifest <file>]
 //
 // Defaults:
 //   roots: ~/.claude/skills and ~/claude-skill-library (those that exist)
 //   out:   ~/.claude/skill-library/INDEX.md
 //
 // Index format (one line per skill, grep-friendly):
-//   <name> | <description> | <absolute path to SKILL.md>
+//   <name> | <description> | <absolute path to SKILL.md> [| vetted:<true|false>]
+//
+// SECURITY MODEL (skill supply chain):
+//   - Directories named `quarantine` are NEVER indexed. sync-awesome-skills --clone
+//     lands third-party repos in <lib>/quarantine/remote/; promotion out of
+//     quarantine happens only through the explicit vet flow below.
+//   - Symlinked SKILL.md dirents are rejected (lstat semantics via readdir dirents),
+//     and every indexed file's realpath must resolve inside its scan root —
+//     anything else is skipped with a warning.
+//   - Remote-origin rule: an entry is remote-origin when its path relative to a
+//     scan root contains a `remote` or `quarantine` path segment. Remote-origin
+//     entries are verified against the vet manifest `<root>/vetted.json` and
+//     marked `vetted:true` only when the recorded sha256 matches the current
+//     SKILL.md content; a missing record or hash mismatch (e.g. after `git pull`)
+//     yields `vetted:false` plus a stderr warning. Local (non-remote) skills are
+//     indexed exactly as before and never require a manifest.
+//   - URL pointer entries merged from REMOTE.md are never loadable directly; they
+//     must be cloned (into quarantine) and vetted before use.
+//
+// vetted.json format (flat map, keyed by absolute SKILL.md path):
+//   { "<path>": { "gitCommit": "<sha|null>", "sha256": "<hex>", "vettedAt": "<ISO>" } }
+//
+// `--vet` computes that record for one SKILL.md and writes it into the manifest
+// (derived from the path's `remote`/`quarantine` segment unless --manifest is given).
 
+import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
 
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', 'coverage', '__pycache__', '.venv'])
 const MAX_SCAN_DEPTH = 6
+const QUARANTINE_DIR_NAME = 'quarantine'
+const REMOTE_DIR_NAME = 'remote'
+const VET_MANIFEST_NAME = 'vetted.json'
 
 const defaultRoots = () => [
   path.join(os.homedir(), '.claude', 'skills'),
@@ -67,7 +99,85 @@ export function parseSkillMeta(content) {
   return meta
 }
 
-async function collectSkillFiles(dir, depth, found) {
+/** sha256 hex digest of a SKILL.md content string. */
+export const sha256Of = (content) => createHash('sha256').update(content ?? '', 'utf8').digest('hex')
+
+/**
+ * Compute a vet record pinning a SKILL.md to its current content: sha256 of the
+ * file, HEAD commit of the enclosing git checkout (null when not a checkout),
+ * and the vetting timestamp.
+ */
+export async function computeVetRecord(skillFile) {
+  const resolved = path.resolve(skillFile)
+  const content = await fs.readFile(resolved, 'utf8')
+  let gitCommit = null
+  try {
+    const { stdout } = await execFileAsync('git', [
+      '-C',
+      path.dirname(resolved),
+      'rev-parse',
+      'HEAD',
+    ])
+    gitCommit = stdout.trim()
+  } catch {
+    gitCommit = null // not inside a git checkout — hash pinning still applies
+  }
+  return { gitCommit, sha256: sha256Of(content), vettedAt: new Date().toISOString() }
+}
+
+/** A record verifies only when its pinned sha256 matches the current content. */
+export function verifyVetRecord(record, content) {
+  return Boolean(record?.sha256) && record.sha256 === sha256Of(content)
+}
+
+/** Load `<root>/vetted.json`. Missing file is normal ({}), corrupt file warns. */
+export async function loadVetManifest(manifestFile) {
+  let raw
+  try {
+    raw = await fs.readFile(manifestFile, 'utf8')
+  } catch {
+    return { records: {}, warning: null } // no manifest yet — every remote entry is unvetted
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { records: {}, warning: `ignored malformed vet manifest (not an object): ${manifestFile}` }
+    }
+    return { records: parsed, warning: null }
+  } catch (error) {
+    return { records: {}, warning: `ignored unreadable vet manifest ${manifestFile}: ${error.message}` }
+  }
+}
+
+/** True when a root-relative path crosses a remote/ or quarantine/ segment. */
+export function isRemoteOrigin(relPath) {
+  return relPath
+    .split(path.sep)
+    .some((segment) => segment === REMOTE_DIR_NAME || segment === QUARANTINE_DIR_NAME)
+}
+
+/**
+ * Resolve a candidate file's realpath and require it to stay inside the scan
+ * root. Returns { real, warning } — real is null when the file must be skipped.
+ */
+export async function resolveInsideRoot(file, rootReal) {
+  let real
+  try {
+    real = await fs.realpath(file)
+  } catch (error) {
+    return { real: null, warning: `skipped unresolvable SKILL.md: ${file} (${error.message})` }
+  }
+  const rel = path.relative(rootReal, real)
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    return {
+      real: null,
+      warning: `skipped SKILL.md whose realpath escapes the index root: ${file} -> ${real}`,
+    }
+  }
+  return { real, warning: null }
+}
+
+async function collectSkillFiles(dir, depth, found, warnings) {
   if (depth > MAX_SCAN_DEPTH) return
   let dirents
   try {
@@ -76,11 +186,22 @@ async function collectSkillFiles(dir, depth, found) {
     return
   }
   for (const dirent of dirents) {
+    const full = path.join(dir, dirent.name)
+    if (dirent.isSymbolicLink()) {
+      // readdir dirents carry lstat semantics: symlinks are reported as
+      // symlinks, never as files/dirs — reject them before any readFile.
+      warnings.push(`skipped symlink (symlinked skills are not indexed): ${full}`)
+      continue
+    }
     if (dirent.isDirectory()) {
+      if (dirent.name === QUARANTINE_DIR_NAME) {
+        warnings.push(`skipped quarantine directory (unvetted clones are never indexed): ${full}`)
+        continue
+      }
       if (IGNORED_DIRS.has(dirent.name)) continue
-      await collectSkillFiles(path.join(dir, dirent.name), depth + 1, found)
-    } else if (dirent.name === 'SKILL.md') {
-      found.push(path.join(dir, 'SKILL.md'))
+      await collectSkillFiles(full, depth + 1, found, warnings)
+    } else if (dirent.name === 'SKILL.md' && dirent.isFile()) {
+      found.push(full)
     }
   }
 }
@@ -97,16 +218,37 @@ export async function buildIndex(roots) {
       warnings.push(`skipped missing root: ${resolved}`)
       continue
     }
+    const rootReal = await fs.realpath(resolved)
+    let manifest = null // lazy-loaded once per root, only when a remote-origin entry appears
     const files = []
-    await collectSkillFiles(resolved, 0, files)
+    await collectSkillFiles(resolved, 0, files, warnings)
     for (const file of files) {
-      const content = await fs.readFile(file, 'utf8').catch(() => '')
+      const { real, warning } = await resolveInsideRoot(file, rootReal)
+      if (!real) {
+        warnings.push(warning)
+        continue
+      }
+      const content = await fs.readFile(real, 'utf8').catch(() => '')
       const meta = parseSkillMeta(content)
-      entries.push({
+      const entry = {
         name: meta.name ?? path.basename(path.dirname(file)),
         description: meta.description ?? '(no description)',
         file,
-      })
+      }
+      if (isRemoteOrigin(path.relative(rootReal, real))) {
+        if (manifest === null) {
+          manifest = await loadVetManifest(path.join(resolved, VET_MANIFEST_NAME))
+          if (manifest.warning) warnings.push(manifest.warning)
+        }
+        const record = manifest.records[path.resolve(file)] ?? manifest.records[real]
+        const vetted = verifyVetRecord(record, content)
+        if (!vetted) {
+          warnings.push(`unvetted remote skill (vet before loading, see vetted.json): ${file}`)
+        }
+        entries.push({ ...entry, vetted })
+      } else {
+        entries.push(entry)
+      }
     }
   }
 
@@ -116,17 +258,29 @@ export async function buildIndex(roots) {
 
 const sanitizeField = (text) => text.replace(/\s*\r?\n\s*/g, ' ').replace(/\|/g, '/').trim()
 
-/** Parse an INDEX.md/REMOTE.md catalog back into { name, description, file } entries. */
+/**
+ * Parse an INDEX.md/REMOTE.md catalog back into { name, description, file }
+ * entries; a trailing `vetted:<true|false>` field becomes a boolean `vetted`.
+ */
 export function parseCatalog(content) {
   const entries = []
   for (const line of (content ?? '').split(/\r?\n/)) {
     if (!line.trim() || line.startsWith('#')) continue
     const fields = line.split(' | ')
     if (fields.length < 3) continue
+    let end = fields.length
+    let vetted
+    const vettedMatch = fields[end - 1].trim().match(/^vetted:(true|false)$/)
+    if (vettedMatch) {
+      if (fields.length < 4) continue
+      vetted = vettedMatch[1] === 'true'
+      end--
+    }
     entries.push({
       name: fields[0].trim(),
-      description: fields.slice(1, -1).join(' | ').trim(),
-      file: fields[fields.length - 1].trim(),
+      description: fields.slice(1, end - 1).join(' | ').trim(),
+      file: fields[end - 1].trim(),
+      ...(vetted === undefined ? {} : { vetted }),
     })
   }
   return entries
@@ -147,20 +301,58 @@ export function renderIndex(entries) {
   const header = [
     '# Skill Index — generated by codex-flow build-skills-index',
     `# Rebuilt: ${new Date().toISOString()}`,
-    '# Format: <name> | <description> | <SKILL.md path>',
+    '# Format: <name> | <description> | <SKILL.md path> [| vetted:<true|false>]',
+    '# Remote-origin entries carry a vetted flag; load ONLY vetted:true remote skills.',
     '',
   ]
   const lines = entries.map(
-    (e) => `${sanitizeField(e.name)} | ${sanitizeField(e.description)} | ${e.file}`,
+    (e) =>
+      `${sanitizeField(e.name)} | ${sanitizeField(e.description)} | ${e.file}` +
+      (typeof e.vetted === 'boolean' ? ` | vetted:${e.vetted}` : ''),
   )
   return [...header, ...lines, ''].join('\n')
 }
 
-/** Parse argv, build and write the index. Returns { count, out, warnings }. */
+/**
+ * Derive the vet manifest location for a skill path: the parent directory of
+ * its `remote`/`quarantine` segment is the library dir holding vetted.json.
+ */
+function deriveManifestFile(skillFile) {
+  const segments = skillFile.split(path.sep)
+  const index = segments.findIndex(
+    (segment) => segment === REMOTE_DIR_NAME || segment === QUARANTINE_DIR_NAME,
+  )
+  if (index <= 0) {
+    throw new Error(
+      `cannot derive the vet manifest for ${skillFile} — the path has no remote/ or quarantine/ segment; pass --manifest <file>`,
+    )
+  }
+  return path.join(segments.slice(0, index).join(path.sep) || path.sep, VET_MANIFEST_NAME)
+}
+
+/** Compute + persist a vet record for one SKILL.md. Returns { vetted, manifest, record }. */
+async function runVet(skillFile, manifestArg) {
+  const resolved = path.resolve(skillFile)
+  const record = await computeVetRecord(resolved)
+  const manifestFile = path.resolve(manifestArg ?? deriveManifestFile(resolved))
+  const { records, warning } = await loadVetManifest(manifestFile)
+  if (warning) console.warn(`⚠ ${warning}`)
+  const updated = { ...records, [resolved]: record }
+  await fs.mkdir(path.dirname(manifestFile), { recursive: true })
+  await fs.writeFile(manifestFile, `${JSON.stringify(updated, null, 2)}\n`, 'utf8')
+  return { vetted: resolved, manifest: manifestFile, record }
+}
+
+/**
+ * Parse argv, build and write the index — or, with --vet, record a vet pin.
+ * Returns { count, out, warnings } (index mode) or { vetted, manifest, record }.
+ */
 export async function runCli(argv) {
   const roots = []
   let out = null
   let remote = null
+  let vet = null
+  let manifest = null
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -170,10 +362,19 @@ export async function runCli(argv) {
     } else if (arg === '--remote' || arg === '-r') {
       remote = argv[++i]
       if (!remote) throw new Error(`${arg} requires a file path`)
+    } else if (arg === '--vet') {
+      vet = argv[++i]
+      if (!vet) throw new Error(`${arg} requires a SKILL.md path`)
+    } else if (arg === '--manifest') {
+      manifest = argv[++i]
+      if (!manifest) throw new Error(`${arg} requires a file path`)
     } else {
       roots.push(arg)
     }
   }
+
+  if (vet) return runVet(vet, manifest)
+  if (manifest) throw new Error('--manifest is only valid together with --vet')
 
   const scanRoots = roots.length > 0 ? roots : defaultRoots()
   const outFile = path.resolve(out ?? process.env.CODEX_FLOW_SKILLS_INDEX ?? defaultOut())
@@ -202,7 +403,14 @@ const isDirectRun =
 
 if (isDirectRun) {
   runCli(process.argv.slice(2))
-    .then(({ count, local, out, warnings }) => {
+    .then((summary) => {
+      if (summary.vetted) {
+        console.log(`Vetted ${summary.vetted}`)
+        console.log(`→ ${summary.manifest} (sha256 ${summary.record.sha256.slice(0, 12)}…)`)
+        console.log('Rebuild the index to mark it vetted:true: node scripts/build-skills-index.mjs')
+        return
+      }
+      const { count, local, out, warnings } = summary
       for (const warning of warnings) console.warn(`⚠ ${warning}`)
       console.log(`Indexed ${count} skill(s) (${local} local, ${count - local} remote) → ${out}`)
     })

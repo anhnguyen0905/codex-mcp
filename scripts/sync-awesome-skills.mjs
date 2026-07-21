@@ -10,16 +10,20 @@
 //   out:  <index dir>/REMOTE.md — i.e. ~/.claude/skill-library/REMOTE.md
 //
 // --clone (local-first mode): shallow-clones every GitHub repo in the list into
-//   <lib>/remote/<owner>__<repo> (default lib: ~/claude-skill-library) and updates
-//   existing clones. Non-GitHub entries stay as pointers in REMOTE.md. Rebuild the
-//   index afterwards so the local copies shadow the remote pointers.
+//   <lib>/quarantine/remote/<owner>__<repo> (default lib: ~/claude-skill-library)
+//   and updates existing clones. Non-GitHub entries stay as pointers in REMOTE.md.
 //
 // Catalog format (one line per skill, same shape as INDEX.md):
 //   <name> | <description> | <repo url>
 //
-// SECURITY: entries here are pointers, not installed skills. A remote skill's
-// SKILL.md must be fetched and REVIEWED before it is saved into the local
-// library — skills are prompt-injection surface for agents with write access.
+// SECURITY: cloned repos land in QUARANTINE, which build-skills-index.mjs never
+// indexes — unvetted third-party content must not enter the loadable set. To
+// promote a skill: REVIEW its SKILL.md, move it out of quarantine into
+// <lib>/remote/…, record a pinned vet record
+// (node scripts/build-skills-index.mjs --vet <SKILL.md path>), then rebuild the
+// index. Vet records pin the content hash, so a later `git pull` that changes a
+// vetted file flips it back to vetted:false. Skills are prompt-injection surface
+// for agents with write access — never skip the review.
 
 import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
@@ -88,6 +92,9 @@ export function parseRepoTarget(url) {
   }
 }
 
+/** Clone destination: quarantine subtree, excluded from indexing until skills are vetted. */
+export const quarantineRemoteDir = (libDir) => path.join(libDir, 'quarantine', 'remote')
+
 /** Split entries into unique clone targets (GitHub) and pointer-only entries (everything else). */
 export function collectCloneTargets(entries) {
   const targets = []
@@ -147,8 +154,8 @@ async function readSource(from) {
 
 /**
  * Parse argv, fetch/read the list, write the catalog — and in --clone mode,
- * shallow-clone every GitHub repo into <lib>/remote/. Returns
- * { count, out, from, clone? } where clone = { cloned, updated, failed, lib }.
+ * shallow-clone every GitHub repo into <lib>/quarantine/remote/. Returns
+ * { count, out, from, clone? } where clone = { cloned, updated, failed, lib, dest, repos }.
  */
 export async function runCli(argv) {
   let from = DEFAULT_SOURCE
@@ -187,9 +194,10 @@ export async function runCli(argv) {
 
   if (clone) {
     const libDir = path.resolve(lib ?? defaultLib())
+    const dest = quarantineRemoteDir(libDir)
     const { targets } = collectCloneTargets(entries)
-    const cloneResult = await cloneRepos(targets, path.join(libDir, 'remote'))
-    summary.clone = { ...cloneResult, lib: libDir, repos: targets.length }
+    const cloneResult = await cloneRepos(targets, dest)
+    summary.clone = { ...cloneResult, lib: libDir, dest, repos: targets.length }
   }
 
   return summary
@@ -205,9 +213,12 @@ if (isDirectRun) {
       console.log(`→ ${out}`)
       if (clone) {
         console.log(
-          `Cloned ${clone.cloned}, updated ${clone.updated} of ${clone.repos} repo(s) → ${path.join(clone.lib, 'remote')}`,
+          `Cloned ${clone.cloned}, updated ${clone.updated} of ${clone.repos} repo(s) → ${clone.dest} (QUARANTINE — not indexed)`,
         )
         for (const failure of clone.failed) console.warn(`⚠ ${failure}`)
+        console.log(
+          'Promote a skill only after review: move it to <lib>/remote/…, then node scripts/build-skills-index.mjs --vet <SKILL.md path>',
+        )
       }
       console.log('Rebuild the index to include them: node scripts/build-skills-index.mjs')
     })
