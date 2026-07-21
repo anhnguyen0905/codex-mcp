@@ -1,0 +1,17 @@
+.venv/
+.venv-review/
+__pycache__/
+*.pyc
+*.egg-info/
+.codex-flow/
+demo_metrics.json
+demo_comments.csv
+live_metrics.json
+live_comments.csv
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+dist/
+build/

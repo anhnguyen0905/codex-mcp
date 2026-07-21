@@ -33,9 +33,6 @@ fb-video-crawler/live_comments.csv
 # Claude Code machine-local settings
 .claude/settings.local.json
 
-# Demo/test crawler (excluded from the MCP package)
-fb-video-crawler/
-
 # Credentials / secrets (defensive — never commit)
 .npmrc
 .env
