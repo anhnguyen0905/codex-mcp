@@ -1,8 +1,8 @@
 # Execution Plan — Full Pipeline Hardening (2026-07-21)
 
-> **Tiến độ (cập nhật 2026-07-21):** ✅ Wave 0 (8/8) · ✅ Wave 1 (6/6) · ✅ Wave 2 (2/2) · ✅ Wave 3 (promote + 7 fix, trừ HTTP hardening dời sang W5) · ✅ Wave 4 (7/7) · ⬜ Wave 5. Tag v0.9.0 đã rewrite về commit version-consistent. Toàn bộ thay đổi đã qua code review (APPROVE) và push lên main.
+> **Tiến độ (cập nhật 2026-07-21): HOÀN TẤT TOÀN BỘ.** ✅ Wave 0 (8/8) · ✅ Wave 1 (6/6) · ✅ Wave 2 (2/2) · ✅ Wave 3 (promote + đủ 8 fix gồm HTTP hardening) · ✅ Wave 4 (7/7) · ✅ Wave 5 (benchmark/SLO, progress backpressure, telemetry model-aware, live marker + watcher, cả 3 carryover). Tag v0.9.0 đã rewrite về commit version-consistent. Mỗi wave đều qua code review (APPROVE) trước khi push lên main.
 >
-> **Ghi chú cho Wave 5 (từ phát hiện Wave 4):** (a) parser nên handle event `turn.started` (hiện là unknown event duy nhất trong fixture 0.144.6) để canary nhạy hơn; (b) CLI warnings đến dưới dạng `item.type: "error"` — cân nhắc phân biệt warning/fatal trong `errors[]`; (c) HTTP hardening crawler (size limit, redirect check, HTTPS-only) còn nợ từ W3.
+> **Trạng thái cuối:** 428/428 Node tests (coverage 94.1/83.4/98.1/95.9, gate CI enforce), 107/107 Python tests (98.2%), pack-smoke PASS, benchmark SLO PASS (50MB stream ~29MB RSS, batch 50 tasks không leak, cancel settle ~1ms), protocol canary pin codex-cli 0.144.6 với 0 unknown events. Ghi chú tồn đọng duy nhất: warning/fatal trong `errors[]` chưa phân biệt được vì protocol 0.144.6 không có severity field — plumbing `warnings[]` đã sẵn, chờ CLI expose discriminator.
 
 Nguồn: `docs/full-pipeline-review-2026-07-21.md`. Trước khi lập plan, toàn bộ finding đã được re-verify độc lập trên working tree hiện tại.
 
