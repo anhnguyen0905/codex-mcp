@@ -67,6 +67,7 @@
     "scripts/skill-match.mjs",
     "scripts/skill-eval.mjs",
     "scripts/task-waves.mjs",
+    "scripts/smoke-e2e.mjs",
     "skills",
     "commands",
     "tests/fixtures/skill-scenarios.json",
