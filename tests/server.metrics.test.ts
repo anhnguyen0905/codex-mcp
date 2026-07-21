@@ -107,6 +107,86 @@ describe('metrics wiring', () => {
     expect(payload.failed).toBe(1)
   })
 
+  test('records model, queueMs, and timeToFirstProgressMs on the metric entry', async () => {
+    const runFn = vi.fn(async (_args: string[], opts: { onStdout?: (c: Buffer) => void }): Promise<RunOutcome> => {
+      opts.onStdout?.(Buffer.from(`${jsonlFixture}\n`))
+      return okOutcome
+    })
+    const client = await connect(runFn as never)
+
+    await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'a', cwd: '/w/1', model: 'gpt-5.1-codex' },
+    })
+
+    const line = JSON.parse(readFileSync(logPath, 'utf8').trim())
+    expect(line.model).toBe('gpt-5.1-codex')
+    expect(typeof line.queueMs).toBe('number')
+    expect(line.queueMs).toBeGreaterThanOrEqual(0)
+    expect(typeof line.timeToFirstProgressMs).toBe('number')
+    expect(line.timeToFirstProgressMs).toBeGreaterThanOrEqual(0)
+  })
+
+  test('omits model when no model was requested; omits timeToFirstProgressMs when no stdout arrived', async () => {
+    const runFn = vi.fn(async () => okOutcome) // never calls onStdout
+    const client = await connect(runFn)
+
+    await client.callTool({ name: 'codex_execute', arguments: { prompt: 'a', cwd: '/w/1' } })
+
+    const line = JSON.parse(readFileSync(logPath, 'utf8').trim())
+    expect(line.model).toBeUndefined()
+    expect(line.timeToFirstProgressMs).toBeUndefined()
+  })
+
+  test('batch tasks record taskId and model per metric entry', async () => {
+    const runFn = vi.fn(async () => okOutcome)
+    const client = await connect(runFn)
+
+    await client.callTool({
+      name: 'codex_batch',
+      arguments: {
+        tasks: [
+          { cwd: '/w/1', prompt: 'a', model: 'gpt-5.1-codex' },
+          { cwd: '/w/2', prompt: 'b' },
+        ],
+      },
+    })
+
+    const lines = readFileSync(logPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+    expect(lines).toHaveLength(2)
+    expect(lines.map((l) => l.taskId).sort()).toEqual(['task-0', 'task-1'])
+    const task0 = lines.find((l) => l.taskId === 'task-0')
+    const task1 = lines.find((l) => l.taskId === 'task-1')
+    expect(task0.model).toBe('gpt-5.1-codex')
+    expect(task0.tool).toBe('codex_batch')
+    expect(task1.model).toBeUndefined()
+  })
+
+  test('codex_metrics aggregate includes the per-model breakdown', async () => {
+    const runFn = vi.fn(async () => okOutcome)
+    const client = await connect(runFn)
+
+    await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'a', cwd: '/w/1', model: 'gpt-5.1-codex' },
+    })
+    await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'b', cwd: '/w/2', model: 'gpt-5.1-codex' },
+    })
+
+    const r = await client.callTool({ name: 'codex_metrics', arguments: {} })
+    const payload = JSON.parse((r.content as Array<{ text: string }>)[0].text)
+
+    expect(payload.byModel['gpt-5.1-codex'].runs).toBe(2)
+    expect(payload.byModel['gpt-5.1-codex'].failed).toBe(0)
+    expect(payload.byModel['gpt-5.1-codex'].tokens.input).toBe(200)
+    // COST_TABLE ships empty: no cost may be claimed for an unpriced model.
+    expect(payload.byModel['gpt-5.1-codex'].estimatedCostUsd).toBeUndefined()
+    expect(payload.estimatedCostUsd).toBeUndefined()
+    expect(payload.avgQueueMs).toBeGreaterThanOrEqual(0)
+  })
+
   test('cwd filter narrows the aggregate', async () => {
     const runFn = vi.fn(async () => okOutcome)
     const client = await connect(runFn)

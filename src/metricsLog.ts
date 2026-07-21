@@ -24,6 +24,51 @@ export interface MetricEntry {
   errorKind?: string
   /** Server-generated UUID for this run, matching the tool result payload. Absent on legacy lines. */
   runId?: string
+  /** Model requested for the run (via --model). Absent when the CLI default was used / legacy lines. */
+  model?: string
+  /** Batch task identity ("task-<index>"), codex_batch runs only. */
+  taskId?: string
+  /** Time spent waiting on the concurrency gate + cwd lock before the run started. */
+  queueMs?: number
+  /** Time from process spawn to the first stdout chunk. Absent when no stdout arrived. */
+  timeToFirstProgressMs?: number
+}
+
+/** Per-model per-1M-token USD rates used for estimatedCostUsd. */
+export interface ModelCostRates {
+  inputPer1M: number
+  cachedInputPer1M: number
+  outputPer1M: number
+  reasoningOutputPer1M: number
+}
+
+/**
+ * Model → USD rates for the model-aware cost estimate. Deliberately ships EMPTY: an unknown
+ * model yields NO cost (undefined) — never a fake 0 pretending accuracy. Edit here to enable,
+ * e.g.:
+ *   'gpt-5.1-codex': { inputPer1M: 1.25, cachedInputPer1M: 0.125, outputPer1M: 10, reasoningOutputPer1M: 10 },
+ */
+export const COST_TABLE: Readonly<Record<string, ModelCostRates>> = {}
+
+const TOKENS_PER_MILLION = 1_000_000
+const COST_DECIMALS = 6
+
+/** USD cost of one run. Undefined when the model is unknown/unpriced or usage was not recorded. */
+export const estimateCostUsd = (
+  model: string | undefined,
+  usage: CodexUsage | null | undefined,
+  costTable: Readonly<Record<string, ModelCostRates>> = COST_TABLE,
+): number | undefined => {
+  if (!model || !usage) return undefined
+  const rates = costTable[model]
+  if (!rates) return undefined
+  return (
+    (usage.inputTokens * rates.inputPer1M +
+      usage.cachedInputTokens * rates.cachedInputPer1M +
+      usage.outputTokens * rates.outputPer1M +
+      usage.reasoningOutputTokens * rates.reasoningOutputPer1M) /
+    TOKENS_PER_MILLION
+  )
 }
 
 /** Per-1M-token USD pricing, JSON-encoded in CODEX_MCP_PRICING env (opt-in). */
@@ -42,18 +87,38 @@ export interface AggregateFilters {
   sessionId?: string
 }
 
+export interface TokenTotals {
+  input: number
+  cachedInput: number
+  output: number
+  reasoningOutput: number
+}
+
+/** Per-model roll-up inside an Aggregate. */
+export interface ModelAggregate {
+  runs: number
+  failed: number
+  totalDurationMs: number
+  tokens: TokenTotals
+  /** Sum of per-run COST_TABLE estimates. Absent when the model has no rates. */
+  estimatedCostUsd?: number
+}
+
 export interface Aggregate {
   totalRuns: number
   totalDurationMs: number
-  totalTokens: {
-    input: number
-    cachedInput: number
-    output: number
-    reasoningOutput: number
-  }
+  totalTokens: TokenTotals
   byTool: Record<string, { runs: number; totalDurationMs: number }>
+  /** Per-model breakdown over entries that recorded a model. Empty on legacy-only logs. */
+  byModel: Record<string, ModelAggregate>
   failed: number
   estCostUsd?: number // populated only when a pricing table is supplied
+  /** Sum of per-run COST_TABLE estimates across models with known rates. Absent when none. */
+  estimatedCostUsd?: number
+  /** Mean queueMs over entries that recorded it. Absent when none did. */
+  avgQueueMs?: number
+  /** Mean timeToFirstProgressMs over entries that recorded it. Absent when none did. */
+  avgTimeToFirstProgressMs?: number
 }
 
 export interface MetricsLogOptions {
@@ -151,48 +216,100 @@ const inRange = (entry: MetricEntry, filters: AggregateFilters): boolean => {
   return true
 }
 
+// Failure = process-level failure OR Codex-emitted errors (turn.failed etc.) despite exit 0.
+// `errorCount` is absent on legacy lines — treat as 0 so old logs aggregate unchanged.
+const isFailedEntry = (e: MetricEntry): boolean =>
+  e.exitCode !== 0 || e.timedOut === true || e.aborted === true || (e.errorCount ?? 0) > 0
+
+const zeroTokens = (): TokenTotals => ({ input: 0, cachedInput: 0, output: 0, reasoningOutput: 0 })
+
+const addUsage = (tokens: TokenTotals, usage: CodexUsage): void => {
+  tokens.input += usage.inputTokens
+  tokens.cachedInput += usage.cachedInputTokens
+  tokens.output += usage.outputTokens
+  tokens.reasoningOutput += usage.reasoningOutputTokens
+}
+
+const roundUsd = (n: number): number => Number(n.toFixed(COST_DECIMALS))
+
+/** Fold one entry into the per-model breakdown; returns the entry's cost estimate (if priceable). */
+const applyModelEntry = (
+  byModel: Record<string, ModelAggregate>,
+  e: MetricEntry,
+  costTable: Readonly<Record<string, ModelCostRates>>,
+): number | undefined => {
+  if (!e.model) return undefined
+  const bucket = byModel[e.model] ?? { runs: 0, failed: 0, totalDurationMs: 0, tokens: zeroTokens() }
+  bucket.runs++
+  bucket.totalDurationMs += e.durationMs
+  if (isFailedEntry(e)) bucket.failed++
+  if (e.usage) addUsage(bucket.tokens, e.usage)
+  const cost = estimateCostUsd(e.model, e.usage, costTable)
+  if (cost !== undefined) bucket.estimatedCostUsd = roundUsd((bucket.estimatedCostUsd ?? 0) + cost)
+  byModel[e.model] = bucket
+  return cost
+}
+
+/** Running mean over optional per-entry samples; `value()` is undefined when no entry had one. */
+const createMeanTracker = (): { add: (sample: number | undefined) => void; value: () => number | undefined } => {
+  let sum = 0
+  let count = 0
+  return {
+    add: (sample) => {
+      if (typeof sample !== 'number') return
+      sum += sample
+      count += 1
+    },
+    value: () => (count > 0 ? Math.round(sum / count) : undefined),
+  }
+}
+
+const flatCostUsd = (tokens: TokenTotals, pricing: PricingTable): number =>
+  // cachedInput usually priced lower; kept separate from input for accuracy.
+  roundUsd(
+    (tokens.input * pricing.inputPer1M +
+      tokens.cachedInput * pricing.cachedInputPer1M +
+      tokens.output * pricing.outputPer1M +
+      tokens.reasoningOutput * pricing.reasoningOutputPer1M) /
+      TOKENS_PER_MILLION,
+  )
+
 /** Roll up filtered entries. When `pricing` is set, includes an estCostUsd. */
 export const aggregate = (
   entries: readonly MetricEntry[],
   filters: AggregateFilters = {},
   pricing?: PricingTable,
+  costTable: Readonly<Record<string, ModelCostRates>> = COST_TABLE,
 ): Aggregate => {
   const agg: Aggregate = {
     totalRuns: 0,
     totalDurationMs: 0,
-    totalTokens: { input: 0, cachedInput: 0, output: 0, reasoningOutput: 0 },
+    totalTokens: zeroTokens(),
     byTool: {},
+    byModel: {},
     failed: 0,
   }
+  const queueMean = createMeanTracker()
+  const firstProgressMean = createMeanTracker()
+  let costSum: number | undefined
   for (const e of entries) {
     if (!inRange(e, filters)) continue
     agg.totalRuns++
     agg.totalDurationMs += e.durationMs
-    // Failure = process-level failure OR Codex-emitted errors (turn.failed etc.) despite exit 0.
-    // `errorCount` is absent on legacy lines — treat as 0 so old logs aggregate unchanged.
-    if (e.exitCode !== 0 || e.timedOut || e.aborted || (e.errorCount ?? 0) > 0) agg.failed++
-    if (e.usage) {
-      agg.totalTokens.input += e.usage.inputTokens
-      agg.totalTokens.cachedInput += e.usage.cachedInputTokens
-      agg.totalTokens.output += e.usage.outputTokens
-      agg.totalTokens.reasoningOutput += e.usage.reasoningOutputTokens
-    }
+    if (isFailedEntry(e)) agg.failed++
+    if (e.usage) addUsage(agg.totalTokens, e.usage)
     const bucket = agg.byTool[e.tool] ?? { runs: 0, totalDurationMs: 0 }
     bucket.runs++
     bucket.totalDurationMs += e.durationMs
     agg.byTool[e.tool] = bucket
+    queueMean.add(e.queueMs)
+    firstProgressMean.add(e.timeToFirstProgressMs)
+    const cost = applyModelEntry(agg.byModel, e, costTable)
+    if (cost !== undefined) costSum = (costSum ?? 0) + cost
   }
-  if (pricing) {
-    // cachedInput usually priced lower; kept separate from input for accuracy.
-    const perMillion = 1_000_000
-    agg.estCostUsd = Number(
-      (
-        (agg.totalTokens.input * pricing.inputPer1M) / perMillion +
-        (agg.totalTokens.cachedInput * pricing.cachedInputPer1M) / perMillion +
-        (agg.totalTokens.output * pricing.outputPer1M) / perMillion +
-        (agg.totalTokens.reasoningOutput * pricing.reasoningOutputPer1M) / perMillion
-      ).toFixed(6),
-    )
-  }
+  agg.avgQueueMs = queueMean.value()
+  agg.avgTimeToFirstProgressMs = firstProgressMean.value()
+  if (costSum !== undefined) agg.estimatedCostUsd = roundUsd(costSum)
+  if (pricing) agg.estCostUsd = flatCostUsd(agg.totalTokens, pricing)
   return agg
 }

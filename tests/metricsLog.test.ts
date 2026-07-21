@@ -5,9 +5,11 @@ import { afterAll, describe, expect, test } from 'vitest'
 import {
   aggregate,
   appendMetric,
+  estimateCostUsd,
   parsePricing,
   readMetrics,
   type MetricEntry,
+  type ModelCostRates,
 } from '../src/metricsLog.js'
 
 const tempDirs: string[] = []
@@ -161,6 +163,106 @@ describe('aggregate', () => {
     const agg = aggregate([entry({ usage: null })])
     expect(agg.totalTokens.input).toBe(0)
     expect(agg.totalRuns).toBe(1)
+  })
+})
+
+describe('aggregate per-model breakdown', () => {
+  test('groups runs, failures, duration, and tokens by model; modelless entries stay out of byModel', () => {
+    const agg = aggregate([
+      entry({ model: 'gpt-5.1-codex', durationMs: 1000, exitCode: 0 }),
+      entry({ model: 'gpt-5.1-codex', durationMs: 500, exitCode: 1 }),
+      entry({ model: 'o4-mini', durationMs: 2000, exitCode: 0 }),
+      entry({ durationMs: 300, exitCode: 0 }), // legacy line without model
+    ])
+    expect(agg.totalRuns).toBe(4)
+    expect(Object.keys(agg.byModel).sort()).toEqual(['gpt-5.1-codex', 'o4-mini'])
+    expect(agg.byModel['gpt-5.1-codex']).toMatchObject({
+      runs: 2,
+      failed: 1,
+      totalDurationMs: 1500,
+    })
+    expect(agg.byModel['gpt-5.1-codex'].tokens.input).toBe(200) // 100 × 2
+    expect(agg.byModel['o4-mini']).toMatchObject({ runs: 1, failed: 0, totalDurationMs: 2000 })
+  })
+
+  test('byModel is an empty record when no entry carries a model', () => {
+    const agg = aggregate([entry(), entry()])
+    expect(agg.byModel).toEqual({})
+  })
+
+  test('per-model tokens ignore entries with null usage', () => {
+    const agg = aggregate([entry({ model: 'm', usage: null }), entry({ model: 'm' })])
+    expect(agg.byModel.m.runs).toBe(2)
+    expect(agg.byModel.m.tokens.input).toBe(100)
+  })
+})
+
+describe('aggregate timing averages', () => {
+  test('averages queueMs and timeToFirstProgressMs only over entries that recorded them', () => {
+    const agg = aggregate([
+      entry({ queueMs: 100, timeToFirstProgressMs: 40 }),
+      entry({ queueMs: 300 }),
+      entry({}), // legacy line without either field
+    ])
+    expect(agg.avgQueueMs).toBe(200) // (100 + 300) / 2
+    expect(agg.avgTimeToFirstProgressMs).toBe(40) // single sample
+  })
+
+  test('averages absent when no entry carries the field', () => {
+    const agg = aggregate([entry(), entry()])
+    expect(agg.avgQueueMs).toBeUndefined()
+    expect(agg.avgTimeToFirstProgressMs).toBeUndefined()
+  })
+})
+
+describe('model-aware cost estimation', () => {
+  const rates: ModelCostRates = {
+    inputPer1M: 1,
+    cachedInputPer1M: 0.5,
+    outputPer1M: 2,
+    reasoningOutputPer1M: 3,
+  }
+  const table = { 'gpt-5.1-codex': rates }
+
+  test('estimateCostUsd computes per-run cost from the table', () => {
+    const usage = { inputTokens: 100, cachedInputTokens: 10, outputTokens: 200, reasoningOutputTokens: 5 }
+    // 100/1M*1 + 10/1M*0.5 + 200/1M*2 + 5/1M*3 = 0.00052
+    expect(estimateCostUsd('gpt-5.1-codex', usage, table)).toBeCloseTo(0.00052, 8)
+  })
+
+  test('estimateCostUsd returns undefined for unknown model or missing usage — never 0', () => {
+    const usage = { inputTokens: 100, cachedInputTokens: 10, outputTokens: 200, reasoningOutputTokens: 5 }
+    expect(estimateCostUsd('mystery-model', usage, table)).toBeUndefined()
+    expect(estimateCostUsd(undefined, usage, table)).toBeUndefined()
+    expect(estimateCostUsd('gpt-5.1-codex', null, table)).toBeUndefined()
+  })
+
+  test('aggregate sums estimatedCostUsd per model and overall when rates are known', () => {
+    const agg = aggregate(
+      [entry({ model: 'gpt-5.1-codex' }), entry({ model: 'gpt-5.1-codex' })],
+      {},
+      undefined,
+      table,
+    )
+    expect(agg.byModel['gpt-5.1-codex'].estimatedCostUsd).toBeCloseTo(0.00104, 8)
+    expect(agg.estimatedCostUsd).toBeCloseTo(0.00104, 8)
+  })
+
+  test('unknown model claims no cost: estimatedCostUsd stays undefined', () => {
+    const agg = aggregate([entry({ model: 'mystery-model' })], {}, undefined, table)
+    expect(agg.byModel['mystery-model'].estimatedCostUsd).toBeUndefined()
+    expect(agg.estimatedCostUsd).toBeUndefined()
+  })
+
+  test('known and unknown models mix: only known-rate runs contribute to the sum', () => {
+    const agg = aggregate(
+      [entry({ model: 'gpt-5.1-codex' }), entry({ model: 'mystery-model' })],
+      {},
+      undefined,
+      table,
+    )
+    expect(agg.estimatedCostUsd).toBeCloseTo(0.00052, 8)
+    expect(agg.byModel['mystery-model'].estimatedCostUsd).toBeUndefined()
   })
 })
 

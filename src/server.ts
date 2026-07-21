@@ -11,11 +11,10 @@ import {
   buildExecuteInvocation,
   type CodexInvocation,
 } from './argsBuilder.js'
-import { runCodex, type RunOptions, type RunOutcomeWithEvents } from './codexRunner.js'
-import { parseEvents, type ParsedEvents } from './eventParser.js'
-import { deriveRunStatus, isErrorStatus, RESULT_SCHEMA_VERSION } from './runStatus.js'
+import { runCodex } from './codexRunner.js'
 import { createLiveView, type LiveView } from './liveView.js'
-import { combineSinks, createProgressNotifier, type ProgressSink } from './progressNotifier.js'
+import { createProgressNotifier, type ProgressNotifier } from './progressNotifier.js'
+import { runAndReport, runOnce, type RunFn } from './runReport.js'
 import {
   attributeWorkspaceDiff,
   captureWorkspaceDiff,
@@ -23,14 +22,11 @@ import {
   verifyGitRef,
   type AttributeFn,
   type DiffFn,
-  type RunAttribution,
   type SnapshotFn,
-  type WorkspaceSnapshot,
 } from './workspaceDiff.js'
 import { acquireWorkspaceLease, type LeaseFn } from './workspaceLease.js'
 import { listSessions, MAX_LIMIT as MAX_SESSIONS_LIMIT } from './sessionStore.js'
-import { writeNotes, type NotesRequest } from './notesWriter.js'
-import { aggregate, appendMetric, parsePricing, readMetrics, type MetricEntry } from './metricsLog.js'
+import { aggregate, parsePricing, readMetrics } from './metricsLog.js'
 import { SANDBOX_MODES, type RunOutcome } from './types.js'
 import {
   DEFAULT_BATCH_CONCURRENCY,
@@ -50,7 +46,6 @@ import {
   type BatchToolPayload,
   type HealthPayload,
   type LoginProbeStatus,
-  type RunPayload,
 } from './toolPayloads.js'
 
 export { cwdLockKey } from './concurrency.js'
@@ -71,7 +66,6 @@ const readVersion = (): string => {
   }
 }
 
-type RunFn = (args: string[], options: Omit<RunOptions, 'spawnFn'>) => Promise<RunOutcomeWithEvents>
 type LiveViewFactory = (cwd: string) => LiveView
 
 const NULL_VIEW: LiveView = { onStdout: undefined, close: () => {}, logPath: null }
@@ -237,160 +231,6 @@ const buildReviewPrompt = (focus?: string, baselineRef?: string): string =>
     ...(focus ? [`Focus especially on: ${focus}`] : []),
   ].join('\n')
 
-interface RunAndReportDeps {
-  runFn: RunFn
-  view: LiveView
-  diffFn: DiffFn
-  snapshotFn: SnapshotFn
-  attributeFn: AttributeFn
-  /** Server-generated UUID identifying this run in the payload, notes, and metric entry. */
-  runId: string
-  progressSink?: ProgressSink
-  /** When provided, writeNotes() runs after payload is built (best-effort; errors are logged, not thrown). */
-  notes?: Omit<NotesRequest, 'sessionId' | 'parsed' | 'exitCode' | 'runId'>
-  /** Which tool invoked runAndReport, so the metric log can attribute the run. */
-  tool: MetricEntry['tool']
-}
-
-const safeDiff = async (diffFn: DiffFn, cwd: string) => {
-  try {
-    return await diffFn(cwd)
-  } catch {
-    return null
-  }
-}
-
-const safeSnapshot = async (snapshotFn: SnapshotFn, cwd: string): Promise<WorkspaceSnapshot | null> => {
-  try {
-    return await snapshotFn(cwd)
-  } catch {
-    return null
-  }
-}
-
-const safeAttribute = async (
-  attributeFn: AttributeFn,
-  cwd: string,
-  snapshot: WorkspaceSnapshot | null,
-): Promise<RunAttribution | null> => {
-  try {
-    return await attributeFn(cwd, snapshot)
-  } catch {
-    return null
-  }
-}
-
-/** Keep the last `n` chars without leaving a dangling low surrogate that would corrupt on encode. */
-const tailString = (value: string, n: number): string => {
-  if (value.length <= n) return value
-  const sliced = value.slice(-n)
-  const first = sliced.charCodeAt(0)
-  return first >= 0xdc00 && first <= 0xdfff ? sliced.slice(1) : sliced
-}
-
-/**
- * Classify a run's primary failure kind for the metric log, by precedence:
- * abort > timeout > non-zero exit > Codex-emitted errors (turn.failed). Undefined on success.
- */
-const deriveErrorKind = (
-  outcome: { exitCode: number | null; timedOut: boolean },
-  aborted: boolean,
-  errorCount: number,
-): MetricEntry['errorKind'] => {
-  if (aborted) return 'abort'
-  if (outcome.timedOut) return 'timeout'
-  if (outcome.exitCode !== 0) return 'exit'
-  if (errorCount > 0) return 'turn-failed'
-  return undefined
-}
-
-/** Run one Codex invocation and return the raw payload; shared by codex_execute/continue/review/batch. */
-const runOnce = async (
-  { runFn, view, diffFn, snapshotFn, attributeFn, runId, progressSink, notes, tool }: RunAndReportDeps,
-  args: string[],
-  options: Omit<RunOptions, 'spawnFn' | 'onStdout'>,
-): Promise<{ payload: RunPayload; isError: boolean }> => {
-  const startedAt = Date.now()
-  try {
-    // Before-run snapshot of already-dirty files so post-run changes can be attributed
-    // (pre-existing dirt vs changes this run actually made). Best-effort — never fails the run.
-    const snapshot = await safeSnapshot(snapshotFn, options.cwd)
-    const onStdout = combineSinks(view.onStdout, progressSink)
-    const outcome = await runFn(args, { ...options, onStdout })
-    // Prefer the runner's lossless streamed parse (it saw bytes the raw stdout tail may have
-    // rotated out). Fallback re-parse only covers injected fakes that return a bare RunOutcome.
-    const parsed: ParsedEvents = outcome.parsed ?? parseEvents(outcome.stdout)
-    const aborted = outcome.aborted ?? false
-    const status = deriveRunStatus(
-      { exitCode: outcome.exitCode, timedOut: outcome.timedOut, aborted },
-      parsed,
-    )
-    const isError = isErrorStatus(status)
-    let notesPath: string | null = null
-    if (notes && parsed.sessionId) {
-      try {
-        notesPath = writeNotes({
-          ...notes,
-          sessionId: parsed.sessionId,
-          parsed,
-          exitCode: outcome.exitCode,
-          runId,
-        })
-      } catch (err) {
-        // best-effort: a broken notes write must never fail the actual run.
-        console.error(`codex-mcp: writeNotes failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-    // Capture the diff even on timeout/abort: the workspace may be half-mutated and the caller
-    // needs to see (and attribute) what changed before deciding to retry or roll back.
-    const payload: RunPayload = {
-      ...parsed,
-      schemaVersion: RESULT_SCHEMA_VERSION,
-      status,
-      runId,
-      diff: await safeDiff(diffFn, options.cwd),
-      attribution: await safeAttribute(attributeFn, options.cwd, snapshot),
-      exitCode: outcome.exitCode,
-      timedOut: outcome.timedOut,
-      aborted,
-      // Raw-tail rotation only (informational): the streamed parse saw the full stream, so a
-      // rotated raw tail never downgrades `status` by itself.
-      outputTruncated: outcome.truncated ?? false,
-      stderr: tailString(outcome.stderr, 2000),
-      liveLog: view.logPath,
-      notesPath,
-    }
-    // Passive metrics — one JSONL line per completed run, best-effort (never fails the run).
-    appendMetric({
-      ts: new Date().toISOString(),
-      tool,
-      cwd: options.cwd,
-      sessionId: parsed.sessionId,
-      exitCode: outcome.exitCode,
-      durationMs: Date.now() - startedAt,
-      usage: parsed.usage,
-      timedOut: outcome.timedOut,
-      aborted,
-      truncated: outcome.truncated ?? false,
-      errorCount: parsed.errors.length,
-      errorKind: deriveErrorKind(outcome, aborted, parsed.errors.length),
-      runId,
-    })
-    return { payload, isError }
-  } finally {
-    view.close()
-  }
-}
-
-const runAndReport = async (
-  deps: RunAndReportDeps,
-  args: string[],
-  options: Omit<RunOptions, 'spawnFn' | 'onStdout'>,
-) => {
-  const { payload, isError } = await runOnce(deps, args, options)
-  return toToolResult(payload, isError)
-}
-
 const errorResult = toErrorResult
 
 /**
@@ -412,8 +252,12 @@ interface RunToolExtra {
   sendNotification: (notification: ServerNotification) => Promise<void>
 }
 
-/** Stream formatted progress to the MCP client, but only when it asked for it (progressToken). */
-const progressSinkFor = (extra: RunToolExtra): ProgressSink | undefined => {
+/**
+ * Stream formatted progress to the MCP client, but only when it asked for it (progressToken).
+ * Notifications are throttled/coalesced by createProgressNotifier; rejections stay swallowed
+ * (best-effort), and runOnce settles the notifier so its timer never outlives the run.
+ */
+const progressNotifierFor = (extra: RunToolExtra): ProgressNotifier | undefined => {
   const progressToken = extra._meta?.progressToken
   if (progressToken === undefined) return undefined
   return createProgressNotifier((message, progress) => {
@@ -429,11 +273,12 @@ const progressSinkFor = (extra: RunToolExtra): ProgressSink | undefined => {
 /**
  * Batch progress: N tasks share one progressToken, so each message is prefixed with its task
  * identity (`[task <index> <cwd>]`) and all tasks draw from one shared counter — interleaved
- * per-task counters would otherwise produce a non-monotonic progress stream.
+ * per-task counters would otherwise produce a non-monotonic progress stream. The shared counter
+ * advances per SENT notification (post-throttle), so coalescing keeps it monotonic.
  */
-const batchProgressSinksFor = (
+const batchProgressNotifiersFor = (
   extra: RunToolExtra,
-): ((taskIndex: number, cwd: string) => ProgressSink | undefined) => {
+): ((taskIndex: number, cwd: string) => ProgressNotifier | undefined) => {
   const progressToken = extra._meta?.progressToken
   if (progressToken === undefined) return () => undefined
   let sharedProgress = 0
@@ -480,6 +325,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         const { args, stdinInput }: CodexInvocation = buildExecuteInvocation(input)
         const startedAt = new Date().toISOString()
         const runId = randomUUID()
+        const queuedAt = Date.now()
         return await withConcurrencyLimit(() =>
           withCwdLock(input.cwd, runId, () => {
             const view = openView(input.cwd, input.terminal)
@@ -491,9 +337,11 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 snapshotFn,
                 attributeFn,
                 runId,
-                progressSink: progressSinkFor(extra),
+                progressNotifier: progressNotifierFor(extra),
                 notes: input.writeNotes ? { cwd: input.cwd, prompt: input.prompt, mode: 'execute', startedAt } : undefined,
                 tool: 'codex_execute',
+                model: input.model,
+                queueMs: Date.now() - queuedAt,
               },
               args,
               { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal, stdinInput },
@@ -522,6 +370,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         const { args, stdinInput }: CodexInvocation = buildContinueInvocation(input)
         const startedAt = new Date().toISOString()
         const runId = randomUUID()
+        const queuedAt = Date.now()
         return await withConcurrencyLimit(() =>
           withCwdLock(input.cwd, runId, () => {
             const view = openView(input.cwd, input.terminal)
@@ -533,9 +382,11 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 snapshotFn,
                 attributeFn,
                 runId,
-                progressSink: progressSinkFor(extra),
+                progressNotifier: progressNotifierFor(extra),
                 notes: input.writeNotes ? { cwd: input.cwd, prompt: input.prompt, mode: 'continue', startedAt } : undefined,
                 tool: 'codex_continue',
+                model: input.model,
+                queueMs: Date.now() - queuedAt,
               },
               args,
               { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal, stdinInput },
@@ -580,6 +431,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         const startedAt = new Date().toISOString()
         const notePrompt = input.focus ?? 'review workspace changes'
         const runId = randomUUID()
+        const queuedAt = Date.now()
         return await withConcurrencyLimit(() =>
           withCwdLock(input.cwd, runId, () => {
             const view = openView(input.cwd, input.terminal)
@@ -591,9 +443,11 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 snapshotFn,
                 attributeFn,
                 runId,
-                progressSink: progressSinkFor(extra),
+                progressNotifier: progressNotifierFor(extra),
                 notes: input.writeNotes ? { cwd: input.cwd, prompt: notePrompt, mode: 'review', startedAt } : undefined,
                 tool: 'codex_review',
+                model: input.model,
+                queueMs: Date.now() - queuedAt,
               },
               args,
               { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal, stdinInput },
@@ -661,7 +515,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     },
     async (input, extra) => {
       try {
-        const taskProgressSink = batchProgressSinksFor(extra)
+        const taskProgressNotifier = batchProgressNotifiersFor(extra)
         const runOneTask = async (
           spec: BatchTaskSpec,
           taskIndex: number,
@@ -674,6 +528,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
             model: spec.model,
           })
           const runId = randomUUID()
+          const queuedAt = Date.now()
           // Each batch task also passes through the global concurrency gate so a batch
           // cannot exceed the server-wide CODEX_MCP_MAX_CONCURRENT cap.
           return withConcurrencyLimit(() =>
@@ -689,8 +544,11 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                   snapshotFn,
                   attributeFn,
                   runId,
-                  progressSink: taskProgressSink(taskIndex, spec.cwd),
+                  progressNotifier: taskProgressNotifier(taskIndex, spec.cwd),
                   tool: 'codex_batch',
+                  model: spec.model,
+                  taskId: `task-${taskIndex}`,
+                  queueMs: Date.now() - queuedAt,
                 },
                 args,
                 { cwd: spec.cwd, timeoutMs: spec.timeoutMs, signal, stdinInput },
