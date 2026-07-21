@@ -17,7 +17,11 @@ def extract_video_id(url: str) -> str:
         raise FacebookParseError("Facebook video URL must be a non-empty string")
 
     parsed = urlsplit(url.strip())
-    if parsed.scheme not in {"http", "https"} or not _is_facebook_host(parsed.hostname):
+    if parsed.scheme == "http":
+        raise FacebookParseError(
+            f"HTTPS is required; plain http:// Facebook URLs are rejected: {url!r}"
+        )
+    if parsed.scheme != "https" or not _is_facebook_host(parsed.hostname):
         raise FacebookParseError(f"Not a valid Facebook URL: {url!r}")
 
     path_match = PATH_VIDEO_ID_PATTERN.search(parsed.path)
@@ -39,6 +43,14 @@ def canonical_video_url(video_id_or_url: str) -> str:
     candidate = video_id_or_url.strip()
     video_id = candidate if NUMERIC_ID_PATTERN.fullmatch(candidate) else extract_video_id(candidate)
     return CANONICAL_VIDEO_URL.format(video_id=video_id)
+
+
+def is_facebook_https_url(url: str) -> bool:
+    """Return True when a URL uses https and stays within facebook.com domains."""
+    if not isinstance(url, str):
+        return False
+    parsed = urlsplit(url)
+    return parsed.scheme == "https" and _is_facebook_host(parsed.hostname)
 
 
 def _is_facebook_host(hostname: str | None) -> bool:

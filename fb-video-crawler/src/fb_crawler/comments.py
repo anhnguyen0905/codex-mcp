@@ -13,6 +13,7 @@ from fb_crawler.errors import (
     FacebookParseError,
 )
 from fb_crawler.numbers import parse_localized_count
+from fb_crawler.url_utils import is_facebook_https_url
 
 MBASIC_COMMENTS_URL = "https://mbasic.facebook.com/watch/?v={video_id}"
 VIDEO_ID_PATTERN = re.compile(r"^\d+$")
@@ -301,9 +302,7 @@ def _is_login_url(url: str | None) -> bool:
 
 def _resolve_next_url(current_url: str, next_cursor: str) -> str:
     resolved = urljoin(current_url, next_cursor)
-    parsed = urlsplit(resolved)
-    hostname = parsed.hostname or ""
-    if parsed.scheme != "https" or not (hostname == "facebook.com" or hostname.endswith(".facebook.com")):
+    if not is_facebook_https_url(resolved):
         raise FacebookParseError(f"Unsafe Facebook pagination URL: {next_cursor!r}")
     return resolved
 

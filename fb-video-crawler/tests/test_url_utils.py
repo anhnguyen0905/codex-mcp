@@ -3,7 +3,7 @@
 import pytest
 
 from fb_crawler.errors import FacebookParseError
-from fb_crawler.url_utils import canonical_video_url, extract_video_id
+from fb_crawler.url_utils import canonical_video_url, extract_video_id, is_facebook_https_url
 
 
 @pytest.mark.parametrize(
@@ -54,3 +54,35 @@ def test_canonical_video_url_rejects_invalid_input(value: str | None) -> None:
     # Arrange, Act, and Assert
     with pytest.raises(FacebookParseError):
         canonical_video_url(value)  # type: ignore[arg-type]
+
+
+def test_extract_video_id_rejects_plain_http_url_with_clear_message() -> None:
+    # Arrange
+    url = "http://www.facebook.com/watch/?v=10153231379946729"
+
+    # Act and Assert
+    with pytest.raises(FacebookParseError, match="HTTPS is required"):
+        extract_video_id(url)
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://www.facebook.com/watch/?v=123", True),
+        ("https://mbasic.facebook.com/watch/?v=123", True),
+        ("https://facebook.com/watch/?v=123", True),
+        ("http://www.facebook.com/watch/?v=123", False),
+        ("https://evil.example/watch/?v=123", False),
+        ("https://notfacebook.com/watch/?v=123", False),
+        ("https://facebook.com.evil.example/watch/?v=123", False),
+        ("not a url", False),
+    ],
+)
+def test_is_facebook_https_url(url: str, expected: bool) -> None:
+    # Arrange, Act, and Assert
+    assert is_facebook_https_url(url) is expected
+
+
+def test_is_facebook_https_url_rejects_non_string_input() -> None:
+    # Arrange, Act, and Assert
+    assert is_facebook_https_url(None) is False  # type: ignore[arg-type]

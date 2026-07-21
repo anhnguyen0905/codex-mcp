@@ -71,6 +71,21 @@ Programmatically, `collect_comments` returns an immutable `CommentCollection` wi
 tell a complete collection from a truncated one. A valid page with zero comments returns an
 empty, non-truncated collection — it is not treated as an error.
 
+## HTTP safety
+
+- **HTTPS only.** Plain `http://` input URLs are rejected with a clear error
+  (`FacebookParseError` at URL validation, `FacebookHTTPError` at the HTTP client); URLs are
+  never silently upgraded.
+- **Response size limit.** A response larger than `MAX_RESPONSE_BYTES` (5 MB) raises
+  `FacebookResponseTooLargeError` instead of being truncated, so parsers never operate on
+  silently incomplete HTML.
+- **Validated redirects.** Redirects are followed manually: every target must be `https` and
+  stay within `facebook.com` domains, otherwise `FacebookRedirectError` names the blocked
+  target. At most `MAX_REDIRECTS` (5) hops are followed.
+- **Accurate retry errors.** After exhausted retries, the raised `FacebookHTTPError` reflects
+  the final attempt's actual failure and includes the attempt count plus a summary of earlier
+  failures.
+
 ## Export safety
 
 - CSV cells that start with `=`, `+`, `-`, `@`, tab, or carriage return are prefixed with a
@@ -96,7 +111,8 @@ parsing and pagination are exercised against local mbasic-style HTML fixtures, w
 test suite guarantees.
 
 Facebook can also change its public HTML or block requests by network, region, or rate limit.
-The HTTP client uses a desktop Chrome user agent, follows redirects, spaces requests, and retries
+The HTTP client uses a desktop Chrome user agent, follows validated same-domain redirects,
+spaces requests, and retries
 transient network/5xx failures, but those measures cannot bypass authentication requirements.
 
 ## Tests

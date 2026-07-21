@@ -31,3 +31,18 @@ class FacebookHTTPError(FacebookError):
         self.status_code = status_code
         self.url = url
 
+
+class FacebookRedirectError(FacebookHTTPError):
+    """Raised when a redirect targets a disallowed URL or exceeds the hop limit.
+
+    ``url`` identifies the offending redirect target.
+    """
+
+
+class FacebookResponseTooLargeError(FacebookHTTPError):
+    """Raised when a response exceeds the maximum allowed size.
+
+    Raising instead of truncating guarantees parsers never operate on
+    silently incomplete HTML.
+    """
+
