@@ -1,4 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
@@ -93,6 +103,38 @@ describe('writeNotes', () => {
     symlinkSync(target, join(cwd, '.codex-flow', 'notes'))
 
     expect(() => writeNotes(req(cwd))).toThrow(/symlink/i)
+  })
+
+  test('refuses to write through a symlinked leaf notes file and leaves the target untouched', () => {
+    const cwd = mkCwd()
+    const outside = mkCwd()
+    const targetFile = join(outside, 'victim.md')
+    writeFileSync(targetFile, 'precious content')
+    mkdirSync(join(cwd, '.codex-flow', 'notes'), { recursive: true })
+    symlinkSync(targetFile, join(cwd, '.codex-flow', 'notes', 'abc-123.md'))
+
+    expect(() => writeNotes(req(cwd))).toThrow(/symlink/i)
+    expect(readFileSync(targetFile, 'utf8')).toBe('precious content')
+  })
+
+  test('refuses to append through a symlinked leaf notes file on mode=continue', () => {
+    const cwd = mkCwd()
+    const outside = mkCwd()
+    const targetFile = join(outside, 'victim.md')
+    writeFileSync(targetFile, 'precious content')
+    mkdirSync(join(cwd, '.codex-flow', 'notes'), { recursive: true })
+    symlinkSync(targetFile, join(cwd, '.codex-flow', 'notes', 'abc-123.md'))
+
+    expect(() => writeNotes(req(cwd, { mode: 'continue' }))).toThrow(/symlink/i)
+    expect(readFileSync(targetFile, 'utf8')).toBe('precious content')
+  })
+
+  test('leaves no temp files behind after a successful write', () => {
+    const cwd = mkCwd()
+    writeNotes(req(cwd))
+    writeNotes(req(cwd, { mode: 'continue' }))
+
+    expect(readdirSync(join(cwd, '.codex-flow', 'notes'))).toEqual(['abc-123.md'])
   })
 
   test('rejects unsafe sessionIds (path traversal / weird chars)', () => {

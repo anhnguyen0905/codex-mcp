@@ -1,4 +1,5 @@
-import { appendFileSync, lstatSync, mkdirSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { appendFileSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CodexResult } from './types.js'
 
@@ -32,6 +33,25 @@ const assertNotSymlink = (path: string, label: string): void => {
   } catch (err) {
     if (err instanceof Error && err.message.includes('refusing')) throw err
     // ENOENT: fine, will be created.
+  }
+}
+
+// Notes may embed transcript content (possibly secrets) — owner read/write only.
+const NOTES_FILE_MODE = 0o600
+
+/**
+ * Create/overwrite the notes file atomically without following a planted symlink: write to a
+ * temp file in the same directory, then rename over the target. rename replaces the link itself
+ * (never its target), and readers never observe a half-written note.
+ */
+const writeFileAtomic = (filePath: string, content: string): void => {
+  const tmpPath = `${filePath}.tmp-${randomBytes(8).toString('hex')}`
+  writeFileSync(tmpPath, content, { mode: NOTES_FILE_MODE })
+  try {
+    renameSync(tmpPath, filePath)
+  } catch (err) {
+    rmSync(tmpPath, { force: true })
+    throw err
   }
 }
 
@@ -111,6 +131,9 @@ export const writeNotes = (req: NotesRequest): string | null => {
   mkdirSync(notesDir, { recursive: true })
   assertNotSymlink(notesDir, '.codex-flow/notes')
   const filePath = join(notesDir, `${req.sessionId}.md`)
+  // writeFileSync/appendFileSync follow symlinks: a planted leaf link would redirect the write
+  // (or truncate a file) outside the workspace. Refuse it before touching the path.
+  assertNotSymlink(filePath, `.codex-flow/notes/${req.sessionId}.md`)
   const completedAt = nowIso()
 
   if (req.mode === 'continue') {
@@ -123,12 +146,13 @@ export const writeNotes = (req: NotesRequest): string | null => {
       exists = false
     }
     if (!exists) {
-      writeFileSync(filePath, renderInitialBody(req, completedAt), { mode: 0o600 })
+      writeFileAtomic(filePath, renderInitialBody(req, completedAt))
     } else {
+      // Verified above (lstat) to be a regular file, not a symlink — appending in place is safe.
       appendFileSync(filePath, renderContinuationBlock(req, completedAt))
     }
   } else {
-    writeFileSync(filePath, renderInitialBody(req, completedAt), { mode: 0o600 })
+    writeFileAtomic(filePath, renderInitialBody(req, completedAt))
   }
   return filePath
 }
