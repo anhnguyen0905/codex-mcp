@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { readFileSync, realpathSync } from 'node:fs'
-import { basename, dirname, join, resolve as resolvePath } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { ServerNotification } from '@modelcontextprotocol/sdk/types.js'
@@ -13,7 +13,7 @@ import {
 } from './argsBuilder.js'
 import { runCodex, type RunOptions, type RunOutcomeWithEvents } from './codexRunner.js'
 import { parseEvents, type ParsedEvents } from './eventParser.js'
-import { deriveRunStatus, isErrorStatus, RESULT_SCHEMA_VERSION, type RunStatus } from './runStatus.js'
+import { deriveRunStatus, isErrorStatus, RESULT_SCHEMA_VERSION } from './runStatus.js'
 import { createLiveView, type LiveView } from './liveView.js'
 import { combineSinks, createProgressNotifier, type ProgressSink } from './progressNotifier.js'
 import {
@@ -39,18 +39,25 @@ import {
   type BatchTaskResult,
   type BatchTaskSpec,
 } from './batchRunner.js'
+import { createConcurrencyGate, createCwdGuard, cwdLockKey, parseMaxConcurrent } from './concurrency.js'
+import {
+  batchOutputShape,
+  healthOutputShape,
+  runOutputShape,
+  summarizeBatch,
+  toErrorResult,
+  toToolResult,
+  type BatchToolPayload,
+  type HealthPayload,
+  type LoginProbeStatus,
+  type RunPayload,
+} from './toolPayloads.js'
+
+export { cwdLockKey } from './concurrency.js'
 
 const MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000
 const HEALTH_TIMEOUT_MS = 30 * 1000
 
-/** Global cap on concurrent Codex runs across all workspaces (override via CODEX_MCP_MAX_CONCURRENT). */
-const DEFAULT_MAX_CONCURRENT_RUNS = 16
-const parseMaxConcurrent = (raw: string | undefined): number => {
-  if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_CONCURRENT_RUNS
-  const n = Number(raw)
-  // Validate explicitly rather than `Number(raw) || 16`, which silently swallows a configured 0/NaN.
-  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : DEFAULT_MAX_CONCURRENT_RUNS
-}
 const MAX_CONCURRENT_RUNS = parseMaxConcurrent(process.env.CODEX_MCP_MAX_CONCURRENT)
 
 /** Read the package version at runtime so the MCP server-info never drifts from package.json. */
@@ -230,11 +237,6 @@ const buildReviewPrompt = (focus?: string, baselineRef?: string): string =>
     ...(focus ? [`Focus especially on: ${focus}`] : []),
   ].join('\n')
 
-const toToolResult = (payload: unknown, isError: boolean) => ({
-  content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
-  isError,
-})
-
 interface RunAndReportDeps {
   runFn: RunFn
   view: LiveView
@@ -380,21 +382,6 @@ const runOnce = async (
   }
 }
 
-type RunPayload = ParsedEvents & {
-  schemaVersion: number
-  status: RunStatus
-  runId: string
-  diff: Awaited<ReturnType<DiffFn>> | null
-  attribution: RunAttribution | null
-  exitCode: number | null
-  timedOut: boolean
-  aborted: boolean
-  outputTruncated: boolean
-  stderr: string
-  liveLog: string | null
-  notesPath: string | null
-}
-
 const runAndReport = async (
   deps: RunAndReportDeps,
   args: string[],
@@ -404,8 +391,20 @@ const runAndReport = async (
   return toToolResult(payload, isError)
 }
 
-const errorResult = (error: unknown) =>
-  toToolResult({ error: error instanceof Error ? error.message : String(error) }, true)
+const errorResult = toErrorResult
+
+/**
+ * Classify the `codex login status` probe itself (T4.5): a hung, aborted, or inconclusive probe
+ * must surface as 'timeout'/'failed' — never be conflated with a clean "not logged in" answer.
+ * The CLI exits non-zero when logged out, so a non-zero exit counts as a successful probe only
+ * when the output explicitly says so.
+ */
+const deriveLoginProbe = (login: RunOutcome, loginText: string): LoginProbeStatus => {
+  if (login.timedOut) return 'timeout'
+  if (login.aborted ?? false) return 'failed'
+  if (login.exitCode === 0) return 'ok'
+  return /not logged in/i.test(loginText) ? 'ok' : 'failed'
+}
 
 interface RunToolExtra {
   signal: AbortSignal
@@ -427,79 +426,27 @@ const progressSinkFor = (extra: RunToolExtra): ProgressSink | undefined => {
   })
 }
 
-const CASE_INSENSITIVE_PLATFORMS: ReadonlySet<NodeJS.Platform> = new Set(['win32', 'darwin'])
-
 /**
- * Normalize a cwd into a lock key that identifies the physical directory: resolve symlinks
- * (falling back to path resolution when the dir can't be inspected) and fold case on platforms
- * whose default filesystems are case-insensitive, so "C:\Repo" and "c:\repo" share one lock.
+ * Batch progress: N tasks share one progressToken, so each message is prefixed with its task
+ * identity (`[task <index> <cwd>]`) and all tasks draw from one shared counter — interleaved
+ * per-task counters would otherwise produce a non-monotonic progress stream.
  */
-const realpathStable = (path: string): string => {
-  try {
-    return realpathSync.native(path)
-  } catch {
-    // Leaf may not exist yet (e.g. a task that scaffolds a new dir). Realpath the deepest
-    // existing ancestor and re-attach the missing tail so the key is identical before and
-    // after the dir is created — otherwise a run that creates cwd mid-flight would let a
-    // second run compute a divergent (now-resolvable) key and bypass the lock.
-    const parent = dirname(path)
-    if (parent === path) return resolvePath(path) // filesystem root: nothing left to resolve
-    return join(realpathStable(parent), basename(path))
-  }
-}
-
-export const cwdLockKey = (cwd: string, platform: NodeJS.Platform = process.platform): string => {
-  const resolved = realpathStable(resolvePath(cwd))
-  return CASE_INSENSITIVE_PLATFORMS.has(platform) ? resolved.toLowerCase() : resolved
-}
-
-/**
- * Serializes Codex runs per workspace: two concurrent runs writing into the same cwd would
- * race on files and git state, so the second call fails fast with a clear message.
- * Layered: the in-memory slot (fast path, this process) is taken first, then the
- * cross-process lease file; both are released in reverse order in the same finally.
- */
-const createCwdGuard = (leaseFn: LeaseFn) => {
-  const active = new Set<string>()
-  return async <T>(cwd: string, runId: string, run: () => Promise<T>): Promise<T> => {
-    const key = cwdLockKey(cwd)
-    if (active.has(key)) {
-      throw new Error(
-        `Another Codex run is already active in ${key}. Wait for it to finish (or cancel it) before starting a new one.`,
-      )
-    }
-    active.add(key)
-    try {
-      const lease = await leaseFn(cwd, runId)
-      try {
-        return await run()
-      } finally {
-        lease.release()
-      }
-    } finally {
-      active.delete(key)
-    }
-  }
-}
-
-/**
- * Global backstop on how many Codex runs can be in flight at once across ALL workspaces. The
- * per-cwd guard doesn't bound this (distinct cwds each get their own lock), so a burst of
- * many-cwd calls could otherwise exhaust memory/file descriptors. Fails fast past the cap.
- */
-const createConcurrencyGate = (max: number) => {
-  let active = 0
-  return async <T>(run: () => Promise<T>): Promise<T> => {
-    if (active >= max) {
-      throw new Error(`Too many concurrent Codex runs (max ${max}). Wait for one to finish and retry.`)
-    }
-    active += 1
-    try {
-      return await run()
-    } finally {
-      active -= 1
-    }
-  }
+const batchProgressSinksFor = (
+  extra: RunToolExtra,
+): ((taskIndex: number, cwd: string) => ProgressSink | undefined) => {
+  const progressToken = extra._meta?.progressToken
+  if (progressToken === undefined) return () => undefined
+  let sharedProgress = 0
+  return (taskIndex, cwd) =>
+    createProgressNotifier((message) => {
+      sharedProgress += 1
+      void extra
+        .sendNotification({
+          method: 'notifications/progress',
+          params: { progressToken, progress: sharedProgress, message: `[task ${taskIndex} ${cwd}] ${message}` },
+        })
+        .catch(() => {})
+    })
 }
 
 export const createServer = (deps: ServerDeps = {}): McpServer => {
@@ -524,6 +471,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         'Start a new Codex session that executes a plan/task in the given workspace. ' +
         'Returns sessionId (keep it to send review feedback later), agent message, file changes and commands run.',
       inputSchema: executeShape,
+      outputSchema: runOutputShape,
     },
     async (input, extra) => {
       try {
@@ -566,6 +514,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         'Resume an existing Codex session by sessionId with a follow-up prompt — ' +
         'typically review feedback that Codex should address. Preserves Codex context.',
       inputSchema: continueShape,
+      outputSchema: runOutputShape,
     },
     async (input, extra) => {
       try {
@@ -607,6 +556,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         'Ask Codex to review the uncommitted changes in a workspace (read-only sandbox, no files modified). ' +
         'Returns findings ordered by severity plus a sessionId usable with codex_continue.',
       inputSchema: reviewShape,
+      outputSchema: runOutputShape,
     },
     async (input, extra) => {
       try {
@@ -707,9 +657,11 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         'Each task uses its own per-cwd lock, so callers must supply distinct cwds. ' +
         'Returns one result entry per input task in input order.',
       inputSchema: batchShape,
+      outputSchema: batchOutputShape,
     },
     async (input, extra) => {
       try {
+        const taskProgressSink = batchProgressSinksFor(extra)
         const runOneTask = async (
           spec: BatchTaskSpec,
           taskIndex: number,
@@ -726,11 +678,20 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
           // cannot exceed the server-wide CODEX_MCP_MAX_CONCURRENT cap.
           return withConcurrencyLimit(() =>
             withCwdLock(spec.cwd, runId, async () => {
-              // Batch mode: no per-task terminal window (would spam N desktop windows) and no
-              // progress sink — N tasks sharing one progressToken would interleave counters
-              // into a non-monotonic stream the client can't attribute to a task.
+              // Batch mode: no per-task terminal window (would spam N desktop windows). Progress
+              // notifications DO flow, task-attributed via a shared monotonic counter so the
+              // client can tell which task each line belongs to.
               const { payload, isError } = await runOnce(
-                { runFn, view: NULL_VIEW, diffFn, snapshotFn, attributeFn, runId, tool: 'codex_batch' },
+                {
+                  runFn,
+                  view: NULL_VIEW,
+                  diffFn,
+                  snapshotFn,
+                  attributeFn,
+                  runId,
+                  progressSink: taskProgressSink(taskIndex, spec.cwd),
+                  tool: 'codex_batch',
+                },
                 args,
                 { cwd: spec.cwd, timeoutMs: spec.timeoutMs, signal, stdinInput },
               )
@@ -773,17 +734,19 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         // Clamp to the server-wide cap: the global gate is fail-fast, so letting the batch
         // pool exceed it would make the excess workers error out instead of queue.
         const maxConcurrency = Math.min(input.maxConcurrency ?? DEFAULT_BATCH_CONCURRENCY, MAX_CONCURRENT_RUNS)
-        const results = await runBatch(
-          tasks,
-          runOneTask,
-          { maxConcurrency, failFast: input.failFast },
-          extra.signal,
-        )
-        const anyError = results.some((r) => r.isError)
-        return toToolResult(
-          { tasks: results, total: results.length, failed: results.filter((r) => r.isError).length },
-          anyError,
-        )
+        const failFast = input.failFast ?? false
+        const results = await runBatch(tasks, runOneTask, { maxConcurrency, failFast }, extra.signal)
+        const payload: BatchToolPayload = {
+          tasks: results,
+          total: results.length,
+          failed: results.filter((r) => r.isError).length,
+          summary: summarizeBatch(results),
+        }
+        // failFast=false: the batch itself executed, so the tool result is not an error — per-task
+        // status/isError carries the failures. failFast=true keeps the historical contract: the
+        // triggering failure aborts the batch and surfaces as a tool-level error.
+        const isError = failFast && results.some((r) => r.isError)
+        return toToolResult(payload, isError)
       } catch (error) {
         return errorResult(error)
       }
@@ -796,6 +759,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
       title: 'Check Codex CLI health',
       description: 'Report installed Codex CLI version and login status.',
       inputSchema: {},
+      outputSchema: healthOutputShape,
     },
     async (_input, extra) => {
       try {
@@ -811,11 +775,14 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
           ])
           const ok = (r: RunOutcome): boolean => r.exitCode === 0 && !r.timedOut && !(r.aborted ?? false)
           const loginText = `${login.stdout}\n${login.stderr}`
-          const payload = {
+          const loginProbe = deriveLoginProbe(login, loginText)
+          const payload: HealthPayload = {
             version: version.stdout.trim(),
             // Only claim logged-in when the login probe itself succeeded — a hung/killed
             // `codex login status` must not be reported as authenticated.
-            loggedIn: ok(login) && /logged in/i.test(loginText) && !/not logged in/i.test(loginText),
+            loggedIn:
+              loginProbe === 'ok' && /logged in/i.test(loginText) && !/not logged in/i.test(loginText),
+            loginProbe,
             loginStatus: loginText.trim(),
           }
           return toToolResult(payload, !ok(version))

@@ -20,7 +20,17 @@ const connect = async (
   return client
 }
 
-const parse = (r: Awaited<ReturnType<Client['callTool']>>): { tasks: Array<Record<string, unknown>>; total: number; failed: number } =>
+interface BatchSummary {
+  total: number
+  succeeded: number
+  failed: number
+  aborted: number
+  partial: number
+}
+
+const parse = (
+  r: Awaited<ReturnType<Client['callTool']>>,
+): { tasks: Array<Record<string, unknown>>; total: number; failed: number; summary: BatchSummary } =>
   JSON.parse((r.content as Array<{ text: string }>)[0].text)
 
 describe('codex_batch tool', () => {
@@ -70,7 +80,120 @@ describe('codex_batch tool', () => {
     expect(payload.tasks[1].isError).toBe(true)
     expect(payload.tasks[0].isError).toBe(false)
     expect(payload.tasks[2].isError).toBe(false)
-    expect(r.isError).toBe(true) // overall tool-result reflects any error
+    // T4.6: with failFast=false the batch itself executed, so the tool result is NOT an error —
+    // per-task isError/status carries the failure so sibling successes stay visible.
+    expect(r.isError).toBe(false)
+    // Sibling fixtures carry no turn.completed marker, so they classify as partial, not success.
+    expect(payload.summary).toEqual({ total: 3, succeeded: 0, failed: 1, aborted: 0, partial: 2 })
+    expect(payload.tasks[1].status).toBe('failed')
+  })
+
+  test('failFast=true: the tool result is an error when the triggering task failed', async () => {
+    const runFn = vi.fn(async (_args: string[], opts: { cwd: string }): Promise<RunOutcome> => {
+      if (opts.cwd === '/w/2') return { stdout: '', stderr: 'boom', exitCode: 1, timedOut: false }
+      return { stdout: okJsonl('ok'), stderr: '', exitCode: 0, timedOut: false }
+    })
+    const client = await connect(runFn)
+
+    const r = await client.callTool({
+      name: 'codex_batch',
+      arguments: {
+        tasks: [
+          { cwd: '/w/1', prompt: 'a' },
+          { cwd: '/w/2', prompt: 'b' },
+          { cwd: '/w/3', prompt: 'c' },
+        ],
+        maxConcurrency: 1,
+        failFast: true,
+      },
+    })
+    const payload = parse(r)
+
+    expect(r.isError).toBe(true)
+    expect(payload.tasks[1].status).toBe('failed')
+    expect(payload.summary.failed).toBe(1)
+    // The task after the failure never started — cancelled by fail-fast.
+    expect(payload.tasks[2].status).toBe('aborted')
+  })
+
+  test('failFast=false with every task failing still reports tool-level isError=false', async () => {
+    const runFn = vi.fn(async (): Promise<RunOutcome> => ({ stdout: '', stderr: 'boom', exitCode: 1, timedOut: false }))
+    const client = await connect(runFn)
+
+    const r = await client.callTool({
+      name: 'codex_batch',
+      arguments: {
+        tasks: [
+          { cwd: '/w/1', prompt: 'a' },
+          { cwd: '/w/2', prompt: 'b' },
+        ],
+      },
+    })
+    const payload = parse(r)
+
+    expect(r.isError).toBe(false)
+    expect(payload.summary).toEqual({ total: 2, succeeded: 0, failed: 2, aborted: 0, partial: 0 })
+  })
+
+  test('summary counts partial task statuses', async () => {
+    const runFn = vi.fn(async (_args: string[], opts: { cwd: string }): Promise<RunOutcome> => {
+      // exit 0 without a completion marker → partial
+      if (opts.cwd === '/w/2') return { stdout: okJsonl('mid'), stderr: '', exitCode: 0, timedOut: false }
+      const completed = [okJsonl('done'), JSON.stringify({ type: 'turn.completed', usage: {} })].join('\n')
+      return { stdout: completed, stderr: '', exitCode: 0, timedOut: false }
+    })
+    const client = await connect(runFn)
+
+    const r = await client.callTool({
+      name: 'codex_batch',
+      arguments: {
+        tasks: [
+          { cwd: '/w/1', prompt: 'a' },
+          { cwd: '/w/2', prompt: 'b' },
+        ],
+      },
+    })
+    const payload = parse(r)
+
+    expect(payload.summary).toEqual({ total: 2, succeeded: 1, failed: 0, aborted: 0, partial: 1 })
+  })
+
+  test('batch progress notifications carry task attribution', async () => {
+    const runFn = vi.fn(
+      async (_args: string[], opts: { cwd: string; onStdout?: (c: Buffer) => void }): Promise<RunOutcome> => {
+        opts.onStdout?.(Buffer.from(`${okJsonl(`sess-${opts.cwd}`)}\n`))
+        return { stdout: okJsonl(`sess-${opts.cwd}`), stderr: '', exitCode: 0, timedOut: false }
+      },
+    )
+    const client = await connect(runFn)
+    const messages: string[] = []
+    const progressValues: number[] = []
+
+    await client.callTool(
+      {
+        name: 'codex_batch',
+        arguments: {
+          tasks: [
+            { cwd: '/w/1', prompt: 'a' },
+            { cwd: '/w/2', prompt: 'b' },
+          ],
+        },
+      },
+      undefined,
+      {
+        onprogress: (p) => {
+          if (typeof p.message === 'string') messages.push(p.message)
+          progressValues.push(p.progress)
+        },
+      },
+    )
+
+    expect(messages.length).toBeGreaterThan(0)
+    expect(messages.some((m) => m.includes('[task 0 /w/1]'))).toBe(true)
+    expect(messages.some((m) => m.includes('[task 1 /w/2]'))).toBe(true)
+    // Progress must stay monotonic across interleaved tasks.
+    const sorted = [...progressValues].sort((a, b) => a - b)
+    expect(progressValues).toEqual(sorted)
   })
 
   test('surfaces outputTruncated on each task result when a run reports truncated output', async () => {

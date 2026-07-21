@@ -113,7 +113,7 @@ describe('captureWorkspaceDiff', () => {
 describe('server diff wiring', () => {
   test('includes the workspace diff in the tool payload', async () => {
     const runFn = vi.fn(async (): Promise<RunOutcome> => ({ stdout: '', stderr: '', exitCode: 0, timedOut: false }))
-    const diffFn = vi.fn(async () => ({ status: 'M a.txt', patch: 'diff --git a/a.txt', truncated: false }))
+    const diffFn = vi.fn(async () => ({ status: 'M a.txt', statusTruncated: false, patch: 'diff --git a/a.txt', truncated: false }))
     const server = createServer({ runFn: runFn as never, diffFn })
     const client = new Client({ name: 'test-client', version: '0.0.1' })
     const [ct, st] = InMemoryTransport.createLinkedPair()
@@ -123,7 +123,7 @@ describe('server diff wiring', () => {
     const payload = JSON.parse((result.content as Array<{ text: string }>)[0].text)
 
     expect(diffFn).toHaveBeenCalledWith('/repo')
-    expect(payload.diff).toEqual({ status: 'M a.txt', patch: 'diff --git a/a.txt', truncated: false })
+    expect(payload.diff).toEqual({ status: 'M a.txt', statusTruncated: false, patch: 'diff --git a/a.txt', truncated: false })
   })
 
   test('diff failures never fail the tool call', async () => {

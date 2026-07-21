@@ -1,6 +1,6 @@
-import { promises as fs } from 'node:fs'
+import { promises as fs, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 /**
  * A Codex session, discovered from `~/.codex/sessions/YYYY/MM/DD/rollout-<ISO>-<UUID>.jsonl`.
@@ -9,14 +9,15 @@ import { join } from 'node:path'
 export interface CodexSession {
   sessionId: string
   cwd: string | null
-  lastActivity: string // ISO 8601 from filename/mtime
+  /** ISO 8601 of the session's real last activity (rollout file mtime), not its creation time. */
+  lastActivity: string
   filePath: string
   cliVersion?: string
   originator?: string
 }
 
 export interface ListSessionsOptions {
-  /** Filter to sessions whose recorded cwd matches this path (exact string match after normalization). */
+  /** Filter to sessions whose recorded cwd identifies the same directory (canonical/realpath comparison). */
   cwd?: string
   /** Max number of most-recent sessions to return. Default 50, hard cap 500 so a busy history can't OOM. */
   limit?: number
@@ -28,8 +29,27 @@ export const DEFAULT_LIMIT = 50
 export const MAX_LIMIT = 500
 
 /**
+ * Canonicalize a path for comparison: resolve symlinks when the path exists, and fall back to
+ * plain path resolution when it doesn't (a session's cwd may have been deleted since the run).
+ */
+const canonicalPath = (path: string): string => {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    return resolve(path)
+  }
+}
+
+interface RolloutFile {
+  filePath: string
+  mtimeMs: number
+}
+
+/**
  * Discover Codex sessions by walking the filesystem. codex CLI writes each session to a JSONL file
  * whose first line is a `session_meta` event containing the session id and cwd; that's all we need.
+ * Ordering is by real last activity (file mtime — codex appends to the rollout for the session's
+ * whole life), newest first, NOT by the creation timestamp encoded in the filename.
  * Malformed or unreadable files are skipped so one corrupt file doesn't sink the whole listing.
  * Returns [] when the sessions dir doesn't exist yet — never throws.
  */
@@ -38,26 +58,29 @@ export const listSessions = async (options: ListSessionsOptions = {}): Promise<C
   const sessionsRoot = join(codexHome, 'sessions')
   const rawLimit = options.limit ?? DEFAULT_LIMIT
   const limit = Math.min(Math.max(1, Math.floor(rawLimit)), MAX_LIMIT)
+  const wantedCwd = options.cwd !== undefined ? canonicalPath(options.cwd) : undefined
 
   const files = await collectRolloutFiles(sessionsRoot)
   if (files.length === 0) return []
 
-  // Sort by filename descending (newest first — filename encodes ISO timestamp) so we only need
-  // to read the first `limit` files, not every single rollout in a long-lived codex install.
-  files.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
+  // Sort by mtime descending (tie-broken by filename, which encodes the creation ISO timestamp)
+  // so we only need to read the first `limit` matching files, not every rollout on disk.
+  const sorted = [...files].sort(
+    (a, b) => b.mtimeMs - a.mtimeMs || (a.filePath < b.filePath ? 1 : a.filePath > b.filePath ? -1 : 0),
+  )
   const sessions: CodexSession[] = []
-  for (const filePath of files) {
+  for (const file of sorted) {
     if (sessions.length >= limit) break
-    const meta = await readFirstSessionMeta(filePath)
+    const meta = await readFirstSessionMeta(file)
     if (!meta) continue
-    if (options.cwd !== undefined && meta.cwd !== options.cwd) continue
+    if (wantedCwd !== undefined && (meta.cwd === null || canonicalPath(meta.cwd) !== wantedCwd)) continue
     sessions.push(meta)
   }
   return sessions
 }
 
-const collectRolloutFiles = async (root: string): Promise<string[]> => {
-  const out: string[] = []
+const collectRolloutFiles = async (root: string): Promise<RolloutFile[]> => {
+  const out: RolloutFile[] = []
   const walk = async (dir: string): Promise<void> => {
     let entries: import('node:fs').Dirent[]
     try {
@@ -70,7 +93,12 @@ const collectRolloutFiles = async (root: string): Promise<string[]> => {
       if (entry.isDirectory()) {
         await walk(full)
       } else if (entry.isFile() && entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) {
-        out.push(full)
+        try {
+          const stat = await fs.stat(full)
+          out.push({ filePath: full, mtimeMs: stat.mtimeMs })
+        } catch {
+          // File vanished between readdir and stat — skip it.
+        }
       }
     }
   }
@@ -78,12 +106,12 @@ const collectRolloutFiles = async (root: string): Promise<string[]> => {
   return out
 }
 
-const readFirstSessionMeta = async (filePath: string): Promise<CodexSession | null> => {
+const readFirstSessionMeta = async (file: RolloutFile): Promise<CodexSession | null> => {
   let firstLine: string
   try {
     // Sessions files are typically KB-MB; reading the whole thing is wasteful when we only need
     // the first line. Read a fixed head and split.
-    const fd = await fs.open(filePath, 'r')
+    const fd = await fs.open(file.filePath, 'r')
     try {
       const buf = Buffer.alloc(64 * 1024)
       const { bytesRead } = await fd.read(buf, 0, buf.length, 0)
@@ -117,8 +145,8 @@ const readFirstSessionMeta = async (filePath: string): Promise<CodexSession | nu
   return {
     sessionId: p.id,
     cwd: typeof p.cwd === 'string' ? p.cwd : null,
-    lastActivity: typeof p.timestamp === 'string' ? p.timestamp : (record.timestamp ?? ''),
-    filePath,
+    lastActivity: new Date(file.mtimeMs).toISOString(),
+    filePath: file.filePath,
     cliVersion: typeof p.cli_version === 'string' ? p.cli_version : undefined,
     originator: typeof p.originator === 'string' ? p.originator : undefined,
   }
