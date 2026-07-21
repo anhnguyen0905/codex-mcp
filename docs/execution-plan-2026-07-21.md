@@ -1,5 +1,7 @@
 # Execution Plan — Full Pipeline Hardening (2026-07-21)
 
+> **Tiến độ (cập nhật 2026-07-21):** ✅ Wave 0 (8/8) · ✅ Wave 1 (6/6) · ✅ Wave 2 (2/2) · ✅ Wave 3 (promote + 7 fix, trừ HTTP hardening dời sang W5) · ⬜ Wave 4 · ⬜ Wave 5. Tag v0.9.0 đã rewrite về commit version-consistent. Toàn bộ thay đổi đã qua code review (APPROVE, 0 finding) và push lên main.
+
 Nguồn: `docs/full-pipeline-review-2026-07-21.md`. Trước khi lập plan, toàn bộ finding đã được re-verify độc lập trên working tree hiện tại.
 
 ---
