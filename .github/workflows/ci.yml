@@ -34,4 +34,44 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npx vitest run
+      # Coverage thresholds (vitest.config.ts) gate CI on one matrix cell only,
+      # so the rest of the matrix stays fast with a plain test run.
+      - name: test with coverage gate
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 22
+        run: npx vitest run --coverage
+      - name: test
+        if: matrix.os != 'ubuntu-latest' || matrix.node != 22
+        run: npx vitest run
+
+  package-smoke:
+    name: pack & install smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node scripts/pack-smoke.mjs
+
+  # Live end-to-end smoke against a real Codex CLI session.
+  # Opt-in: set the repository variable CODEX_E2E_ENABLED to 'true'
+  # (Settings -> Secrets and variables -> Actions -> Variables).
+  # The runner must be provisioned with a logged-in `codex` CLI —
+  # scripts/smoke-e2e.mjs exits 2 when codex is not logged in, which fails this job.
+  e2e-live:
+    name: live codex e2e
+    runs-on: ubuntu-latest
+    if: ${{ vars.CODEX_E2E_ENABLED == 'true' }}
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:e2e

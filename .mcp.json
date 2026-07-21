@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "codex": {
-      "command": "npx",
-      "args": ["-y", "@anhnguyen0905/codex-mcp@latest"],
+      "_note": "Runs the LOCAL build so dev sessions test the source being edited (run `npm run build` first). To test a published release instead, use command 'npx' with args ['-y', '@anhnguyen0905/codex-mcp@<pinned-version>'].",
+      "command": "node",
+      "args": ["dist/index.js"],
       "env": {
         "CODEX_MCP_TERMINAL": "1"
       }
