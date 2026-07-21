@@ -158,7 +158,12 @@ describe('runCodex hardening', () => {
       // The real exit code is preserved — lingering pipes must not fake a null (false failure)...
       expect(result.exitCode).toBe(3)
       // ...and the orphaned tree is killed before the settle releases the cwd lock/slot.
-      expect(kills).toContain('SIGKILL')
+      // On Windows the tree kill goes through a real `taskkill` spawn that a pid-less
+      // fake child cannot observe (and deliberately skips), so the kill assertion is
+      // POSIX-only; the trigger path is identical on both platforms.
+      if (process.platform !== 'win32') {
+        expect(kills).toContain('SIGKILL')
+      }
     } finally {
       vi.useRealTimers()
     }
