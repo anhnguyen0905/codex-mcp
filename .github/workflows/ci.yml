@@ -7,6 +7,17 @@ on:
     branches: [main]
 
 jobs:
+  consistency:
+    name: release & command consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-release-consistency.mjs
+      - run: node scripts/check-command-sync.mjs
+
   test:
     name: test (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
