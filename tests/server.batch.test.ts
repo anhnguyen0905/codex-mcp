@@ -73,6 +73,30 @@ describe('codex_batch tool', () => {
     expect(r.isError).toBe(true) // overall tool-result reflects any error
   })
 
+  test('surfaces outputTruncated on each task result when a run reports truncated output', async () => {
+    const runFn = vi.fn(async (_args: string[], opts: { cwd: string }): Promise<RunOutcome> => {
+      if (opts.cwd === '/w/1') {
+        return { stdout: okJsonl('trunc'), stderr: '', exitCode: 0, timedOut: false, truncated: true }
+      }
+      return { stdout: okJsonl('ok'), stderr: '', exitCode: 0, timedOut: false }
+    })
+    const client = await connect(runFn)
+
+    const r = await client.callTool({
+      name: 'codex_batch',
+      arguments: {
+        tasks: [
+          { cwd: '/w/1', prompt: 'a' },
+          { cwd: '/w/2', prompt: 'b' },
+        ],
+      },
+    })
+    const payload = parse(r)
+
+    expect(payload.tasks[0].outputTruncated).toBe(true)
+    expect(payload.tasks[1].outputTruncated).toBe(false)
+  })
+
   test('rejects duplicate cwds up front', async () => {
     const runFn = vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0, timedOut: false }) as RunOutcome)
     const client = await connect(runFn)

@@ -212,6 +212,22 @@ const tailString = (value: string, n: number): string => {
   return first >= 0xdc00 && first <= 0xdfff ? sliced.slice(1) : sliced
 }
 
+/**
+ * Classify a run's primary failure kind for the metric log, by precedence:
+ * abort > timeout > non-zero exit > Codex-emitted errors (turn.failed). Undefined on success.
+ */
+const deriveErrorKind = (
+  outcome: { exitCode: number | null; timedOut: boolean },
+  aborted: boolean,
+  errorCount: number,
+): MetricEntry['errorKind'] => {
+  if (aborted) return 'abort'
+  if (outcome.timedOut) return 'timeout'
+  if (outcome.exitCode !== 0) return 'exit'
+  if (errorCount > 0) return 'turn-failed'
+  return undefined
+}
+
 /** Run one Codex invocation and return the raw payload; shared by codex_execute/continue/review/batch. */
 const runOnce = async (
   { runFn, view, diffFn, progressSink, notes, tool }: RunAndReportDeps,
@@ -265,6 +281,8 @@ const runOnce = async (
       timedOut: outcome.timedOut,
       aborted,
       truncated: outcome.truncated ?? false,
+      errorCount: parsed.errors.length,
+      errorKind: deriveErrorKind(outcome, aborted, parsed.errors.length),
     })
     return { payload, isError }
   } finally {
@@ -595,6 +613,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 exitCode,
                 timedOut,
                 aborted,
+                outputTruncated,
                 stderr,
                 liveLog,
                 isError,

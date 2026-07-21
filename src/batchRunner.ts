@@ -17,6 +17,8 @@ export interface BatchTaskResult {
   exitCode: number | null
   timedOut: boolean
   aborted: boolean
+  /** True when the run's captured output hit the size cap and was truncated. */
+  outputTruncated?: boolean
   stderr: string
   liveLog: string | null
   isError: boolean
@@ -59,6 +61,7 @@ const skippedResult = (task: BatchTaskSpec, taskIndex: number, error: string): B
   exitCode: null,
   timedOut: false,
   aborted: true,
+  outputTruncated: false,
   stderr: '',
   liveLog: null,
   isError: true,

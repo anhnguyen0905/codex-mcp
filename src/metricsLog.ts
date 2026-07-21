@@ -18,6 +18,10 @@ export interface MetricEntry {
   timedOut?: boolean
   aborted?: boolean
   truncated?: boolean
+  /** Number of errors Codex emitted in the event stream (e.g. turn.failed). Absent on legacy lines. */
+  errorCount?: number
+  /** Primary failure kind: 'exit' | 'timeout' | 'abort' | 'turn-failed'. Absent on legacy lines / successes. */
+  errorKind?: string
 }
 
 /** Per-1M-token USD pricing, JSON-encoded in CODEX_MCP_PRICING env (opt-in). */
@@ -104,12 +108,11 @@ export const appendMetric = (entry: MetricEntry, options: MetricsLogOptions = {}
   }
 }
 
-/** Read metric entries from the log, tolerating malformed lines (skip). Returns [] if no file. */
-export const readMetrics = (options: MetricsLogOptions = {}): MetricEntry[] => {
-  const logPath = options.logPath ?? defaultLogPath()
+/** Parse one file's JSONL content into entries, tolerating malformed lines (skip). [] if unreadable. */
+const readMetricsFile = (path: string): MetricEntry[] => {
   let content: string
   try {
-    content = readFileSync(logPath, 'utf8')
+    content = readFileSync(path, 'utf8')
   } catch {
     return []
   }
@@ -126,6 +129,15 @@ export const readMetrics = (options: MetricsLogOptions = {}): MetricEntry[] => {
     }
   }
   return out
+}
+
+/**
+ * Read metric entries from the log plus its rotated back-file (`<file>.1`), oldest first.
+ * Rotation keeps exactly one back-file (see appendMetric), so reading both covers all history.
+ */
+export const readMetrics = (options: MetricsLogOptions = {}): MetricEntry[] => {
+  const logPath = options.logPath ?? defaultLogPath()
+  return [...readMetricsFile(`${logPath}.1`), ...readMetricsFile(logPath)]
 }
 
 const inRange = (entry: MetricEntry, filters: AggregateFilters): boolean => {
@@ -154,7 +166,9 @@ export const aggregate = (
     if (!inRange(e, filters)) continue
     agg.totalRuns++
     agg.totalDurationMs += e.durationMs
-    if (e.exitCode !== 0 || e.timedOut || e.aborted) agg.failed++
+    // Failure = process-level failure OR Codex-emitted errors (turn.failed etc.) despite exit 0.
+    // `errorCount` is absent on legacy lines — treat as 0 so old logs aggregate unchanged.
+    if (e.exitCode !== 0 || e.timedOut || e.aborted || (e.errorCount ?? 0) > 0) agg.failed++
     if (e.usage) {
       agg.totalTokens.input += e.usage.inputTokens
       agg.totalTokens.cachedInput += e.usage.cachedInputTokens

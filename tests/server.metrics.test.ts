@@ -81,6 +81,32 @@ describe('metrics wiring', () => {
     expect(payload.estCostUsd).toBeUndefined() // pricing not set
   })
 
+  test('exit-0 run with parsed errors records errorCount/errorKind and counts as failed', async () => {
+    const failedTurnFixture = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'sess-turn-failed' }),
+      JSON.stringify({ type: 'turn.failed', error: { message: 'model refused' } }),
+    ].join('\n')
+    const runFn = vi.fn(async (): Promise<RunOutcome> => ({
+      stdout: failedTurnFixture,
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+    }))
+    const client = await connect(runFn)
+
+    await client.callTool({ name: 'codex_execute', arguments: { prompt: 'a', cwd: '/w/1' } })
+
+    const line = JSON.parse(readFileSync(logPath, 'utf8').trim())
+    expect(line.exitCode).toBe(0)
+    expect(line.errorCount).toBe(1)
+    expect(line.errorKind).toBe('turn-failed')
+
+    const r = await client.callTool({ name: 'codex_metrics', arguments: {} })
+    const payload = JSON.parse((r.content as Array<{ text: string }>)[0].text)
+    expect(payload.totalRuns).toBe(1)
+    expect(payload.failed).toBe(1)
+  })
+
   test('cwd filter narrows the aggregate', async () => {
     const runFn = vi.fn(async () => okOutcome)
     const client = await connect(runFn)

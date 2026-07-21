@@ -88,6 +88,21 @@ describe('readMetrics', () => {
     const entries = readMetrics({ logPath })
     expect(entries.map((e) => e.sessionId)).toEqual(['good1', 'good2'])
   })
+
+  test('includes entries from the rotated .1 file, older entries first', () => {
+    const logPath = mkLog()
+    writeFileSync(`${logPath}.1`, JSON.stringify(entry({ sessionId: 'rotated-old' })) + '\n')
+    writeFileSync(logPath, JSON.stringify(entry({ sessionId: 'live-new' })) + '\n')
+    const entries = readMetrics({ logPath })
+    expect(entries.map((e) => e.sessionId)).toEqual(['rotated-old', 'live-new'])
+  })
+
+  test('reads only the rotated file when the live file is missing', () => {
+    const logPath = mkLog()
+    writeFileSync(`${logPath}.1`, JSON.stringify(entry({ sessionId: 'rotated-only' })) + '\n')
+    const entries = readMetrics({ logPath })
+    expect(entries.map((e) => e.sessionId)).toEqual(['rotated-only'])
+  })
 })
 
 describe('aggregate', () => {
@@ -124,6 +139,22 @@ describe('aggregate', () => {
     // total input=300, cachedInput=30, output=600, reasoning=15 → cost = 300/1M*1 + 30/1M*0.5 + 600/1M*2 + 15/1M*3
     // ≈ 0.0003 + 0.000015 + 0.0012 + 0.000045 = 0.00156
     expect(withCost.estCostUsd).toBeCloseTo(0.00156, 6)
+  })
+
+  test('counts an exit-0 entry with parsed errors (errorCount > 0) as failed', () => {
+    const agg = aggregate([entry({ exitCode: 0, errorCount: 2, errorKind: 'turn-failed' })])
+    expect(agg.totalRuns).toBe(1)
+    expect(agg.failed).toBe(1)
+  })
+
+  test('legacy entries without errorCount keep their existing success/failure behavior', () => {
+    const legacyOk = entry({ exitCode: 0 })
+    const legacyFailed = entry({ exitCode: 1 })
+    delete (legacyOk as Partial<MetricEntry>).errorCount
+    delete (legacyFailed as Partial<MetricEntry>).errorCount
+    const agg = aggregate([legacyOk, legacyFailed])
+    expect(agg.totalRuns).toBe(2)
+    expect(agg.failed).toBe(1)
   })
 
   test('handles entries with missing usage', () => {
