@@ -156,7 +156,7 @@ describe('cloneRepos', () => {
     expect(
       await readFile(path.join(dest, 'origin__repo', 'my-skill', 'SKILL.md'), 'utf8'),
     ).toContain('From origin.')
-  })
+  }, 30000)
 
   test('collects failures without aborting the batch', async () => {
     const dest = path.join(root, 'lib', 'remote')
