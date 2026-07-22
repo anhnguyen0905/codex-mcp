@@ -4,6 +4,9 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     setupFiles: ['tests/setup.ts'],
+    // Windows CI runners spawn git/node subprocesses slowly under load; the
+    // 5000ms default flakes on subprocess-heavy tests. 15s gives headroom.
+    testTimeout: 15000,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

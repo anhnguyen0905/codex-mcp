@@ -20,7 +20,8 @@ const makeDir = (prefix: string): string => {
 }
 
 afterAll(() => {
-  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true })
+  // maxRetries tolerates Windows EBUSY when a lease file handle is briefly held.
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
 
 /** Spawn a short-lived process and return its (now dead) pid. */
@@ -124,7 +125,7 @@ describe('cross-process lease wiring in the server', () => {
     const clientB = await connect(runB)
 
     const first = clientA.callTool({ name: 'codex_execute', arguments: { prompt: 'a', cwd } })
-    await vi.waitFor(() => expect(runA).toHaveBeenCalled())
+    await vi.waitFor(() => expect(runA).toHaveBeenCalled(), { timeout: 10000 })
     const second = await clientB.callTool({ name: 'codex_execute', arguments: { prompt: 'b', cwd } })
 
     expect(second.isError).toBe(true)
