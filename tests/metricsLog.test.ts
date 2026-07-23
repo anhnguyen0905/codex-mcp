@@ -138,9 +138,9 @@ describe('aggregate', () => {
       JSON.stringify({ inputPer1M: 1, cachedInputPer1M: 0.5, outputPer1M: 2, reasoningOutputPer1M: 3 }),
     )
     const withCost = aggregate(many, {}, pricing)
-    // total input=300, cachedInput=30, output=600, reasoning=15 → cost = 300/1M*1 + 30/1M*0.5 + 600/1M*2 + 15/1M*3
-    // ≈ 0.0003 + 0.000015 + 0.0012 + 0.000045 = 0.00156
-    expect(withCost.estCostUsd).toBeCloseTo(0.00156, 6)
+    // total input=300, cachedInput=30, output=600, reasoning=15 → cost = 270/1M*1 + 30/1M*0.5 + 585/1M*2 + 15/1M*3
+    // ≈ 0.00027 + 0.000015 + 0.00117 + 0.000045 = 0.0015
+    expect(withCost.estCostUsd).toBeCloseTo(0.0015, 6)
   })
 
   test('counts an exit-0 entry with parsed errors (errorCount > 0) as failed', () => {
@@ -226,8 +226,8 @@ describe('model-aware cost estimation', () => {
 
   test('estimateCostUsd computes per-run cost from the table', () => {
     const usage = { inputTokens: 100, cachedInputTokens: 10, outputTokens: 200, reasoningOutputTokens: 5 }
-    // 100/1M*1 + 10/1M*0.5 + 200/1M*2 + 5/1M*3 = 0.00052
-    expect(estimateCostUsd('gpt-5.1-codex', usage, table)).toBeCloseTo(0.00052, 8)
+    // 90/1M*1 + 10/1M*0.5 + 195/1M*2 + 5/1M*3 = 0.0005
+    expect(estimateCostUsd('gpt-5.1-codex', usage, table)).toBeCloseTo(0.0005, 8)
   })
 
   test('estimateCostUsd returns undefined for unknown model or missing usage — never 0', () => {
@@ -244,8 +244,8 @@ describe('model-aware cost estimation', () => {
       undefined,
       table,
     )
-    expect(agg.byModel['gpt-5.1-codex'].estimatedCostUsd).toBeCloseTo(0.00104, 8)
-    expect(agg.estimatedCostUsd).toBeCloseTo(0.00104, 8)
+    expect(agg.byModel['gpt-5.1-codex'].estimatedCostUsd).toBeCloseTo(0.001, 8)
+    expect(agg.estimatedCostUsd).toBeCloseTo(0.001, 8)
   })
 
   test('unknown model claims no cost: estimatedCostUsd stays undefined', () => {
@@ -261,7 +261,7 @@ describe('model-aware cost estimation', () => {
       undefined,
       table,
     )
-    expect(agg.estimatedCostUsd).toBeCloseTo(0.00052, 8)
+    expect(agg.estimatedCostUsd).toBeCloseTo(0.0005, 8)
     expect(agg.byModel['mystery-model'].estimatedCostUsd).toBeUndefined()
   })
 })

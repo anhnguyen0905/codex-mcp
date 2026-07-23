@@ -67,6 +67,7 @@
     "scripts/skill-match.mjs",
     "scripts/skill-eval.mjs",
     "scripts/task-waves.mjs",
+    "scripts/session-cost.mjs",
     "scripts/smoke-e2e.mjs",
     "skills",
     "commands",

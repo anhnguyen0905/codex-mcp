@@ -10,6 +10,7 @@ coverage/
 
 # Codex Flow live progress logs
 **/.codex-flow/live/
+**/.codex-flow/reports/
 **/.codex-flow/*.log
 **/.codex-flow/session.txt
 

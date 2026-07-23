@@ -53,6 +53,20 @@ export const COST_TABLE: Readonly<Record<string, ModelCostRates>> = {}
 const TOKENS_PER_MILLION = 1_000_000
 const COST_DECIMALS = 6
 
+// Cached input and reasoning output are subsets of their respective token totals.
+const subsetAwareCostUsd = (
+  input: number,
+  cachedInput: number,
+  output: number,
+  reasoningOutput: number,
+  rates: ModelCostRates,
+): number =>
+  (Math.max(input - cachedInput, 0) * rates.inputPer1M +
+    cachedInput * rates.cachedInputPer1M +
+    Math.max(output - reasoningOutput, 0) * rates.outputPer1M +
+    reasoningOutput * rates.reasoningOutputPer1M) /
+  TOKENS_PER_MILLION
+
 /** USD cost of one run. Undefined when the model is unknown/unpriced or usage was not recorded. */
 export const estimateCostUsd = (
   model: string | undefined,
@@ -62,12 +76,12 @@ export const estimateCostUsd = (
   if (!model || !usage) return undefined
   const rates = costTable[model]
   if (!rates) return undefined
-  return (
-    (usage.inputTokens * rates.inputPer1M +
-      usage.cachedInputTokens * rates.cachedInputPer1M +
-      usage.outputTokens * rates.outputPer1M +
-      usage.reasoningOutputTokens * rates.reasoningOutputPer1M) /
-    TOKENS_PER_MILLION
+  return subsetAwareCostUsd(
+    usage.inputTokens,
+    usage.cachedInputTokens,
+    usage.outputTokens,
+    usage.reasoningOutputTokens,
+    rates,
   )
 }
 
@@ -265,13 +279,14 @@ const createMeanTracker = (): { add: (sample: number | undefined) => void; value
 }
 
 const flatCostUsd = (tokens: TokenTotals, pricing: PricingTable): number =>
-  // cachedInput usually priced lower; kept separate from input for accuracy.
   roundUsd(
-    (tokens.input * pricing.inputPer1M +
-      tokens.cachedInput * pricing.cachedInputPer1M +
-      tokens.output * pricing.outputPer1M +
-      tokens.reasoningOutput * pricing.reasoningOutputPer1M) /
-      TOKENS_PER_MILLION,
+    subsetAwareCostUsd(
+      tokens.input,
+      tokens.cachedInput,
+      tokens.output,
+      tokens.reasoningOutput,
+      pricing,
+    ),
   )
 
 /** Roll up filtered entries. When `pricing` is set, includes an estCostUsd. */

@@ -72,6 +72,8 @@ Claude Code ──(MCP stdio)──▶ codex-mcp ──spawns──▶ codex exe
 | **4 · Execute** | Codex | Implement one task at a time — or several in parallel (see below). |
 | **5 · Review** | Claude + Codex | Dual-review each task and the final pass via Claude + required `codex_review`; compare findings, loop fixes back, and collect non-blocking improvements for a user decision gate. |
 
+The bundled `session-report` skill writes a per-session bundle to `.codex-flow/reports/<YYYYMMDD-HHMMSS>/` with planning, allocation, task, cost, and summary reports plus explicit `claude` / `codex` / `both` PIC attribution.
+
 The server spawns `codex exec` non-interactively, parses its JSONL event stream, and returns a
 structured result (`sessionId`, `agentMessage`, `fileChanges`, `commands`, token `usage`, `diff`).
 
@@ -183,7 +185,7 @@ result) · `workspaceDiff.ts` (git diff) · `terminal.ts` / `liveView.ts` / `pro
 `progressNotifier.ts` (live progress).
 
 **Skill & workflow scripts** (`scripts/`): `sync-awesome-skills.mjs` · `build-skills-index.mjs` ·
-`skill-match.mjs` · `skill-eval.mjs` · `task-waves.mjs` · `tail-progress.mjs`.
+`skill-match.mjs` · `skill-eval.mjs` · `task-waves.mjs` · `session-cost.mjs` · `tail-progress.mjs`.
 </details>
 
 ---

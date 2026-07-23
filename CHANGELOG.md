@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Per-session report bundles** — every codex-flow run writes `.codex-flow/reports/<YYYYMMDD-HHMMSS>/` with `planning.md`, `allocation.md`, `tasks.md`, `cost.md`, and `SUMMARY.md`, each carrying explicit PIC attribution (`claude`, `codex`, or `both`).
+- **Self-contained `scripts/session-cost.mjs`** — aggregates Codex cost from `metrics.jsonl`; requires `--since`, supports `--until`, `--cwd`, `--log`, and `--json`, and uses `CODEX_MCP_PRICING` when configured.
+- **`session-report` plugin skill and command hooks** — centralizes report templates and writes them at the Phase 0/2/3/5 gates.
+
 ## [0.11.0] - 2026-07-23
 
 ### Added

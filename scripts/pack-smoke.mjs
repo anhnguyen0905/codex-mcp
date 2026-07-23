@@ -28,6 +28,7 @@ const INITIALIZE_TIMEOUT_MS = 5000
 const EXPECTED_SERVER_NAME = 'codex-mcp'
 // Relative paths inside npm script commands, e.g. "node scripts/doctor.mjs" or "node dist/index.js".
 const SCRIPT_PATH_PATTERN = /(?:^|\s)((?:\.\/)?(?:scripts|dist)\/[\w./-]+\.(?:mjs|cjs|js))(?=\s|$)/g
+const COMMAND_SCRIPT_PATTERN = /\$\{CLAUDE_PLUGIN_ROOT\}\/(scripts\/[\w.-]+\.mjs)\b/g
 
 class SmokeFailure extends Error {
   constructor(message, detail) {
@@ -95,6 +96,22 @@ function collectScriptReferencedPaths(scripts) {
     }
   }
   return [...paths]
+}
+
+function verifyCommandScriptAllowlist() {
+  const manifest = readJson(join(REPO_ROOT, 'package.json'))
+  const command = readFileSync(join(REPO_ROOT, 'commands', 'codex-flow.md'), 'utf8')
+  const referencedPaths = [...new Set([...command.matchAll(COMMAND_SCRIPT_PATTERN)].map((match) => match[1]))]
+  assertThat(referencedPaths.length > 0, 'commands/codex-flow.md contains no plugin script references')
+  assertThat(Array.isArray(manifest.files), 'package.json has no files allowlist')
+  for (const relPath of referencedPaths) {
+    assertThat(
+      manifest.files.includes(relPath),
+      `commands/codex-flow.md references ${relPath} but package.json files does not include it`,
+      manifest.files
+    )
+  }
+  return referencedPaths
 }
 
 function verifyInstalledTree(installedRoot) {
@@ -185,6 +202,8 @@ async function main() {
     existsSync(join(REPO_ROOT, 'dist', 'index.js')),
     'dist/index.js not found — run `npm run build` before pack-smoke'
   )
+  const commandScriptPaths = verifyCommandScriptAllowlist()
+  console.log(`command script allowlist verified (${commandScriptPaths.join(', ')})`)
 
   const packDir = mkdtempSync(join(tmpdir(), 'codex-mcp-pack-'))
   const extractDir = mkdtempSync(join(tmpdir(), 'codex-mcp-extract-'))

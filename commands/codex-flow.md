@@ -43,6 +43,10 @@ Then baseline the workspace (in the project root):
    **known-red baseline** — these are not Codex's fault, and Phase 5 compares against this list
    instead of blaming Codex for old breakage. If the suite can't run at all, tell the user and
    agree on how results will be verified before continuing.
+4. On a fresh run, create `.codex-flow/reports/<YYYYMMDD-HHMMSS>/` using the session-start
+   local-time timestamp. On resume, reuse the report dir recorded under `## Session report` in the
+   existing PLAN.md, creating it only if missing. This is the single session report dir that later
+   phases write into per `codex-flow:session-report`.
 
 ## Phase 1 — Interview (Claude)
 
@@ -57,6 +61,7 @@ or ambiguous feature warrants the full elicitation. When in doubt, ask.
 ## Phase 2 — Plan & Architecture (Claude)
 
 **Load skills first**: `codex-flow:plan-research-first` (search existing solutions before designing), `codex-flow:plan-architecture` (convention discovery, option trade-off analysis, PLAN.md structure), and `codex-flow:skill-selection` (pick domain skills from the local skill index).
+Also load `codex-flow:session-report` (report templates and PIC rules).
 
 1. Explore the codebase to understand relevant architecture and conventions.
 2. **Select domain skills from the local index** per `codex-flow:skill-selection`: derive search
@@ -88,8 +93,12 @@ or ambiguous feature warrants the full elicitation. When in doubt, ask.
    - **Known-red baseline**: pre-existing test failures from Phase 0
    - **Out of scope**: things Codex must NOT do
    - **Acceptance criteria**: how the result will be verified (tests to pass, behaviors to check)
+   - **Session report**: path of the report dir and exact session-start ISO 8601 value
    - **Decision log**: empty, append-only — filled during execution
 4. Show the plan to the user and get approval before continuing.
+5. After approval, write `planning.md` to the report dir per `codex-flow:session-report`. Under a
+   `## Session report` heading in PLAN.md, record `- Report dir: <report dir>` and
+   `- Session start: <ISO 8601>`.
 
 ## Phase 3 — Backlog (Claude)
 
@@ -132,6 +141,8 @@ Rules for slicing (see `codex-flow:plan-backlog` for the full sizing guidance):
 Show the backlog to the user and get approval before executing. At the same time ask once:
 **checkpoint commits after each passed task — yes/no?** (recommended yes on multi-task backlogs;
 gives per-task rollback points).
+After backlog approval, write `allocation.md` (task → PIC table) to the report dir per
+`codex-flow:session-report`.
 
 ## Phase 4 — Execution (Codex)
 
@@ -175,6 +186,7 @@ For each task in dependency order (sequential mode):
 ## Phase 5 — Review (Claude, per task + final)
 
 **Load skills first**: `codex-flow:review-conformance` (requirement/plan/structure conformance — check FIRST), `codex-flow:review-quality` (correctness hazards, silent failures, test quality), `codex-flow:review-security` (mandatory when the diff touches auth, input, queries, files, or secrets), `codex-flow:review-feedback` (severity levels + codex_continue format), and `codex-flow:review-dual` (dual Codex+Claude review, comparison protocol, improvements ledger + decision gate).
+Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews.md`, `cost.md`, and `SUMMARY.md`).
 
 0. Re-read `.codex-flow/PLAN.md` and this task's entry in `.codex-flow/TASKS.md` before reviewing — treat the files on disk as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline, not session memory (which may have been compacted across a long backlog).
 1. Inspect what Codex did: use the `diff` field returned by the tool (git status + patch), and read changed files where the patch is not enough.
@@ -200,6 +212,11 @@ For each task in dependency order (sequential mode):
    requirement) rather than Codex mis-implementing it, do NOT burn review rounds — go back to
    Phase 2, amend PLAN.md with user approval, re-slice the affected tasks, then resume.
 7. **If clean**: mark the task done, move to the next task.
+   Also append this task's section to the report dir's `tasks.md` per
+   `codex-flow:session-report`; when a task is dropped or abandoned, record it with
+   `Result: dropped` at the moment of that decision.
+   For a passed task, at the same time append its dual-review record to the report dir's
+   `reviews.md` per `codex-flow:session-report`.
 8. **After the last task**: do a whole-feature dual review — Claude's pass PLUS a required
    `mcp__codex__codex_review`, passing the Phase-0 `baselineRef` so the review covers
    `baseline..HEAD`, including checkpoint/merge commits, plus current uncommitted changes. If
@@ -213,6 +230,8 @@ For each task in dependency order (sequential mode):
    tests). Then summarize the delivered change, remaining risks, and suggest a commit message. If
    per-task checkpoint commits were made, offer to squash the `wip(codex-flow)` commits into one
    clean commit (or keep them — user's call). Do not commit or squash unless the user asks.
+   After the whole-feature dual review resolves, record its final comparison in the report dir's
+   `reviews.md` per `codex-flow:session-report`.
 9. **Improvement decision gate**: consider only unchecked entries without an
    `(approved: T<n>)` marker in `.codex-flow/IMPROVEMENTS.md` as pending. If the ledger is missing
    or has no unchecked pending entries, skip AskUserQuestion and note "no improvements" in the
@@ -223,6 +242,19 @@ For each task in dependency order (sequential mode):
    Execute those tasks through the normal Phase 4 → Phase 5 loop, but do not re-trigger this
    decision gate for improvement tasks spawned by the gate. Record declined items in
    `.codex-flow/PLAN.md`'s Decision log and check off their ledger lines with `(declined)`.
+   After the improvement decision gate has fully resolved — all approved improvement tasks have
+   been executed and reviewed, or no improvements are pending — and just before delivering the
+   final summary, generate `cost.md` from the project root. Read `<session-start ISO>` from PLAN.md's
+   recorded `- Session start: <ISO 8601>` line, falling back to the report-dir timestamp interpreted
+   in local time, and run:
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/session-cost.mjs" --since "<session-start ISO>" --cwd "$PWD"`
+   If `${CLAUDE_PLUGIN_ROOT}` is unset in a standalone install, locate `session-cost.mjs` in the
+   codex-mcp package or repository install; if unavailable, still write `cost.md` with the Claude
+   qualitative section, mark measured Codex cost `unavailable`, never fabricate numbers, and never
+   embed raw stderr.
+   When the helper is available, embed its output; always include the Claude qualitative section.
+   Generate `SUMMARY.md` in the report dir per `codex-flow:session-report`. Mention both reports in
+   the final delivery summary.
 10. **Retro**: per `codex-flow:skill-selection` Step 8, if the flow produced reusable domain
    knowledge not covered by any indexed skill, offer to save it as a new skill in the local
    library and rebuild the index.
