@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Dual review in Phase 5** — every task and the final pass require a Codex-side review via `codex_review`; the per-task focus block is scoped to the task's `Files:`, and the final pass supplies `baselineRef`.
+- **Evidence-based comparison protocol** — classifies findings as agreed, unique-to-one, or conflicting, with user arbitration only for unverifiable CRITICAL/HIGH findings or mutually exclusive fixes.
+- **Non-blocking improvements ledger** — appends `IMP-n` suggestions to `.codex-flow/IMPROVEMENTS.md`; the user decision gate turns approved improvements into new `TASKS.md` tasks.
+- **`review-dual` skill** — defines the dual-review workflow.
+
 ## [0.10.0] - 2026-07-21
 
 Production-hardening release: every P0/P1/P2 finding from the 2026-07-21 full pipeline review is closed (see `docs/full-pipeline-review-2026-07-21.md` and `docs/execution-plan-2026-07-21.md`).

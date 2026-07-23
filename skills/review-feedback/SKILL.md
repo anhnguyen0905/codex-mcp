@@ -28,6 +28,13 @@ Every `codex_execute`/`codex_continue`/`codex_review` result carries `schemaVers
 | MEDIUM | Maintainability concern, convention violation | Fix if the round is cheap; else note |
 | LOW | Style/naming preference | Mention once; never spend a round on it alone |
 
+## Improvements are non-blocking
+
+Treat `IMP-n` items from `review-dual` as suggestions, not findings.
+Never let them gate task completion or receive their own `codex_continue` round.
+Append per-task items to `.codex-flow/IMPROVEMENTS.md`.
+Execute them only after user approval at the `review-dual` improvement decision gate.
+
 ## Feedback format for `codex_continue`
 
 Numbered, concrete, self-contained — Codex sees only what you send, not your reasoning:

@@ -3,7 +3,7 @@ description: "6-phase workflow: preflight → Claude interviews → plans archit
 argument-hint: "<feature or task description>"
 ---
 
-# Codex Flow — Plan with Claude, Execute with Codex, Review with Claude
+# Codex Flow — Plan with Claude, Execute with Codex, Review with Claude + Codex
 
 Task: $ARGUMENTS
 
@@ -159,20 +159,56 @@ For each task in dependency order (sequential mode):
 
 ## Phase 5 — Review (Claude, per task + final)
 
-**Load skills first**: `codex-flow:review-conformance` (requirement/plan/structure conformance — check FIRST), `codex-flow:review-quality` (correctness hazards, silent failures, test quality), `codex-flow:review-security` (mandatory when the diff touches auth, input, queries, files, or secrets), and `codex-flow:review-feedback` (severity levels + codex_continue format).
+**Load skills first**: `codex-flow:review-conformance` (requirement/plan/structure conformance — check FIRST), `codex-flow:review-quality` (correctness hazards, silent failures, test quality), `codex-flow:review-security` (mandatory when the diff touches auth, input, queries, files, or secrets), `codex-flow:review-feedback` (severity levels + codex_continue format), and `codex-flow:review-dual` (dual Codex+Claude review, comparison protocol, improvements ledger + decision gate).
 
 0. Re-read `.codex-flow/PLAN.md` and this task's entry in `.codex-flow/TASKS.md` before reviewing — treat the files on disk as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline, not session memory (which may have been compacted across a long backlog).
 1. Inspect what Codex did: use the `diff` field returned by the tool (git status + patch), and read changed files where the patch is not enough.
 2. Review in order: conformance → quality → security, per the loaded skills.
 3. Run the project's tests/build yourself to verify — Codex's claim is input, not evidence. Compare
    failures against the **known-red baseline** in PLAN.md: only new failures count against the task.
-4. **If issues found**: send findings via `mcp__codex__codex_continue` using the review-feedback format (numbered, severity-tagged, file:line, expected vs observed). Then re-review. Repeat up to 3 rounds per task.
-5. **Plan drift**: if a finding traces to the PLAN being wrong (wrong architecture, missed
+4. **Run the Codex-side review**: call `mcp__codex__codex_review` for THIS task with the focus
+   block template from `codex-flow:review-dual`, filling in the task id/title, acceptance criteria,
+   and the task's `Files:` list. Without checkpoint commits, the uncommitted diff is cumulative, so
+   the focus block restricts the review to this task's scope. Compare Claude's and Codex's findings
+   per the review-dual comparison protocol: bucket agreed / unique-to-one / conflicting, and verify
+   every finding with evidence. Use AskUserQuestion only for an unverifiable CRITICAL/HIGH finding
+   or two mutually exclusive valid fixes. Append non-blocking suggestions from BOTH reviews to
+   `.codex-flow/IMPROVEMENTS.md` per the review-dual skill; they never block the task. If
+   `mcp__codex__codex_review` fails, times out, or returns status `partial`, fall back to Claude-only
+   review for this task, tell the user, and do not auto-retry because of quota.
+5. **If issues found**: send verified CRITICAL/HIGH findings from EITHER review to the Phase-4
+   IMPLEMENTATION `sessionId` saved in Phase 4 step 3 via `mcp__codex__codex_continue`, never to
+   the fresh reviewer session created by `mcp__codex__codex_review`. Use the review-feedback format
+   (numbered, severity-tagged, file:line, expected vs observed). Then re-review. Repeat up to 3
+   rounds per task.
+6. **Plan drift**: if a finding traces to the PLAN being wrong (wrong architecture, missed
    requirement) rather than Codex mis-implementing it, do NOT burn review rounds — go back to
    Phase 2, amend PLAN.md with user approval, re-slice the affected tasks, then resume.
-6. **If clean**: mark the task done, move to the next task.
-7. **After the last task**: do a whole-feature review pass (optionally `mcp__codex__codex_review` for a second opinion — pass the Phase-0 baseline ref as `baselineRef` so the review covers `baseline..HEAD`, including checkpoint/merge commits, plus current uncommitted changes), run the full test suite, AND verify the feature end-to-end by actually exercising the changed behavior (run the app/flow, not only unit tests). Then summarize the delivered change, remaining risks, and suggest a commit message. If per-task checkpoint commits were made, offer to squash the `wip(codex-flow)` commits into one clean commit (or keep them — user's call). Do not commit or squash unless the user asks.
-8. **Retro**: per `codex-flow:skill-selection` Step 8, if the flow produced reusable domain
+7. **If clean**: mark the task done, move to the next task.
+8. **After the last task**: do a whole-feature dual review — Claude's pass PLUS a required
+   `mcp__codex__codex_review`, passing the Phase-0 `baselineRef` so the review covers
+   `baseline..HEAD`, including checkpoint/merge commits, plus current uncommitted changes. If
+   `mcp__codex__codex_review` fails, times out, or returns status `partial`, fall back to Claude-only
+   review, tell the user, and do not auto-retry because of quota. Compare the final findings per the
+   review-dual comparison protocol, verify every finding, and append non-blocking suggestions from
+   BOTH reviews to `.codex-flow/IMPROVEMENTS.md`. Route verified CRITICAL/HIGH findings to the
+   relevant Phase-4 IMPLEMENTATION `sessionId` through the same `mcp__codex__codex_continue`
+   fix/re-review loop; repeat up to 3 rounds before delivery. Run the full test suite, AND verify the
+   feature end-to-end by actually exercising the changed behavior (run the app/flow, not only unit
+   tests). Then summarize the delivered change, remaining risks, and suggest a commit message. If
+   per-task checkpoint commits were made, offer to squash the `wip(codex-flow)` commits into one
+   clean commit (or keep them — user's call). Do not commit or squash unless the user asks.
+9. **Improvement decision gate**: consider only unchecked entries without an
+   `(approved: T<n>)` marker in `.codex-flow/IMPROVEMENTS.md` as pending. If the ledger is missing
+   or has no unchecked pending entries, skip AskUserQuestion and note "no improvements" in the
+   delivery summary. Otherwise compile those entries into a summary + proposed execution plan,
+   grouped and effort-estimated per the review-dual skill, and present it via AskUserQuestion.
+   Slice approved items into new tasks appended to `.codex-flow/TASKS.md`; when each task is
+   created, mark its ledger line `(approved: T<n>)`, and check it off when the task passes review.
+   Execute those tasks through the normal Phase 4 → Phase 5 loop, but do not re-trigger this
+   decision gate for improvement tasks spawned by the gate. Record declined items in
+   `.codex-flow/PLAN.md`'s Decision log and check off their ledger lines with `(declined)`.
+10. **Retro**: per `codex-flow:skill-selection` Step 8, if the flow produced reusable domain
    knowledge not covered by any indexed skill, offer to save it as a new skill in the local
    library and rebuild the index.
 

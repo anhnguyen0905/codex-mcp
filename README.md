@@ -5,8 +5,9 @@
 **Plan with Claude · Execute with OpenAI Codex · Review with Claude**
 
 A Claude Code plugin and MCP server that runs a disciplined **plan → execute → review** loop:
-Claude interviews you and designs the plan, Codex writes the code, Claude reviews the diff and
-sends fixes back — all from a single command.
+Claude interviews you and designs the plan, Codex writes the code, then Claude reviews each task
+and the final pass alongside a required Codex `codex_review`; findings are compared, fixes go back,
+and non-blocking improvements wait for your decision — all from a single command.
 
 [![CI](https://github.com/anhnguyen0905/codex-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/anhnguyen0905/codex-mcp/actions/workflows/ci.yml)
 &nbsp;·&nbsp; macOS · Windows · Linux &nbsp;·&nbsp; Node ≥ 20 &nbsp;·&nbsp; MIT
@@ -69,7 +70,7 @@ Claude Code ──(MCP stdio)──▶ codex-mcp ──spawns──▶ codex exe
 | **2 · Plan** | Claude | Explore the codebase, select relevant skills, write `.codex-flow/PLAN.md`. |
 | **3 · Backlog** | Claude | Decompose into dependency-ordered tasks in `.codex-flow/TASKS.md`. |
 | **4 · Execute** | Codex | Implement one task at a time — or several in parallel (see below). |
-| **5 · Review** | Claude | Review each diff (conformance → quality → security); loop fixes back into the Codex session. |
+| **5 · Review** | Claude + Codex | Dual-review each task and the final pass via Claude + required `codex_review`; compare findings, loop fixes back, and collect non-blocking improvements for a user decision gate. |
 
 The server spawns `codex exec` non-interactively, parses its JSONL event stream, and returns a
 structured result (`sessionId`, `agentMessage`, `fileChanges`, `commands`, token `usage`, `diff`).
