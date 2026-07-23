@@ -83,7 +83,7 @@ Before loading anything new, list the skills already present in the session (per
   (`<library>/quarantine/…`, where `--clone` puts repos) are unindexed by design: promote one by
   vetting it as above, moving it to `<library>/remote/…`, running `--vet` on the new path, and
   rebuilding the index. URL pointers get cloned into quarantine first, then promoted the same way.
-- Record the chosen skills in PLAN.md under **Skills used** (name, path, what it informs).
+- Record the chosen skills in PLAN.md under **Skills plan** as *Skills to use* (name, path, what it informs).
 
 ## Step 6 — Embed for Codex (per task, stateless)
 
@@ -104,8 +104,10 @@ Only when the plan genuinely depends on a domain no indexed skill covers:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-awesome-skills.mjs" --clone` — clones land in
    `<library>/quarantine/`).
 2. Found → vet and promote out of quarantine (Step 5), rebuild the index, load it.
-3. Not found → write the needed rules yourself into the plan; promote them to a new skill at the
-   retro step (Step 8).
+3. Not found → record the planned skill under PLAN.md **Skills plan** → *Skills to create*, with
+   its working name, gap, promotion timing, and needed rules inline so Phase 4 can embed them.
+   Promote those rules into a reusable `SKILL.md` before execution when planned, or at the retro
+   step (Step 8).
 
 ## Step 8 — Register back (retro, after final review)
 

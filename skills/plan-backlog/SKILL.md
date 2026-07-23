@@ -14,7 +14,7 @@ Decompose the approved plan into `.codex-flow/TASKS.md`. Each task is one Codex 
 - Depends on: — | T<n>
 - Files: <create/modify list>
 - Steps: <concrete, file-level steps>
-- Skills: <domain skills from PLAN.md "Skills used" relevant to THIS task, or — >
+- Skills: <relevant skills from PLAN.md "Skills plan" (*Skills to use* + before-execution created skills), or — >
 - Acceptance: <verifiable criteria for THIS task alone>
 - Status: pending
 ```
@@ -55,8 +55,9 @@ A task is the unit Codex builds in one run and Claude verifies in one pass — s
   colliding. Tasks that must share a file are serialized; order them and say so.
 - **Dependency-ordered**: a task may only depend on earlier tasks; no cycles.
 - **Tests live inside the task** that adds the behavior — never a trailing "write tests" task.
-- **Map skills once, here**: fill each task's `Skills:` field from PLAN.md's "Skills used" so Phase 4
-  embeds a consistent, user-reviewable set per task instead of re-guessing each run (— if none apply).
+- **Map skills once, here**: fill each task's `Skills:` field from PLAN.md's "Skills plan"
+  (*Skills to use* + any before-execution created skills) so Phase 4 embeds a consistent,
+  user-reviewable set per task instead of re-guessing each run (— if none apply).
 
 ## Sanity checks before showing the user
 

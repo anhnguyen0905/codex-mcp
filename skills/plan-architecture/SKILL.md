@@ -53,7 +53,9 @@ Use the full structure the flow executes against (all sections — the reviewer 
 ## Component → files    — each component mapped to the exact files it creates/modifies (feeds the backlog)
 ## Risk & blast radius  — sensitive areas touched (auth, data, migrations, config), what could
                           break beyond the target files, and the rollback point (Phase 0 baseline ref)
-## Skills used         — domain skills selected via skill-selection (name, path, what each informs)
+## Skills plan
+- *Skills to use*     — domain skills selected via skill-selection (name, path, what each informs); write `*Skills to use*: —` when no index match
+- *Skills to create*  — planned new skills (working name, gap filled, rules inline, before-execution vs retro); write `*Skills to create*: —` when no gaps
 ## Known-red baseline   — pre-existing test failures recorded in Phase 0 (so review blames only new ones)
 ## Out of scope        — things Codex must NOT do or touch
 ## Acceptance criteria — verifiable checks for the whole feature

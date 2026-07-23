@@ -62,7 +62,12 @@ or ambiguous feature warrants the full elicitation. When in doubt, ask.
 2. **Select domain skills from the local index** per `codex-flow:skill-selection`: derive search
    terms from the requirements + stack, grep the index, load every relevant skill that fits a
    ~3%-of-context budget (≈6000 tokens; no fixed count) and concretely changes the plan or the
-   Codex prompts. Do NOT install or blind-load whole collections; 0 matches is fine.
+   Codex prompts. Do NOT install or blind-load whole collections; 0 matches is fine. Also identify
+   **skill gaps** — domains the plan depends on that no indexed skill covers. For each gap, follow
+   `codex-flow:skill-selection` Step 7: search for an existing skill first; if none is found, write
+   the needed rules immediately into PLAN.md's *Skills to create* entry so Phase 4 can embed them.
+   Decide separately whether those rules must be promoted into a reusable `SKILL.md` before
+   execution because the plan depends on it or can remain inline until the Step 8 retro.
 3. Write `.codex-flow/PLAN.md` in the project root containing:
    - **Context**: what the project is, conventions Codex must follow
    - **Objective**: the confirmed goal from Phase 1
@@ -74,7 +79,12 @@ or ambiguous feature warrants the full elicitation. When in doubt, ask.
      backlog slices along this, and disjoint file sets are what let tasks run in parallel
    - **Risk & blast radius**: sensitive areas the change touches (auth, data, migrations, config),
      what could break beyond the target files, and the rollback point (baseline ref from Phase 0)
-   - **Skills used**: the domain skills selected in step 2 (name, path, what each informs)
+   - **Skills plan**:
+     - *Skills to use*: the domain skills selected in step 2 (name, path, what each informs; write
+       `*Skills to use*: —` when no index match)
+     - *Skills to create*: planned new skills for uncovered gaps (working name, the gap each fills,
+       the needed rules inline, and whether they are promoted into a reusable `SKILL.md` before
+       execution or at the retro; write `*Skills to create*: —` when no gaps)
    - **Known-red baseline**: pre-existing test failures from Phase 0
    - **Out of scope**: things Codex must NOT do
    - **Acceptance criteria**: how the result will be verified (tests to pass, behaviors to check)
@@ -110,8 +120,13 @@ Rules for slicing (see `codex-flow:plan-backlog` for the full sizing guidance):
   concrete probe), not just prose.
 - **File-disjoint where independent** so `task-waves` can parallelize; tasks sharing a file serialize.
 - Each task independently verifiable; order by dependency (a task may only depend on earlier tasks).
-- Decide the skill→task mapping ONCE here (the `Skills:` field), from the skills selected in
-  Phase 2 — so Phase 4 embeds a consistent, user-reviewable set per task instead of re-guessing.
+- Decide the skill→task mapping ONCE here (the `Skills:` field), from PLAN.md's *Skills to use*
+  plus any *Skills to create* marked before execution — so Phase 4 embeds a consistent,
+  user-reviewable set per task instead of re-guessing. Before Phase 4, create every
+  before-execution skill by writing its `SKILL.md` and rebuilding the index per
+  `codex-flow:skill-selection` Steps 7–8, then list it in each relevant task's `Skills:` field.
+  Keep retro-timed entries as PLAN.md rule blocks and embed those rules directly in the relevant
+  task prompt.
 - Also mirror the tasks with TaskCreate so the user sees live progress.
 
 Show the backlog to the user and get approval before executing. At the same time ask once:
