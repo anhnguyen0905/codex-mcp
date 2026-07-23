@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.11.0] - 2026-07-23
 
 ### Added
 
@@ -11,6 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - **Evidence-based comparison protocol** — classifies findings as agreed, unique-to-one, or conflicting, with user arbitration only for unverifiable CRITICAL/HIGH findings or mutually exclusive fixes.
 - **Non-blocking improvements ledger** — appends `IMP-n` suggestions to `.codex-flow/IMPROVEMENTS.md`; the user decision gate turns approved improvements into new `TASKS.md` tasks.
 - **`review-dual` skill** — defines the dual-review workflow.
+- **Skills plan in Phase 2** — PLAN.md now records both *Skills to use* (selected from the index) and *Skills to create* (gaps, with the needed rules inline so Phase 4 can embed them; before-execution skills get a real `SKILL.md` + index rebuild before Phase 4, retro-timed ones stay inline). Explicit `—` empty states keep the two-part structure present.
 
 ## [0.10.0] - 2026-07-21
 
