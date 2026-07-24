@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'vitest'
 import { createIncrementalParser, parseEvents } from '../src/eventParser.js'
+import { deriveRunStatus } from '../src/runStatus.js'
 
 const line = (value: unknown): string => JSON.stringify(value)
+const BENIGN_NOTICE =
+  '`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.'
 
 describe('parseEvents', () => {
   test('extracts session id from thread.started event', () => {
@@ -185,21 +188,75 @@ describe('parseEvents', () => {
 })
 
 describe('parseEvents warnings plumbing', () => {
-  test('exposes an empty warnings array (no protocol-level discriminator exists in 0.144.6)', () => {
+  test('leaves warnings empty when the stream has no error notices', () => {
     const result = parseEvents(line({ type: 'turn.completed', usage: { input_tokens: 1 } }))
 
     expect(result.warnings).toEqual([])
   })
 
-  test('keeps every error item in errors[] (fail-closed: never reclassified as warning)', () => {
+  test('classifies an allowlisted error item as a warning so the completed run succeeds', () => {
+    // Arrange
     const jsonl = [
-      line({ type: 'item.completed', item: { type: 'error', message: 'MCP client for `x` failed to start' } }),
+      line({ type: 'item.completed', item: { type: 'error', message: BENIGN_NOTICE } }),
       line({ type: 'turn.completed', usage: { input_tokens: 1 } }),
     ].join('\n')
 
+    // Act
+    const parsed = parseEvents(jsonl)
+    const status = deriveRunStatus(
+      { exitCode: 0, timedOut: false, aborted: false },
+      parsed,
+    )
+
+    // Assert
+    expect(parsed.errors).toEqual([])
+    expect(parsed.warnings).toEqual([BENIGN_NOTICE])
+    expect(status).toBe('success')
+  })
+
+  test('classifies an allowlisted turn failure without backticks as a warning', () => {
+    const notice =
+      '--dangerously-bypass-hook-trust is enabled. Enabled hooks may run without review for this invocation'
+    const jsonl = line({ type: 'turn.failed', error: { message: notice } })
+
     const result = parseEvents(jsonl)
 
-    expect(result.errors).toEqual(['MCP client for `x` failed to start'])
+    expect(result.errors).toEqual([])
+    expect(result.warnings).toEqual([notice])
+  })
+
+  test('keeps a prefix-collision error fail-closed and derives failed status', () => {
+    // Arrange
+    const message =
+      '--dangerously-bypass-hook-trust is enabled but the hook trust setup failed'
+    const jsonl = [
+      line({ type: 'item.completed', item: { type: 'error', message } }),
+      line({ type: 'turn.completed', usage: { input_tokens: 1 } }),
+    ].join('\n')
+
+    // Act
+    const parsed = parseEvents(jsonl)
+    const status = deriveRunStatus(
+      { exitCode: 0, timedOut: false, aborted: false },
+      parsed,
+    )
+
+    // Assert
+    expect(parsed.errors).toEqual([message])
+    expect(parsed.warnings).toEqual([])
+    expect(status).toBe('failed')
+  })
+
+  test('keeps non-allowlisted error messages fail-closed in errors', () => {
+    const message = 'MCP client for `x` failed to start'
+    const jsonl = line({
+      type: 'item.completed',
+      item: { type: 'error', message },
+    })
+
+    const result = parseEvents(jsonl)
+
+    expect(result.errors).toEqual([message])
     expect(result.warnings).toEqual([])
   })
 })

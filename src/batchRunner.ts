@@ -1,5 +1,6 @@
 import { RESULT_SCHEMA_VERSION, type RunStatus } from './runStatus.js'
-import type { CodexResult, SandboxMode } from './types.js'
+import type { ResumeReason } from './retryPolicy.js'
+import type { CodexResult, ReasoningEffort, SandboxMode } from './types.js'
 import type { RunAttribution, WorkspaceDiff } from './workspaceDiff.js'
 
 export interface BatchTaskSpec {
@@ -7,6 +8,7 @@ export interface BatchTaskSpec {
   prompt: string
   sandbox?: SandboxMode
   model?: string
+  reasoningEffort?: ReasoningEffort
   timeoutMs?: number
 }
 
@@ -20,6 +22,8 @@ export interface BatchTaskResult {
   parsed: CodexResult
   /** Server-generated UUID for this task's run. Absent when the task never started. */
   runId?: string
+  attempts?: number
+  resumeReasons?: readonly ResumeReason[]
   diff: WorkspaceDiff | null
   /** Snapshot-based attribution of workspace changes (changedByRun vs preExisting). */
   attribution?: RunAttribution | null
@@ -68,6 +72,8 @@ const skippedResult = (task: BatchTaskSpec, taskIndex: number, error: string): B
   schemaVersion: RESULT_SCHEMA_VERSION,
   status: 'aborted',
   parsed: emptyParsed(),
+  attempts: 0,
+  resumeReasons: [],
   diff: null,
   exitCode: null,
   timedOut: false,

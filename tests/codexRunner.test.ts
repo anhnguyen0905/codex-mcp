@@ -1,6 +1,15 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, test, vi } from 'vitest'
-import { RAW_STDOUT_TAIL_BYTES, resolveCodexBinary, runCodex } from '../src/codexRunner.js'
+import {
+  DEFAULT_TIMEOUT_MS,
+  RAW_STDOUT_TAIL_BYTES,
+  resolveCodexBinary,
+  runCodex,
+} from '../src/codexRunner.js'
+
+test('uses a 60-minute default timeout', () => {
+  expect(DEFAULT_TIMEOUT_MS).toBe(60 * 60 * 1000)
+})
 
 describe('resolveCodexBinary', () => {
   test('uses plain "codex" on posix platforms', () => {

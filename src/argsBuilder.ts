@@ -1,5 +1,5 @@
 import { isAbsolute } from 'node:path'
-import type { ContinueInput, ExecuteInput } from './types.js'
+import type { ContinueInput, ExecuteInput, ReasoningEffort } from './types.js'
 
 /** Upper bound for a prompt delivered over stdin — protects the child from unbounded input. */
 export const MAX_PROMPT_BYTES = 5 * 1024 * 1024
@@ -44,6 +44,11 @@ const modelArgs = (model?: string): readonly string[] => {
   return ['--model', model]
 }
 
+const reasoningArgs = (effort?: ReasoningEffort): readonly string[] => {
+  if (!effort) return []
+  return ['-c', `model_reasoning_effort="${effort}"`]
+}
+
 /** Shared leading args for `codex exec` — everything except the trailing `--` + prompt positional. */
 const executeBaseArgs = (input: ExecuteInput): readonly string[] => {
   assertPrompt(input.prompt)
@@ -57,6 +62,7 @@ const executeBaseArgs = (input: ExecuteInput): readonly string[] => {
     '--sandbox',
     input.sandbox,
     ...modelArgs(input.model),
+    ...reasoningArgs(input.reasoningEffort),
   ]
 }
 
@@ -82,6 +88,7 @@ const continueBaseArgs = (input: ContinueInput): readonly string[] => {
     '--config',
     `sandbox_mode="${input.sandbox}"`,
     ...modelArgs(input.model),
+    ...reasoningArgs(input.reasoningEffort),
   ]
 }
 

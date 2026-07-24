@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest'
 import { formatEvent, LIVE_RUN_FINISHED_TYPE } from '../src/progressFormatter.js'
 
 const line = (value: unknown): string => JSON.stringify(value)
+const BENIGN_NOTICE =
+  '`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.'
 
 describe('formatEvent', () => {
   test('formats thread.started with session id', () => {
@@ -37,6 +39,15 @@ describe('formatEvent', () => {
     expect(out).toContain('boom')
   })
 
+  test('formats an allowlisted error item as a warning', () => {
+    const out = formatEvent(
+      line({ type: 'item.completed', item: { type: 'error', message: BENIGN_NOTICE } }),
+    )
+
+    expect(out).toContain(`⚠ ${BENIGN_NOTICE}`)
+    expect(out).not.toContain('✗')
+  })
+
   test('formats turn.completed with token usage', () => {
     const out = formatEvent(
       line({ type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 20 } }),
@@ -48,6 +59,16 @@ describe('formatEvent', () => {
   test('formats turn.failed with error message', () => {
     const out = formatEvent(line({ type: 'turn.failed', error: { message: 'model died' } }))
     expect(out).toContain('model died')
+  })
+
+  test('formats an allowlisted turn.failed notice without a failure marker', () => {
+    const out = formatEvent(
+      line({ type: 'turn.failed', error: { message: BENIGN_NOTICE } }),
+    )
+
+    expect(out).toContain(`⚠ ${BENIGN_NOTICE}`)
+    expect(out).not.toContain('turn failed')
+    expect(out).not.toContain('✗')
   })
 
   test('returns null for non-JSON lines', () => {

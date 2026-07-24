@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] - 2026-07-24
+
+### Added
+
+- **Bounded server-side auto-resume** — `retryPolicy` + `runRecovery` resume the same Codex session after transient turn failures (at most 2 resumes), timeouts (at most 1), or `partial` results caused by a missing completion marker or parse errors (at most 1, reported as `no-completion-marker`), with a 2 s then 8 s backoff (8 s reused thereafter). Set `CODEX_MCP_AUTO_RESUME=0` to opt out.
+- **Recovery metadata** — final run payloads report `attempts` and ordered `resumeReasons`; `codex_batch` exposes the same fields on every per-task result.
+- **Reasoning-effort control** — `codex_execute`, `codex_continue`, `codex_review`, and each `codex_batch` task accept `reasoningEffort: minimal | low | medium | high | xhigh`, mapped to `-c model_reasoning_effort="<value>"`.
+
+### Changed
+
+- Default execution timeout increased from 30 to 60 minutes; `timeoutMs` remains capped at 2 hours.
+- codex-flow now defaults to parallel execution when `task-waves` reports width > 1, proceeds automatically at widths ≤3, and asks before running a wave wider than 3.
+- Phase 3 emphasizes file-disjoint task slicing, and Phase 4 maps `reasoningEffort` to task complexity (`low` for mechanical work, the CLI default for standard work, and `high` for architectural, cross-cutting, or subtle logic).
+
 ## [0.12.0] - 2026-07-24
 
 ### Added

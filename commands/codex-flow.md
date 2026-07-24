@@ -127,7 +127,10 @@ Rules for slicing (see `codex-flow:plan-backlog` for the full sizing guidance):
   PLAN.md are the earliest tasks so dependents build and review against a fixed contract.
 - **Acceptance names the exact check** the reviewer will run (test file/pattern, build command, or a
   concrete probe), not just prose.
-- **File-disjoint where independent** so `task-waves` can parallelize; tasks sharing a file serialize.
+- **File-disjoint where independent**: actively reshape task boundaries so independent tasks own
+  disjoint `Files:` sets (for example, move a shared helper edit into its own earlier task and make
+  the others depend on it). For multi-task backlogs, make `task-waves` width > 1 the norm, not the
+  exception.
 - Each task independently verifiable; order by dependency (a task may only depend on earlier tasks).
 - Decide the skill→task mapping ONCE here (the `Skills:` field), from PLAN.md's *Skills to use*
   plus any *Skills to create* marked before execution — so Phase 4 embeds a consistent,
@@ -150,13 +153,16 @@ After backlog approval, write `allocation.md` (task → PIC table) to the report
 
 **Non-code tasks**: when a task produces content instead of code (data analysis, marketing copy, docs, research, a plan), load `codex-flow:exec-deliverable` INSTEAD of `exec-coding-standards` + `exec-self-testing` + the language skill, and embed its deliverable + verification blocks. A mixed backlog picks per task: code tasks get the coding blocks, content tasks get the deliverable block. The selected domain skills (from Phase 2) are embedded either way.
 
-**Sequential vs parallel**: by default run tasks one at a time in dependency order (below). For a
-large backlog with independent tasks, consider **parallel mode**: run
+**Sequential vs parallel**: always run
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/task-waves.mjs" .codex-flow/TASKS.md` to compute execution
-waves from the `Depends on:` + `Files:` metadata. If it reports width > 1 AND the user opts in,
-load `codex-flow:parallel-execution` and follow it (one git worktree + subagent per concurrent
-task, then merge + integration-review per wave). If it reports "fully sequential", or the backlog
-is small, or the user declines, stay sequential. Parallel mode costs N× simultaneous quota.
+waves from the `Depends on:` + `Files:` metadata. When it reports width > 1, **parallel mode is the
+default**: load `codex-flow:parallel-execution` and follow it (one git worktree + subagent per
+concurrent task, then merge + integration-review per wave), including its clean tracked-baseline
+gate, serial worktree creation + control-file copy, and mandatory reviewed task commit before
+merge. Proceed without asking for waves of ≤3 concurrent tasks; when a wave exceeds 3, ask the
+user before running it at that width because parallel mode costs N× simultaneous quota. Stay
+sequential only when the tool reports "fully sequential", the user opted out of parallel mode,
+the project is not a git repo, or the tracked baseline cannot be made clean.
 
 For each task in dependency order (sequential mode):
 
@@ -165,16 +171,18 @@ For each task in dependency order (sequential mode):
    - `cwd`: absolute path of the project root
    - `sandbox`: `workspace-write` by default. Use `read-only` for investigation-only tasks; use `danger-full-access` ONLY when the task genuinely needs network or a global install — and tell the user before doing so.
    - `model`: match the task's complexity — a stronger model for architectural, cross-cutting, or subtle-logic tasks; the default (or a faster/cheaper model) for small, mechanical, well-specified tasks. Note the choice in the Decision log.
-   - `timeoutMs`: scale to task size (default 30 min)
+   - `reasoningEffort`: map task complexity explicitly — `low` for mechanical, well-specified tasks; omit it for standard implementation work (use the CLI default); `high` for architectural, cross-cutting, or subtle-logic tasks. Note the choice in the Decision log.
+   - `timeoutMs`: default 60 min; scale UP for large tasks rather than letting them die. The server automatically resumes a timed-out or dropped session within bounded limits. Do NOT immediately retry a failed run manually — inspect `attempts` and `resumeReasons` in the payload first, and ask the user before retrying only after the server's auto-resume allowance has already been used.
    - `terminal`: `true` — opens a live-progress terminal window when supported; progress also streams into the session via MCP notifications
 2. **Check the returned `status` field** before anything else:
    - `success` → proceed normally.
    - `partial` (not a tool error) → the run ended without a completion marker or with unparseable
-     event lines, so Codex's own account of the run is suspect. Inspect `diff`/`attribution` and the
-     live log, and prefer re-running the task (or explicitly verifying its acceptance checks
-     yourself) before treating it as done.
-   - `failed` / `aborted` (tool error) → handle as a failed run: report it and ask the user before
-     retrying (see Rules below).
+     event lines after any bounded auto-resume, so Codex's own account of the run is suspect.
+     Inspect `attempts`/`resumeReasons`, `diff`/`attribution`, and the live log; explicitly verify
+     the acceptance checks before treating it as done, and ask the user before any manual retry.
+   - `failed` / `aborted` (tool error) → inspect `attempts`/`resumeReasons` first. If bounded
+     auto-resume was exhausted or the failure was ineligible for auto-resume, report it and ask the
+     user before any manual retry (see Rules below).
 3. **Save the returned `sessionId`** — reviews in Phase 5 go back into this session. Reuse one session (`codex_continue`) while consecutive tasks build on each other in the SAME domain; start a fresh `codex_execute` when a task is independent OR shifts domain (e.g. backend → data pipeline → marketing copy) — a fresh session gets the new task's distilled skill blocks instead of inheriting stale context from the previous domain.
 4. Update the task's Status in TASKS.md and TaskUpdate after each run.
 5. Run Phase 5 review for the task BEFORE starting the next one.
@@ -262,4 +270,5 @@ Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews
 Rules:
 - Never skip the interview, plan approval, or backlog approval.
 - Never fix Codex's code yourself in rounds 1–3 — send findings back via `codex_continue` so the Codex session stays consistent. Only fix by hand if 3 rounds fail, and tell the user. After any hand-fix, re-run the task's acceptance checks before marking it done.
-- If a Codex run fails or times out, report it and ask the user before retrying (quota is not free).
+- If a Codex run still fails or times out after bounded auto-resume, inspect `attempts` and
+  `resumeReasons`, report it, and ask the user before any manual retry (quota is not free).

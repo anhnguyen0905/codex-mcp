@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { createIncrementalParser, type ParsedEvents } from './eventParser.js'
 import type { RunOutcome } from './types.js'
 
-export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000
+export const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000
 export const SIGKILL_GRACE_MS = 5 * 1000
 export const MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 /**

@@ -6,6 +6,8 @@ import { createLiveView } from '../src/liveView.js'
 import { LIVE_RUN_FINISHED_TYPE } from '../src/progressFormatter.js'
 
 const tempDirs: string[] = []
+const BENIGN_NOTICE =
+  '`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.'
 afterAll(() => {
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true })
 })
@@ -61,6 +63,20 @@ describe('createLiveView completion marker', () => {
 
     const marker = await readMarker(view.logPath as string)
     expect(marker.status).toBe('failed')
+  })
+
+  test('writes a completed marker when turn.failed contains an allowlisted notice', async () => {
+    const view = makeView()
+    view.onStdout?.(
+      Buffer.from(
+        `${JSON.stringify({ type: 'turn.failed', error: { message: BENIGN_NOTICE } })}\n`,
+      ),
+    )
+
+    view.close()
+
+    const marker = await readMarker(view.logPath as string)
+    expect(marker.status).toBe('completed')
   })
 
   test('writes an interrupted marker when the run settled without a terminal turn event (abort/timeout/kill)', async () => {

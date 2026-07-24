@@ -6,6 +6,7 @@ import {
   buildExecuteArgs,
   buildExecuteInvocation,
 } from '../src/argsBuilder.js'
+import { REASONING_EFFORTS } from '../src/types.js'
 
 describe('buildExecuteArgs', () => {
   test('builds args for a new execution with cwd and sandbox', () => {
@@ -26,19 +27,56 @@ describe('buildExecuteArgs', () => {
       '--',
       'implement the plan',
     ])
+    expect(args).not.toContain('-c')
   })
 
-  test('includes model flag when model is provided', () => {
-    const args = buildExecuteArgs({
-      prompt: 'do it',
-      cwd: '/repo',
-      sandbox: 'read-only',
-      model: 'gpt-5.1-codex',
-    })
+  test.each(REASONING_EFFORTS)(
+    'positions reasoning effort %s immediately after model args',
+    (reasoningEffort) => {
+      const args = buildExecuteArgs({
+        prompt: 'do it',
+        cwd: '/repo',
+        sandbox: 'read-only',
+        model: 'gpt-5.1-codex',
+        reasoningEffort,
+      })
 
-    expect(args).toContain('--model')
-    expect(args[args.indexOf('--model') + 1]).toBe('gpt-5.1-codex')
-  })
+      expect(args).toEqual([
+        'exec',
+        '--json',
+        '--skip-git-repo-check',
+        '--cd',
+        '/repo',
+        '--sandbox',
+        'read-only',
+        '--model',
+        'gpt-5.1-codex',
+        '-c',
+        `model_reasoning_effort="${reasoningEffort}"`,
+        '--',
+        'do it',
+      ])
+    },
+  )
+
+  test.each(REASONING_EFFORTS)(
+    'includes reasoning effort %s without adding a model override',
+    (reasoningEffort) => {
+      const args = buildExecuteArgs({
+        prompt: 'do it',
+        cwd: '/repo',
+        sandbox: 'read-only',
+        reasoningEffort,
+      })
+      const reasoningFlagIndex = args.indexOf('-c')
+
+      expect(args.slice(reasoningFlagIndex, reasoningFlagIndex + 2)).toEqual([
+        '-c',
+        `model_reasoning_effort="${reasoningEffort}"`,
+      ])
+      expect(args).not.toContain('--model')
+    },
+  )
 
   test('separates a dash-prefixed prompt with `--` so it is not parsed as a flag', () => {
     const args = buildExecuteArgs({ prompt: '--help me', cwd: '/repo', sandbox: 'read-only' })
@@ -85,18 +123,37 @@ describe('buildContinueArgs', () => {
       '--',
       'fix the review findings',
     ])
+    expect(args).not.toContain('-c')
   })
 
-  test('includes model flag when model is provided', () => {
-    const args = buildContinueArgs({
-      sessionId: 'abc-123',
-      prompt: 'continue',
-      sandbox: 'read-only',
-      model: 'gpt-5.1-codex',
-    })
+  test.each(REASONING_EFFORTS)(
+    'positions reasoning effort %s immediately after model args',
+    (reasoningEffort) => {
+      const args = buildContinueArgs({
+        sessionId: 'abc-123',
+        prompt: 'continue',
+        sandbox: 'read-only',
+        model: 'gpt-5.1-codex',
+        reasoningEffort,
+      })
 
-    expect(args).toContain('--model')
-  })
+      expect(args).toEqual([
+        'exec',
+        'resume',
+        'abc-123',
+        '--json',
+        '--skip-git-repo-check',
+        '--config',
+        'sandbox_mode="read-only"',
+        '--model',
+        'gpt-5.1-codex',
+        '-c',
+        `model_reasoning_effort="${reasoningEffort}"`,
+        '--',
+        'continue',
+      ])
+    },
+  )
 
   test('throws when session id is empty', () => {
     expect(() =>
@@ -130,17 +187,45 @@ describe('buildExecuteInvocation', () => {
     expect(invocation.args[invocation.args.length - 1]).toBe('-')
     expect(invocation.args[invocation.args.length - 2]).toBe('--')
     expect(invocation.args).not.toContain('implement the plan')
+    expect(invocation.args).not.toContain('-c')
     expect(invocation.stdinInput).toBe('implement the plan')
   })
 
-  test('keeps the same leading args as buildExecuteArgs', () => {
-    const input = { prompt: 'go', cwd: '/repo', sandbox: 'read-only' as const, model: 'gpt-5.1-codex' }
+  test.each(REASONING_EFFORTS)(
+    'positions reasoning effort %s after model args while sending the prompt over stdin',
+    (reasoningEffort) => {
+      const input = {
+        prompt: 'go',
+        cwd: '/repo',
+        sandbox: 'read-only' as const,
+        model: 'gpt-5.1-codex',
+        reasoningEffort,
+      }
 
-    const invocation = buildExecuteInvocation(input)
-    const legacy = buildExecuteArgs(input)
+      const invocation = buildExecuteInvocation(input)
+      const legacy = buildExecuteArgs(input)
 
-    expect(invocation.args.slice(0, -1)).toEqual(legacy.slice(0, -1))
-  })
+      expect(invocation).toEqual({
+        args: [
+          'exec',
+          '--json',
+          '--skip-git-repo-check',
+          '--cd',
+          '/repo',
+          '--sandbox',
+          'read-only',
+          '--model',
+          'gpt-5.1-codex',
+          '-c',
+          `model_reasoning_effort="${reasoningEffort}"`,
+          '--',
+          '-',
+        ],
+        stdinInput: 'go',
+      })
+      expect(invocation.args.slice(0, -1)).toEqual(legacy.slice(0, -1))
+    },
+  )
 
   test('still rejects an empty prompt and a relative cwd', () => {
     expect(() =>
@@ -179,8 +264,41 @@ describe('buildContinueInvocation', () => {
     expect(invocation.args[invocation.args.length - 1]).toBe('-')
     expect(invocation.args[invocation.args.length - 2]).toBe('--')
     expect(invocation.args).not.toContain('fix the review findings')
+    expect(invocation.args).not.toContain('-c')
     expect(invocation.stdinInput).toBe('fix the review findings')
   })
+
+  test.each(REASONING_EFFORTS)(
+    'positions reasoning effort %s after model args while sending the prompt over stdin',
+    (reasoningEffort) => {
+      const invocation = buildContinueInvocation({
+        sessionId: 'abc-123',
+        prompt: 'continue',
+        sandbox: 'read-only',
+        model: 'gpt-5.1-codex',
+        reasoningEffort,
+      })
+
+      expect(invocation).toEqual({
+        args: [
+          'exec',
+          'resume',
+          'abc-123',
+          '--json',
+          '--skip-git-repo-check',
+          '--config',
+          'sandbox_mode="read-only"',
+          '--model',
+          'gpt-5.1-codex',
+          '-c',
+          `model_reasoning_effort="${reasoningEffort}"`,
+          '--',
+          '-',
+        ],
+        stdinInput: 'continue',
+      })
+    },
+  )
 
   test('keeps sessionId validation from buildContinueArgs', () => {
     expect(() =>

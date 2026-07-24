@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { BatchTaskResult } from './batchRunner.js'
 import type { ParsedEvents } from './eventParser.js'
+import type { ResumeReason } from './retryPolicy.js'
 import type { RunStatus } from './runStatus.js'
 import type { DiffFn, RunAttribution } from './workspaceDiff.js'
 
@@ -27,6 +28,8 @@ export type RunPayload = ParsedEvents & {
   stderr: string
   liveLog: string | null
   notesPath: string | null
+  attempts?: number
+  resumeReasons?: readonly ResumeReason[]
 }
 
 /** Per-status roll-up over a batch's task results (T4.6). */
@@ -94,6 +97,11 @@ export const toErrorResult = (error: unknown) => ({
 // --- outputSchema shapes (registered with the SDK, advertised via tools/list) ---
 
 const runStatusSchema = z.enum(['success', 'partial', 'failed', 'aborted'])
+const resumeReasonSchema = z.enum([
+  'timeout',
+  'transient-turn-failure',
+  'no-completion-marker',
+])
 
 const usageSchema = z
   .object({
@@ -153,6 +161,8 @@ export const runOutputShape = {
   stderr: z.string(),
   liveLog: z.string().nullable(),
   notesPath: z.string().nullable(),
+  attempts: z.number().optional(),
+  resumeReasons: z.array(resumeReasonSchema).optional(),
 }
 
 // Skipped/never-started batch tasks carry a bare CodexResult without parser counters.
@@ -172,6 +182,8 @@ const batchTaskResultSchema = z.object({
   status: runStatusSchema,
   parsed: batchParsedSchema,
   runId: z.string().optional(),
+  attempts: z.number().optional(),
+  resumeReasons: z.array(resumeReasonSchema).optional(),
   diff: diffSchema,
   attribution: attributionSchema.optional(),
   exitCode: z.number().nullable(),

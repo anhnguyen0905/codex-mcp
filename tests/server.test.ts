@@ -19,6 +19,16 @@ const jsonlFixture = [
 
 const okOutcome: RunOutcome = { stdout: jsonlFixture, stderr: '', exitCode: 0, timedOut: false }
 
+const transientFailureOutcome: RunOutcome = {
+  stdout: [
+    JSON.stringify({ type: 'thread.started', thread_id: 'sess-1' }),
+    JSON.stringify({ type: 'turn.failed', error: { message: 'stream disconnected' } }),
+  ].join('\n'),
+  stderr: '',
+  exitCode: 0,
+  timedOut: false,
+}
+
 const connect = async (runFn: (args: string[], opts: { cwd: string; timeoutMs?: number }) => Promise<RunOutcome>) => {
   const server = createServer({ runFn })
   const client = new Client({ name: 'test-client', version: '0.0.1' })
@@ -85,6 +95,98 @@ describe('codex-mcp server', () => {
 
     const [args] = runFn.mock.calls[0]
     expect(args).toContain('workspace-write')
+  })
+
+  test('codex_execute auto-resumes a transient turn failure', async () => {
+    const previousAutoResume = process.env.CODEX_MCP_AUTO_RESUME
+    delete process.env.CODEX_MCP_AUTO_RESUME
+    runFn.mockResolvedValueOnce(transientFailureOutcome).mockResolvedValueOnce(okOutcome)
+
+    try {
+      const client = await connect(runFn)
+      const result = await client.callTool({
+        name: 'codex_execute',
+        arguments: { prompt: 'implement plan', cwd: '/repo' },
+      })
+
+      expect(result.structuredContent).toMatchObject({
+        attempts: 2,
+        resumeReasons: ['transient-turn-failure'],
+      })
+      expect(runFn).toHaveBeenCalledTimes(2)
+    } finally {
+      if (previousAutoResume === undefined) delete process.env.CODEX_MCP_AUTO_RESUME
+      else process.env.CODEX_MCP_AUTO_RESUME = previousAutoResume
+    }
+  })
+
+  test('codex_continue auto-resumes a transient turn failure', async () => {
+    const previousAutoResume = process.env.CODEX_MCP_AUTO_RESUME
+    delete process.env.CODEX_MCP_AUTO_RESUME
+    runFn.mockResolvedValueOnce(transientFailureOutcome).mockResolvedValueOnce(okOutcome)
+
+    try {
+      const client = await connect(runFn)
+      const result = await client.callTool({
+        name: 'codex_continue',
+        arguments: { sessionId: 'sess-1', prompt: 'fix findings', cwd: '/repo' },
+      })
+
+      expect(result.structuredContent).toMatchObject({
+        attempts: 2,
+        resumeReasons: ['transient-turn-failure'],
+      })
+      expect(runFn).toHaveBeenCalledTimes(2)
+    } finally {
+      if (previousAutoResume === undefined) delete process.env.CODEX_MCP_AUTO_RESUME
+      else process.env.CODEX_MCP_AUTO_RESUME = previousAutoResume
+    }
+  })
+
+  test('codex_review auto-resumes a transient turn failure in the read-only sandbox', async () => {
+    const previousAutoResume = process.env.CODEX_MCP_AUTO_RESUME
+    delete process.env.CODEX_MCP_AUTO_RESUME
+    runFn.mockResolvedValueOnce(transientFailureOutcome).mockResolvedValueOnce(okOutcome)
+
+    try {
+      const client = await connect(runFn)
+      const result = await client.callTool({
+        name: 'codex_review',
+        arguments: { cwd: '/repo' },
+      })
+      const [resumeArgs] = runFn.mock.calls[1]
+
+      expect(result.structuredContent).toMatchObject({
+        attempts: 2,
+        resumeReasons: ['transient-turn-failure'],
+      })
+      expect(runFn).toHaveBeenCalledTimes(2)
+      expect(resumeArgs.slice(0, 3)).toEqual(['exec', 'resume', 'sess-1'])
+      expect(resumeArgs).toContain('sandbox_mode="read-only"')
+    } finally {
+      if (previousAutoResume === undefined) delete process.env.CODEX_MCP_AUTO_RESUME
+      else process.env.CODEX_MCP_AUTO_RESUME = previousAutoResume
+    }
+  })
+
+  test('codex_execute does not auto-resume when CODEX_MCP_AUTO_RESUME is 0', async () => {
+    const previousAutoResume = process.env.CODEX_MCP_AUTO_RESUME
+    process.env.CODEX_MCP_AUTO_RESUME = '0'
+    runFn.mockResolvedValueOnce(transientFailureOutcome).mockResolvedValueOnce(okOutcome)
+
+    try {
+      const client = await connect(runFn)
+      const result = await client.callTool({
+        name: 'codex_execute',
+        arguments: { prompt: 'implement plan', cwd: '/repo' },
+      })
+
+      expect(result.structuredContent).toMatchObject({ attempts: 1, resumeReasons: [] })
+      expect(runFn).toHaveBeenCalledTimes(1)
+    } finally {
+      if (previousAutoResume === undefined) delete process.env.CODEX_MCP_AUTO_RESUME
+      else process.env.CODEX_MCP_AUTO_RESUME = previousAutoResume
+    }
   })
 
   test('codex_continue resumes the given session', async () => {
@@ -298,7 +400,11 @@ describe('run status model', () => {
 
   test('parse errors in the stream downgrade an otherwise clean run to partial', async () => {
     runFn.mockResolvedValueOnce({
-      stdout: `not json\n${jsonlFixture}`,
+      stdout: [
+        'not json',
+        JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }),
+        JSON.stringify({ type: 'turn.completed', usage: {} }),
+      ].join('\n'),
       stderr: '',
       exitCode: 0,
       timedOut: false,

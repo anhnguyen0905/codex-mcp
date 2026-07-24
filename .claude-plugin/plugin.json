@@ -1,7 +1,7 @@
 {
   "name": "codex-flow",
   "description": "Plan with Claude, execute with OpenAI Codex, review with Claude \u2014 /codex-flow command plus the codex MCP server (execute, continue, review, health).",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "author": {
     "name": "anhnguyen0905",
     "url": "https://github.com/anhnguyen0905"

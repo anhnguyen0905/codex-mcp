@@ -14,7 +14,8 @@ import {
 import { runCodex } from './codexRunner.js'
 import { createLiveView, type LiveView } from './liveView.js'
 import { createProgressNotifier, type ProgressNotifier } from './progressNotifier.js'
-import { runAndReport, runOnce, type RunFn } from './runReport.js'
+import { runWithRecovery } from './runRecovery.js'
+import type { RunFn } from './runReport.js'
 import {
   attributeWorkspaceDiff,
   captureWorkspaceDiff,
@@ -27,7 +28,7 @@ import {
 import { acquireWorkspaceLease, type LeaseFn } from './workspaceLease.js'
 import { listSessions, MAX_LIMIT as MAX_SESSIONS_LIMIT } from './sessionStore.js'
 import { aggregate, parsePricing, readMetrics } from './metricsLog.js'
-import { SANDBOX_MODES, type RunOutcome } from './types.js'
+import { REASONING_EFFORTS, SANDBOX_MODES, type RunOutcome } from './types.js'
 import {
   DEFAULT_BATCH_CONCURRENCY,
   MAX_ALLOWED_CONCURRENCY,
@@ -97,7 +98,13 @@ const executeShape = {
   cwd: z.string().describe('Absolute path of the workspace Codex should work in'),
   sandbox: sandboxSchema.describe('Codex sandbox policy (default: workspace-write)'),
   model: z.string().optional().describe('Codex model override, e.g. gpt-5.1-codex'),
-  timeoutMs: timeoutSchema.describe('Max execution time in ms (default: 30 minutes)'),
+  reasoningEffort: z
+    .enum(REASONING_EFFORTS)
+    .optional()
+    .describe('Reasoning effort override for the selected model'),
+  timeoutMs: timeoutSchema.describe(
+    'Max execution time per attempt in ms; auto-resume may add attempts (default: 60 minutes)',
+  ),
   terminal: z
     .boolean()
     .optional()
@@ -114,7 +121,13 @@ const continueShape = {
   cwd: z.string().describe('Absolute path of the workspace Codex should work in'),
   sandbox: sandboxSchema.describe('Codex sandbox policy (default: workspace-write)'),
   model: z.string().optional().describe('Codex model override'),
-  timeoutMs: timeoutSchema.describe('Max execution time in ms (default: 30 minutes)'),
+  reasoningEffort: z
+    .enum(REASONING_EFFORTS)
+    .optional()
+    .describe('Reasoning effort override for the selected model'),
+  timeoutMs: timeoutSchema.describe(
+    'Max execution time per attempt in ms; auto-resume may add attempts (default: 60 minutes)',
+  ),
   terminal: z
     .boolean()
     .optional()
@@ -158,7 +171,13 @@ const batchTaskShape = z.object({
   prompt: z.string(),
   sandbox: sandboxSchema.optional(),
   model: z.string().optional(),
-  timeoutMs: timeoutSchema,
+  reasoningEffort: z
+    .enum(REASONING_EFFORTS)
+    .optional()
+    .describe('Reasoning effort override for the selected model'),
+  timeoutMs: timeoutSchema.describe(
+    'Max execution time per attempt in ms; auto-resume may add attempts (default: 60 minutes)',
+  ),
 })
 
 const batchShape = {
@@ -206,7 +225,13 @@ const reviewShape = {
     .optional()
     .describe('Optional focus for the review, e.g. "security of the auth module"'),
   model: z.string().optional().describe('Codex model override'),
-  timeoutMs: timeoutSchema.describe('Max execution time in ms (default: 30 minutes)'),
+  reasoningEffort: z
+    .enum(REASONING_EFFORTS)
+    .optional()
+    .describe('Reasoning effort override for the selected model'),
+  timeoutMs: timeoutSchema.describe(
+    'Max execution time per attempt in ms; auto-resume may add attempts (default: 60 minutes)',
+  ),
   terminal: z
     .boolean()
     .optional()
@@ -322,30 +347,41 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
       try {
         // Prompt travels over stdin (`-- -`); an over-limit prompt throws here and surfaces as a
         // clean tool validation error via the catch below.
-        const { args, stdinInput }: CodexInvocation = buildExecuteInvocation(input)
+        const invocation: CodexInvocation = buildExecuteInvocation({
+          prompt: input.prompt,
+          cwd: input.cwd,
+          sandbox: input.sandbox,
+          model: input.model,
+          reasoningEffort: input.reasoningEffort,
+        })
         const startedAt = new Date().toISOString()
         const runId = randomUUID()
         const queuedAt = Date.now()
         return await withConcurrencyLimit(() =>
           withCwdLock(input.cwd, runId, () => {
             const view = openView(input.cwd, input.terminal)
-            return runAndReport(
+            return runWithRecovery(
               {
                 runFn,
                 view,
                 diffFn,
                 snapshotFn,
                 attributeFn,
-                runId,
                 progressNotifier: progressNotifierFor(extra),
                 notes: input.writeNotes ? { cwd: input.cwd, prompt: input.prompt, mode: 'execute', startedAt } : undefined,
                 tool: 'codex_execute',
                 model: input.model,
                 queueMs: Date.now() - queuedAt,
               },
-              args,
-              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal, stdinInput },
-            )
+              invocation,
+              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal },
+              {
+                enabled: process.env.CODEX_MCP_AUTO_RESUME !== '0',
+                sandbox: input.sandbox,
+                model: input.model,
+                reasoningEffort: input.reasoningEffort,
+              },
+            ).then(({ payload, isError }) => toToolResult(payload, isError))
           }),
         )
       } catch (error) {
@@ -367,30 +403,41 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     async (input, extra) => {
       try {
         assertAbsoluteCwd(input.cwd)
-        const { args, stdinInput }: CodexInvocation = buildContinueInvocation(input)
+        const invocation: CodexInvocation = buildContinueInvocation({
+          sessionId: input.sessionId,
+          prompt: input.prompt,
+          sandbox: input.sandbox,
+          model: input.model,
+          reasoningEffort: input.reasoningEffort,
+        })
         const startedAt = new Date().toISOString()
         const runId = randomUUID()
         const queuedAt = Date.now()
         return await withConcurrencyLimit(() =>
           withCwdLock(input.cwd, runId, () => {
             const view = openView(input.cwd, input.terminal)
-            return runAndReport(
+            return runWithRecovery(
               {
                 runFn,
                 view,
                 diffFn,
                 snapshotFn,
                 attributeFn,
-                runId,
                 progressNotifier: progressNotifierFor(extra),
                 notes: input.writeNotes ? { cwd: input.cwd, prompt: input.prompt, mode: 'continue', startedAt } : undefined,
                 tool: 'codex_continue',
                 model: input.model,
                 queueMs: Date.now() - queuedAt,
               },
-              args,
-              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal, stdinInput },
-            )
+              invocation,
+              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal },
+              {
+                enabled: process.env.CODEX_MCP_AUTO_RESUME !== '0',
+                sandbox: input.sandbox,
+                model: input.model,
+                reasoningEffort: input.reasoningEffort,
+              },
+            ).then(({ payload, isError }) => toToolResult(payload, isError))
           }),
         )
       } catch (error) {
@@ -411,11 +458,12 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     },
     async (input, extra) => {
       try {
-        const { args, stdinInput }: CodexInvocation = buildExecuteInvocation({
+        const invocation: CodexInvocation = buildExecuteInvocation({
           prompt: buildReviewPrompt(input.focus, input.baselineRef),
           cwd: input.cwd,
           sandbox: 'read-only',
           model: input.model,
+          reasoningEffort: input.reasoningEffort,
         })
         if (input.baselineRef !== undefined) {
           const refExists = await verifyRefFn(input.cwd, input.baselineRef)
@@ -435,23 +483,28 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         return await withConcurrencyLimit(() =>
           withCwdLock(input.cwd, runId, () => {
             const view = openView(input.cwd, input.terminal)
-            return runAndReport(
+            return runWithRecovery(
               {
                 runFn,
                 view,
                 diffFn,
                 snapshotFn,
                 attributeFn,
-                runId,
                 progressNotifier: progressNotifierFor(extra),
                 notes: input.writeNotes ? { cwd: input.cwd, prompt: notePrompt, mode: 'review', startedAt } : undefined,
                 tool: 'codex_review',
                 model: input.model,
                 queueMs: Date.now() - queuedAt,
               },
-              args,
-              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal, stdinInput },
-            )
+              invocation,
+              { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal },
+              {
+                enabled: process.env.CODEX_MCP_AUTO_RESUME !== '0',
+                sandbox: 'read-only',
+                model: input.model,
+                reasoningEffort: input.reasoningEffort,
+              },
+            ).then(({ payload, isError }) => toToolResult(payload, isError))
           }),
         )
       } catch (error) {
@@ -521,11 +574,13 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
           taskIndex: number,
           signal: AbortSignal,
         ): Promise<BatchTaskResult> => {
-          const { args, stdinInput }: CodexInvocation = buildExecuteInvocation({
+          const sandbox = spec.sandbox ?? 'workspace-write'
+          const invocation: CodexInvocation = buildExecuteInvocation({
             prompt: spec.prompt,
             cwd: spec.cwd,
-            sandbox: spec.sandbox ?? 'workspace-write',
+            sandbox,
             model: spec.model,
+            reasoningEffort: spec.reasoningEffort,
           })
           const runId = randomUUID()
           const queuedAt = Date.now()
@@ -536,22 +591,27 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
               // Batch mode: no per-task terminal window (would spam N desktop windows). Progress
               // notifications DO flow, task-attributed via a shared monotonic counter so the
               // client can tell which task each line belongs to.
-              const { payload, isError } = await runOnce(
+              const { payload, isError } = await runWithRecovery(
                 {
                   runFn,
                   view: NULL_VIEW,
                   diffFn,
                   snapshotFn,
                   attributeFn,
-                  runId,
                   progressNotifier: taskProgressNotifier(taskIndex, spec.cwd),
                   tool: 'codex_batch',
                   model: spec.model,
                   taskId: `task-${taskIndex}`,
                   queueMs: Date.now() - queuedAt,
                 },
-                args,
-                { cwd: spec.cwd, timeoutMs: spec.timeoutMs, signal, stdinInput },
+                invocation,
+                { cwd: spec.cwd, timeoutMs: spec.timeoutMs, signal },
+                {
+                  enabled: process.env.CODEX_MCP_AUTO_RESUME !== '0',
+                  sandbox,
+                  model: spec.model,
+                  reasoningEffort: spec.reasoningEffort,
+                },
               )
               const {
                 schemaVersion,
@@ -566,6 +626,8 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 stderr,
                 liveLog,
                 notesPath,
+                attempts,
+                resumeReasons,
                 ...parsed
               } = payload
               return {
@@ -575,6 +637,8 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 status,
                 parsed,
                 runId: taskRunId,
+                attempts,
+                resumeReasons,
                 diff,
                 attribution,
                 exitCode,

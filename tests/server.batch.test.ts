@@ -56,6 +56,47 @@ describe('codex_batch tool', () => {
     expect(payload.tasks.map((t) => (t as { taskIndex: number }).taskIndex)).toEqual([0, 1, 2])
   })
 
+  test('surfaces recovery metadata on a batch task after a transient auto-resume', async () => {
+    const previousAutoResume = process.env.CODEX_MCP_AUTO_RESUME
+    delete process.env.CODEX_MCP_AUTO_RESUME
+    const successOutcome: RunOutcome = {
+      stdout: [okJsonl('batch-recovery'), JSON.stringify({ type: 'turn.completed', usage: {} })].join('\n'),
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+    }
+    const runFn = vi.fn(async (): Promise<RunOutcome> => successOutcome)
+    runFn.mockResolvedValueOnce({
+      stdout: [
+        JSON.stringify({ type: 'thread.started', thread_id: 'batch-recovery' }),
+        JSON.stringify({ type: 'turn.failed', error: { message: 'stream disconnected' } }),
+      ].join('\n'),
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+    })
+
+    try {
+      const client = await connect(runFn)
+      const result = await client.callTool({
+        name: 'codex_batch',
+        arguments: { tasks: [{ cwd: '/w/recovery', prompt: 'recover' }] },
+      })
+      const payload = parse(result)
+
+      expect(payload.tasks[0]).toMatchObject({
+        attempts: 2,
+        resumeReasons: ['transient-turn-failure'],
+      })
+      expect(payload.tasks[0].parsed).not.toHaveProperty('attempts')
+      expect(payload.tasks[0].parsed).not.toHaveProperty('resumeReasons')
+      expect(runFn).toHaveBeenCalledTimes(2)
+    } finally {
+      if (previousAutoResume === undefined) delete process.env.CODEX_MCP_AUTO_RESUME
+      else process.env.CODEX_MCP_AUTO_RESUME = previousAutoResume
+    }
+  })
+
   test('one task failing does not sink siblings (failFast=false default)', async () => {
     const runFn = vi.fn(async (_args: string[], opts: { cwd: string }): Promise<RunOutcome> => {
       if (opts.cwd === '/w/2') return { stdout: '', stderr: 'boom', exitCode: 1, timedOut: false }
@@ -114,6 +155,7 @@ describe('codex_batch tool', () => {
     expect(payload.summary.failed).toBe(1)
     // The task after the failure never started — cancelled by fail-fast.
     expect(payload.tasks[2].status).toBe('aborted')
+    expect(payload.tasks[2]).toMatchObject({ attempts: 0, resumeReasons: [] })
   })
 
   test('failFast=false with every task failing still reports tool-level isError=false', async () => {
@@ -262,6 +304,34 @@ describe('codex_batch tool', () => {
     const [args, opts] = runFn.mock.calls[0] as [string[], { stdinInput?: string }]
     expect(args.slice(-2)).toEqual(['--', '-'])
     expect(opts.stdinInput).toBe('the batch prompt')
+  })
+
+  test('forwards reasoning effort from the parsed batch task spec', async () => {
+    const completed = [
+      okJsonl('reasoning'),
+      JSON.stringify({ type: 'turn.completed', usage: {} }),
+    ].join('\n')
+    const runFn = vi.fn(async (): Promise<RunOutcome> => ({
+      stdout: completed,
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+    }))
+    const client = await connect(runFn)
+
+    await client.callTool({
+      name: 'codex_batch',
+      arguments: {
+        tasks: [{ cwd: '/w/reasoning', prompt: 'the batch prompt', reasoningEffort: 'xhigh' }],
+      },
+    })
+    const [args] = runFn.mock.calls[0]
+    const reasoningFlagIndex = args.indexOf('-c')
+
+    expect(args.slice(reasoningFlagIndex, reasoningFlagIndex + 2)).toEqual([
+      '-c',
+      'model_reasoning_effort="xhigh"',
+    ])
   })
 
   test('rejects duplicate cwds up front', async () => {

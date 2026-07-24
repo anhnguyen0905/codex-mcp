@@ -27,10 +27,14 @@ export interface RunAndReportDeps {
   diffFn: DiffFn
   snapshotFn: SnapshotFn
   attributeFn: AttributeFn
+  /** Before-run snapshot shared by every attempt in one logical recovery run. */
+  presetSnapshot?: WorkspaceSnapshot | null
   /** Server-generated UUID identifying this run in the payload, notes, and metric entry. */
   runId: string
   /** Throttled progress notifier; settled (final flush + timer teardown) when the run finishes. */
   progressNotifier?: ProgressNotifier
+  /** Whether runOnce settles and closes its sinks. Defaults true; recovery owns them across attempts. */
+  ownsSinks?: boolean
   /** When provided, writeNotes() runs after payload is built (best-effort; errors are logged, not thrown). */
   notes?: Omit<NotesRequest, 'sessionId' | 'parsed' | 'exitCode' | 'runId'>
   /** Which tool invoked runAndReport, so the metric log can attribute the run. */
@@ -51,7 +55,10 @@ export const safeDiff = async (diffFn: DiffFn, cwd: string) => {
   }
 }
 
-const safeSnapshot = async (snapshotFn: SnapshotFn, cwd: string): Promise<WorkspaceSnapshot | null> => {
+export const safeSnapshot = async (
+  snapshotFn: SnapshotFn,
+  cwd: string,
+): Promise<WorkspaceSnapshot | null> => {
   try {
     return await snapshotFn(cwd)
   } catch {
@@ -160,7 +167,10 @@ export const runOnce = async (
   try {
     // Before-run snapshot of already-dirty files so post-run changes can be attributed
     // (pre-existing dirt vs changes this run actually made). Best-effort — never fails the run.
-    const snapshot = await safeSnapshot(snapshotFn, options.cwd)
+    const snapshot =
+      deps.presetSnapshot === undefined
+        ? await safeSnapshot(snapshotFn, options.cwd)
+        : deps.presetSnapshot
     // First-stdout probe measures spawn → first output for the metric log, on every run.
     let firstStdoutAt: number | undefined
     const firstStdoutProbe: ProgressSink = () => {
@@ -204,10 +214,12 @@ export const runOnce = async (
     appendMetric(buildMetricEntry(deps, options.cwd, outcome, parsed, aborted, { startedAt, spawnAt, firstStdoutAt }))
     return { payload, isError: isErrorStatus(status) }
   } finally {
-    // Flush the final coalesced progress message immediately and stop the throttle timer —
-    // the last message must never be dropped or delayed past run settle.
-    progressNotifier?.settle()
-    view.close()
+    // Recovery keeps shared sinks alive across attempt boundaries; whichever layer owns them
+    // performs the final progress flush and end marker once the logical run truly settles.
+    if (deps.ownsSinks !== false) {
+      progressNotifier?.settle()
+      view.close()
+    }
   }
 }
 

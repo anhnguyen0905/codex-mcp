@@ -50,9 +50,11 @@ A task is the unit Codex builds in one run and Claude verifies in one pass — s
   `npm run build`, or a concrete manual probe — not just prose. Phase 5 runs it verbatim.
 - **Vertical over horizontal** where possible: a thin end-to-end slice (one endpoint + its test)
   reviews better than "all models, then all controllers".
-- **File-disjoint where independent**: tasks with no dependency between them should own disjoint
-  `Files:` sets — that is exactly what lets `task-waves` run them in parallel and keeps reviews from
-  colliding. Tasks that must share a file are serialized; order them and say so.
+- **File-disjoint where independent**: actively reshape task boundaries so independent tasks
+  own disjoint `Files:` sets. If multiple tasks would edit a shared helper, move that helper edit
+  into its own earlier task and make the other tasks depend on it. For multi-task backlogs, make
+  `task-waves` width > 1 the norm, not the exception; serialize only work that truly must share a
+  file.
 - **Dependency-ordered**: a task may only depend on earlier tasks; no cycles.
 - **Tests live inside the task** that adds the behavior — never a trailing "write tests" task.
 - **Map skills once, here**: fill each task's `Skills:` field from PLAN.md's "Skills plan"
@@ -62,6 +64,7 @@ A task is the unit Codex builds in one run and Claude verifies in one pass — s
 ## Sanity checks before showing the user
 
 - Union of all task acceptance criteria covers every plan acceptance criterion (no orphan requirements).
-- No task touches files another incomplete task owns (avoids Codex-vs-Codex merge conflicts).
+- No tasks that could run concurrently (in the same wave) touch the same file; dependency-ordered
+  tasks may share files because they serialize (avoids Codex-vs-Codex merge conflicts).
 - First task is small — it validates the plan's assumptions cheaply before the expensive middle.
 - Mirror tasks with TaskCreate so the user sees live progress during execution.

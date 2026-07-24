@@ -1,6 +1,13 @@
 import { StringDecoder } from 'node:string_decoder'
 import type { CodexCommand, CodexFileChange, CodexResult, CodexUsage } from './types.js'
 
+export const BENIGN_CLI_NOTICE_PATTERNS: readonly RegExp[] = [
+  /^(?:`--dangerously-bypass-hook-trust`|--dangerously-bypass-hook-trust) is enabled\. Enabled hooks may run without review for this invocation\.?$/,
+]
+
+export const isBenignCliNotice = (message: string): boolean =>
+  BENIGN_CLI_NOTICE_PATTERNS.some((pattern) => pattern.test(message))
+
 interface RawEvent {
   type?: string
   thread_id?: string
@@ -34,14 +41,12 @@ export interface ParsedEvents extends CodexResult {
   /** True when a terminal event (turn.completed / turn.failed) was seen — false means the stream ended mid-turn. */
   sawCompletion: boolean
   /**
-   * Warning-ish messages that should NOT fail the run. Plumbing only for now — always empty.
+   * Known-benign CLI notices that should not fail the run.
    *
-   * Investigated for codex-cli 0.144.6: `item.type: "error"` items carry only `{ id, message }` —
-   * no severity/level field exists in the protocol (verified against the shipped binary's serde
-   * field names and live captures, including MCP-server startup-failure probes, which emitted no
-   * error items at all). With no protocol-level discriminator we fail closed: every error item
-   * stays in `errors[]` (which fails the run) rather than being reclassified by message-content
-   * heuristics. If a future CLI adds an explicit severity field, classify on it here.
+   * Error items have no protocol-level severity, so unmatched messages remain fail-closed in
+   * `errors[]`. Repeated production metrics showed the narrowly allowlisted notices flipping
+   * completed runs to failed. Warnings never affect status, so a run containing only these notices
+   * now classifies success when its other completion signals are clean.
    */
   warnings: string[]
   /** Number of turn.started events seen (a run can span multiple turns). */
@@ -118,6 +123,14 @@ const toFileChanges = (item: RawItem): readonly CodexFileChange[] =>
       kind: change.kind ?? 'unknown',
     }))
 
+const recordErrorMessage = (result: MutableResult, message: string): void => {
+  if (isBenignCliNotice(message)) {
+    result.warnings.push(message)
+    return
+  }
+  result.errors.push(message)
+}
+
 // Mutating appliers: earlier this used {...result, X:[...result.X, ...Y]} inside a reduce, which is
 // O(n^2) in the number of events (every line re-copies all accumulated arrays). Push in place → O(n).
 // Both return whether the type was handled, so unhandled ones can be counted as unknownEvents.
@@ -133,7 +146,7 @@ const applyItem = (result: MutableResult, item: RawItem): boolean => {
       result.commands.push({ command: item.command ?? '', exitCode: item.exit_code ?? null })
       return true
     case 'error':
-      result.errors.push(item.message ?? 'unknown error')
+      recordErrorMessage(result, item.message ?? 'unknown error')
       return true
     default:
       return false
@@ -157,7 +170,7 @@ const applyEvent = (result: MutableResult, event: RawEvent): boolean => {
       result.sawCompletion = true
       return true
     case 'turn.failed':
-      result.errors.push(event.error?.message ?? 'turn failed')
+      recordErrorMessage(result, event.error?.message ?? 'turn failed')
       result.sawCompletion = true
       return true
     default:

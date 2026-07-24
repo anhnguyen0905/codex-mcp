@@ -108,7 +108,9 @@ npm run waves                                  # compute execution waves from .c
 ```
 
 Waves batch tasks whose dependencies are met and whose files are disjoint, capped at **10
-concurrent subagents** (`--max <n>` to lower). Opt-in; costs N× simultaneous quota. Playbook:
+concurrent subagents** (`--max <n>` to lower). Parallel is the default when `task-waves` reports
+width > 1: waves of ≤3 run automatically, while wider waves ask first; parallel execution costs
+N× simultaneous quota. Playbook:
 [`skills/parallel-execution/SKILL.md`](skills/parallel-execution/SKILL.md).
 
 ---
@@ -128,9 +130,18 @@ concurrent subagents** (`--max <n>` to lower). Opt-in; costs N× simultaneous qu
 `codex_execute` / `codex_continue` / `codex_review` accept `writeNotes: true` to persist a markdown
 summary of the run to `<cwd>/.codex-flow/notes/<sessionId>.md`.
 
+`codex_execute` / `codex_continue` / `codex_review` and each `codex_batch` task accept
+`reasoningEffort: minimal | low | medium | high | xhigh`, passed to Codex as
+`-c model_reasoning_effort="<value>"`.
+
 Sandbox modes: `read-only`, `workspace-write` (default), `danger-full-access`. Default execution
-timeout is 30 min (`timeoutMs` caps at 2 h). Runs into the same `cwd` are serialized; different
+timeout is 60 min (`timeoutMs` caps at 2 h). Runs into the same `cwd` are serialized; different
 workspaces run in parallel.
+
+By default, the server automatically resumes the same session after a transient turn failure
+(at most 2 resumes), timeout (at most 1), or `partial` result caused by a missing completion marker
+or parse errors (at most 1, reported as `no-completion-marker`), with 2 s then 8 s backoff (8 s
+for any later resume). Set `CODEX_MCP_AUTO_RESUME=0` to opt out.
 
 <details>
 <summary>Result payload &amp; live progress</summary>
@@ -142,6 +153,8 @@ Every run tool returns `sessionId`, `agentMessage`, `fileChanges`, `commands`, t
   flag; `null` outside a git repo) so the caller can review without re-reading files.
 - **`aborted`** — `true` when cancelled from the client (Esc in Claude Code); the server forwards
   cancellation to Codex (SIGTERM → SIGKILL after 5 s).
+- **`attempts` / `resumeReasons`** — total attempts and the ordered reasons for automatic resumes;
+  each `codex_batch` task result carries the same fields.
 - **`liveLog`** — path to the raw JSONL event log when the live terminal view is enabled.
 
 Clients that send an MCP `progressToken` (Claude Code does) get `notifications/progress` for every
@@ -159,6 +172,7 @@ window can open, the run still succeeds; follow the `liveLog` or the in-session 
 | `OPENAI_API_KEY` | Auth for Codex CLI (alternative to `codex login`). |
 | `CODEX_BIN` | Override the Codex binary path/name (e.g. `C:\tools\codex.exe`). |
 | `CODEX_MCP_TERMINAL=1` | Open the live-progress window by default. |
+| `CODEX_MCP_AUTO_RESUME=0` | Disable bounded server-side session auto-resume. |
 | `CODEX_FLOW_SKILLS_INDEX` | Override the skill index path. |
 | `MCP_TOOL_TIMEOUT` | Raise Claude Code's MCP tool timeout (ms) for long runs. |
 

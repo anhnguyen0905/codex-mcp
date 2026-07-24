@@ -1,3 +1,5 @@
+import { isBenignCliNotice } from './eventParser.js'
+
 /**
  * Synthetic end-of-run marker appended to the live log by liveView when a run settles. Not a
  * Codex CLI event — it never reaches the event parser (the live log is write-only output).
@@ -46,8 +48,10 @@ const formatItem = (item: RawItem): string | null => {
       const paths = changes.map((change) => change.path ?? '?').join(', ')
       return `✎ ${changes.length} file(s): ${paths}`
     }
-    case 'error':
-      return `✗ ${item.message ?? 'unknown error'}`
+    case 'error': {
+      const message = item.message ?? 'unknown error'
+      return `${isBenignCliNotice(message) ? '⚠' : '✗'} ${message}`
+    }
     default:
       return null
   }
@@ -61,8 +65,12 @@ const formatByType = (event: RawEvent): string | null => {
       return event.item ? formatItem(event.item) : null
     case 'turn.completed':
       return `✓ turn complete (in:${event.usage?.input_tokens ?? 0} out:${event.usage?.output_tokens ?? 0})`
-    case 'turn.failed':
-      return `✗ turn failed: ${event.error?.message ?? 'unknown'}`
+    case 'turn.failed': {
+      const message = event.error?.message ?? 'unknown'
+      return isBenignCliNotice(message)
+        ? `⚠ ${message}`
+        : `✗ turn failed: ${message}`
+    }
     case LIVE_RUN_FINISHED_TYPE:
       return `=== run ${event.sessionId ?? '?'} finished: ${event.status ?? 'unknown'} ===`
     default:

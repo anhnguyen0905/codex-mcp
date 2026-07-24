@@ -11,6 +11,7 @@ import {
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isBenignCliNotice } from './eventParser.js'
 import { LIVE_RUN_FINISHED_TYPE, type LiveRunFinishedStatus } from './progressFormatter.js'
 import { escapeDoubleQuotedShell, LINUX_TERMINALS, openTerminal, type LinuxTerminal } from './terminal.js'
 
@@ -32,7 +33,8 @@ export interface LiveViewDeps {
  * Watches the forwarded stdout stream for terminal turn events so close() can stamp the live log
  * with an end-of-run marker. Stream-derived on purpose: the sink is closed via a no-arg `close()`
  * from the server's finally block, so exit codes / abort flags are not visible here. Mapping:
- * - turn.completed → 'completed', turn.failed → 'failed' (last terminal event wins),
+ * - turn.completed or a benign-notice turn.failed → 'completed',
+ * - any other turn.failed → 'failed' (last terminal event wins),
  * - neither seen  → 'interrupted' (abort, timeout, kill, or a stream cut mid-turn).
  */
 const createStreamStateTracker = () => {
@@ -46,10 +48,16 @@ const createStreamStateTracker = () => {
     try {
       const event: unknown = JSON.parse(trimmed)
       if (typeof event !== 'object' || event === null) return
-      const { type, thread_id: threadId } = event as { type?: string; thread_id?: string }
+      const { type, thread_id: threadId, error } = event as {
+        type?: string
+        thread_id?: string
+        error?: { message?: string }
+      }
       if (type === 'thread.started' && typeof threadId === 'string') sessionId = threadId
       if (type === 'turn.completed') status = 'completed'
-      if (type === 'turn.failed') status = 'failed'
+      if (type === 'turn.failed') {
+        status = isBenignCliNotice(error?.message ?? 'turn failed') ? 'completed' : 'failed'
+      }
     } catch {
       // non-JSON noise in the stream — irrelevant to terminal-state tracking
     }

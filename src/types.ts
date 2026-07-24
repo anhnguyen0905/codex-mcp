@@ -1,6 +1,8 @@
 export const SANDBOX_MODES = ['read-only', 'workspace-write', 'danger-full-access'] as const
+export const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const
 
 export type SandboxMode = (typeof SANDBOX_MODES)[number]
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
 
 export interface CodexUsage {
   inputTokens: number
@@ -33,6 +35,7 @@ export interface ExecuteInput {
   cwd: string
   sandbox: SandboxMode
   model?: string
+  reasoningEffort?: ReasoningEffort
 }
 
 export interface ContinueInput {
@@ -40,6 +43,7 @@ export interface ContinueInput {
   prompt: string
   sandbox: SandboxMode
   model?: string
+  reasoningEffort?: ReasoningEffort
 }
 
 export interface RunOutcome {
