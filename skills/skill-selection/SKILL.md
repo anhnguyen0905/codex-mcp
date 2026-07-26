@@ -50,6 +50,14 @@ Requests are not always engineering. First identify 1–2 **role facets** the ta
 Then derive 3–8 search terms **per facet**. A request can span facets (e.g. "build a dashboard
 and write the launch post") — select for each facet independently within the shared budget.
 
+- **Derive the terms from the confirmed requirements and acceptance criteria**, not only from the
+  user's original sentence. The interview is what turns "build a dashboard" into "weekly retention
+  report, exported to xlsx, labels in vi-VN" — the acceptance criteria are where facets like
+  reporting, localisation, or accessibility actually surface. Classify against the confirmed scope.
+- **Re-run selection per task once the backlog is decomposed.** A task exposes facets the plan level
+  did not (a migration task's data-safety facet, a copy task's brand-voice facet). Each task's
+  `Skills:` field is a selection result, not a copy of the plan's list.
+
 ## Step 3 — Evaluate what is already loaded
 
 Before loading anything new, list the skills already present in the session (per-phase
@@ -109,6 +117,29 @@ Before loading anything new, list the skills already present in the session (per
   0-match. Either way, tell the user which indexed skills were blocked and what you did about them —
   never fall silently through to Step 7 and re-author a skill the library already has.
 - Record the chosen skills in PLAN.md under **Skills plan** as *Skills to use* (name, path, what it informs).
+
+### Step 5 verdict — every facet resolves to LOAD, VET, or AUTHOR
+
+Selection ends in a **verdict per facet**, not in prose. State it explicitly in PLAN.md and to the
+user before Phase 4. Exactly three verdicts exist:
+
+- **`LOAD`** — name the skills, their paths, and what each one informs.
+- **`VET`** — name the indexed candidates blocked by the vet gate and say they are *being vetted now*.
+  This is a Step 5 job, never a gap; the verdict is not final until it becomes `LOAD` or the
+  candidate fails its vet.
+- **`AUTHOR`** — no adoptable skill exists: name the skill to be written and hand off to Step 7c/7d.
+
+Rules:
+
+- **Exactly one verdict per facet.** No facet may be left unresolved, and none may carry two.
+- **Prose is not a verdict.** "No relevant skills found", "nothing matched", "will use general
+  knowledge" are all missing verdicts — the failure mode this gate exists to catch is selection
+  quietly ending with no skill.
+- **A `LOAD` verdict may not include a skill whose stated purpose does not match the facet.** Name
+  similarity is not a match (Step 4's `brand-guidelines`-for-"brand voice" case is the canonical
+  example). A wrong-domain skill is worse than none, because its rules get embedded into a Codex
+  prompt. Demote it to `AUTHOR` rather than claim coverage.
+- **Record the verdict in PLAN.md under Skills plan**, per facet, so review can check it.
 
 ## Step 6 — Embed for Codex (per task, stateless)
 

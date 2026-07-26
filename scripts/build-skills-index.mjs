@@ -4,6 +4,8 @@
 // Usage:
 //   node scripts/build-skills-index.mjs [skillRootDir ...] [--out <file>] [--remote <file>]
 //   node scripts/build-skills-index.mjs --vet <SKILL.md path> [--manifest <file>]
+//   node scripts/build-skills-index.mjs --vet-repo <dir> [--manifest <file>]
+//                                       [--trust <owner>/<repo> ...]
 //
 // Defaults:
 //   roots: ~/.claude/skills, ~/claude-skill-library, and the skills/ dir of every
@@ -40,6 +42,29 @@
 //
 // `--vet` computes that record for one SKILL.md and writes it into the manifest
 // (derived from the path's `remote`/`quarantine` segment unless --manifest is given).
+//
+// `--vet-repo <dir>` is the batch form with risk triage: every SKILL.md under <dir>
+// (same symlink/quarantine/containment rules as indexing) is risk-scanned by
+// `scanSkillRisk` and attributed to a source repo by `resolveSkillSource`.
+// One-file-at-a-time vetting left hundreds of remote skills unvetted — i.e. the gate
+// blocked everything instead of controlling anything; triage makes it usable at scale.
+//
+// AUTO-PIN RULE (two gates, both required):
+//   1. the scan is CLEAN, and
+//   2. the source repo is allowlisted.
+// Anything else is reported, never pinned, with its reason(s) — `risk-findings`,
+// `source-not-allowlisted`, or both. Severity alone is not signal: a security or
+// fuzzing skill legitimately discusses bypassing safety and piping curl to sh, and a
+// research skill legitimately fetches URLs, so provenance decides whether a finding is
+// domain-normal or a supply-chain problem.
+//
+// Source resolution: the enclosing checkout's `origin` remote normalised to
+// `owner/repo`, else the `<library>/remote/<owner>__<repo>/…` clone-dir convention.
+// Allowlist = union of `--trust <owner>/<repo>` (repeatable), the JSON array at
+// `<library>/vet-allowlist.json` when present, and a tiny hardcoded publisher default
+// (see DEFAULT_TRUSTED_SOURCES).
+//
+// `--vet <file>` stays ungated by the allowlist: a human naming one file IS the override.
 
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -56,6 +81,20 @@ const MAX_SCAN_DEPTH = 6
 const QUARANTINE_DIR_NAME = 'quarantine'
 const REMOTE_DIR_NAME = 'remote'
 const VET_MANIFEST_NAME = 'vetted.json'
+const VET_ALLOWLIST_NAME = 'vet-allowlist.json'
+
+// Sources whose skills may be auto-pinned by --vet-repo when they scan CLEAN. Risk
+// severity alone is not signal enough: a security or fuzzing skill legitimately
+// discusses bypassing safety and piping downloads to a shell, while an unknown repo
+// doing the same is a supply-chain problem. Provenance disambiguates the two.
+// Deliberately tiny — extend per machine via --trust or <library>/vet-allowlist.json.
+const DEFAULT_TRUSTED_SOURCES = [
+  'anthropics/skills', // first-party skills from the vendor of the agent itself
+  'trailofbits/skills', // named security firm; its skills discuss attack shapes by design
+  'expo/skills', // first-party skills from the Expo platform team
+  'obra/superpowers', // widely used reference collection by a known maintainer
+  'obra/superpowers-lab', // the same maintainer's experimental companion collection
+]
 
 const PLUGIN_CACHE_SEGMENTS = ['.claude', 'plugins', 'cache']
 const PLUGIN_SKILLS_DIR_NAME = 'skills'
@@ -199,6 +238,164 @@ export async function computeVetRecord(skillFile) {
 /** A record verifies only when its pinned sha256 matches the current content. */
 export function verifyVetRecord(record, content) {
   return Boolean(record?.sha256) && record.sha256 === sha256Of(content)
+}
+
+// Risk patterns for batch triage. Deliberately small, explicit and line-oriented: a
+// hit means "a human must read this file", never "this file is malicious". False
+// positives cost one read; a silent pass pins an unread skill as trusted forever.
+const RISK_PATTERNS = [
+  {
+    name: 'override-instructions',
+    // Classic prompt injection: the skill body tries to displace prior/system instructions.
+    regex:
+      /\b(?:ignore|disregard|forget|override|supersede|overrule)\b[^.\n]{0,60}\b(?:previous|prior|earlier|above|all|any|system|operator|user)\b[^.\n]{0,40}\b(?:instruction|prompt|rule|directive|guideline|order)/i,
+  },
+  {
+    name: 'bypass-review-or-safety',
+    // A skill should never instruct the agent to route around review, approval or safety gates.
+    regex:
+      /\b(?:bypass|skip|disable|circumvent|suppress|ignore|avoid|turn off)\b[^.\n]{0,50}\b(?:review|approval|confirmation|permission|safety|guardrail|sandbox|policy|audit|check)/i,
+  },
+  {
+    name: 'remote-exfiltration',
+    // A remote URL on the same line as an upload/POST verb is the shape of data leaving the machine.
+    regex:
+      /(?=[^\n]*https?:\/\/)(?=[^\n]*(?:-X\s*POST|--data\b|--data-binary\b|--upload-file\b|\s-T\s|\bPOST\b|\.post\(|method:\s*['"]?POST))/i,
+  },
+  {
+    name: 'credential-path-access',
+    // Reading credential-ish paths is never part of a legitimate skill body.
+    regex:
+      /(?:~\/\.ssh|\bid_rsa\b|\bid_ed25519\b|\.aws\/credentials|\.netrc\b|\bkeychain\b|security\s+find-generic-password|(?:^|[\s'"`/=])\.env(?:\.[\w-]+)?\b|\b(?:api[_-]?key|access[_-]?token|secret)s?\.(?:txt|json|ya?ml|env)\b)/i,
+  },
+  {
+    name: 'download-piped-to-shell',
+    // `curl … | sh` executes unreviewed remote code with the user's privileges.
+    regex: /\b(?:curl|wget|iwr|Invoke-WebRequest)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z|k|da|fi)?sh\b/i,
+  },
+  {
+    name: 'opaque-base64-blob',
+    // A long unbroken base64 run hides payloads from anyone skimming the skill.
+    regex: /[A-Za-z0-9+/]{200,}={0,2}/,
+  },
+  {
+    name: 'destructive-command',
+    // Recursive/forced deletion and disk overwrites can destroy the operator's machine.
+    regex: /\brm\s+-[a-z]*(?:rf|fr|r\s+-f|f\s+-r)[a-z]*\s+\S|\bmkfs\b|\bdd\s+if=\S+\s+of=\/dev\/|\bgit\s+push\s+--force\b/i,
+  },
+  {
+    name: 'write-outside-workspace',
+    // Writing to home dotfiles or system dirs persists behaviour beyond the current task.
+    regex:
+      /(?:>>?|\btee\b|\bcp\b|\bmv\b|\bwriteFile\b|\bwrite_text\b|\b(?:append|write|add|install|persist|save|copy)\b[^.\n]{0,40})\s*['"]?(?:~\/\.[\w.-]+|\/(?:etc|usr|bin|sbin|var|Library|System)\/)/i,
+  },
+]
+
+const MAX_EXCERPT_LENGTH = 160
+
+/**
+ * Risk-scan a SKILL.md body for prompt-injection / exfiltration / destructive shapes.
+ * Returns { findings: [{ pattern, line, excerpt }] } — one finding per pattern per
+ * matching line, `line` being 1-based. An empty findings array means CLEAN.
+ */
+export function scanSkillRisk(content) {
+  const findings = []
+  const lines = (content ?? '').split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (!line.trim()) continue
+    for (const { name, regex } of RISK_PATTERNS) {
+      if (!regex.test(line)) continue
+      findings.push({
+        pattern: name,
+        line: i + 1,
+        excerpt: line.trim().slice(0, MAX_EXCERPT_LENGTH),
+      })
+    }
+  }
+  return { findings }
+}
+
+/**
+ * Normalise a git remote URL to a lowercase `owner/repo`. Handles scp-style
+ * (`git@host:owner/repo.git`), URL-style (`https://host/owner/repo.git`) and
+ * credentialed URLs. Returns null when no owner/repo pair can be read.
+ */
+export function normalizeGitRemote(url) {
+  if (!url) return null
+  const trimmed = url.trim().replace(/\.git$/i, '').replace(/\/+$/, '')
+  if (!trimmed) return null
+  const scp = trimmed.match(/^[\w.-]+@[^:/]+:(.+)$/) // git@github.com:owner/repo
+  const withoutHost = scp
+    ? scp[1]
+    : trimmed.replace(/^[a-z][\w+.-]*:\/\/(?:[^@/]+@)?[^/]+\//i, '') // scheme://[user@]host/
+  const segments = withoutHost.split('/').filter(Boolean)
+  if (segments.length < 2) return null
+  return `${segments.at(-2)}/${segments.at(-1)}`.toLowerCase()
+}
+
+/**
+ * Read `owner/repo` out of the `<library>/remote/<owner>__<repo>/…` layout that
+ * sync-awesome-skills clones into — the fallback when a skill dir is not a git
+ * checkout (e.g. the .git dir was stripped). Returns null when absent.
+ */
+export function sourceFromClonePath(skillFile) {
+  const segments = path.resolve(skillFile).split(path.sep)
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const match = segments[i].match(/^([\w.-]+)__([\w.-]+)$/)
+    if (match) return `${match[1]}/${match[2]}`.toLowerCase()
+  }
+  return null
+}
+
+/**
+ * Resolve which repo a SKILL.md came from: the enclosing checkout's `origin`
+ * remote first (authoritative), else the `owner__repo` clone-dir convention.
+ * `cache` memoises the git lookup per directory across a batch run.
+ */
+export async function resolveSkillSource(skillFile, cache = new Map()) {
+  const dir = path.dirname(path.resolve(skillFile))
+  if (!cache.has(dir)) {
+    let origin = null
+    try {
+      const { stdout } = await execFileAsync('git', ['-C', dir, 'remote', 'get-url', 'origin'])
+      origin = normalizeGitRemote(stdout)
+    } catch {
+      origin = null // not a checkout, or no origin remote — fall back to the path convention
+    }
+    cache.set(dir, origin)
+  }
+  return cache.get(dir) ?? sourceFromClonePath(skillFile)
+}
+
+/**
+ * Build the auto-pin allowlist as the union of (highest precedence first) explicit
+ * --trust flags, `<library>/vet-allowlist.json` when present, and the tiny
+ * hardcoded default publisher set. Returns { sources: Set, warning }.
+ */
+export async function loadVetAllowlist(libDir, trusted = []) {
+  const sources = new Set(
+    [...trusted, ...DEFAULT_TRUSTED_SOURCES].map((source) => source.trim().toLowerCase()),
+  )
+  const file = path.join(libDir, VET_ALLOWLIST_NAME)
+  let raw
+  try {
+    raw = await fs.readFile(file, 'utf8')
+  } catch {
+    return { sources, warning: null } // no per-library allowlist — defaults + --trust only
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) {
+      return { sources, warning: `ignored malformed vet allowlist (not a JSON array): ${file}` }
+    }
+    for (const source of parsed) {
+      if (typeof source === 'string' && source.trim()) sources.add(source.trim().toLowerCase())
+    }
+    return { sources, warning: null }
+  } catch (error) {
+    return { sources, warning: `ignored unreadable vet allowlist ${file}: ${error.message}` }
+  }
 }
 
 /** Load `<root>/vetted.json`. Missing file is normal ({}), corrupt file warns. */
@@ -415,15 +612,108 @@ async function runVet(skillFile, manifestArg) {
 }
 
 /**
- * Parse argv, build and write the index — or, with --vet, record a vet pin.
- * Returns { count, out, warnings } (index mode) or { vetted, manifest, record }.
+ * Manifest location for a batch vet: the repo dir's own remote/quarantine segment
+ * when it has one, else the segment carried by the skills found beneath it. Falls
+ * back to the same "pass --manifest" error as single-file vetting.
+ */
+function deriveManifestForRepo(dir, files) {
+  try {
+    return deriveManifestFile(dir)
+  } catch (error) {
+    if (files.length === 0) throw error
+    return deriveManifestFile(files[0]) // a file may cross remote/ below the given dir
+  }
+}
+
+/**
+ * Batch-vet every SKILL.md under `dir`: auto-pin a file only when it scans CLEAN *and*
+ * comes from an allowlisted source, then report everything else with its reason
+ * (`risk-findings`, `source-not-allowlisted`, or both) for a human to read.
+ * Returns { vettedCount, vettedFiles, flagged, allowlist, manifest, warnings }.
+ */
+async function runVetRepo(dir, manifestArg, trusted = []) {
+  const resolved = path.resolve(dir)
+  const stat = await fs.stat(resolved).catch(() => null)
+  if (!stat?.isDirectory()) {
+    throw new Error(`--vet-repo requires an existing directory: ${resolved}`)
+  }
+  const rootReal = await fs.realpath(resolved)
+
+  const files = []
+  const warnings = []
+  await collectSkillFiles(resolved, 0, files, warnings)
+  files.sort()
+
+  // Resolve the manifest before any scanning so a misused path fails fast.
+  const manifestFile = path.resolve(manifestArg ?? deriveManifestForRepo(resolved, files))
+
+  const { sources: allowlist, warning: allowlistWarning } = await loadVetAllowlist(
+    path.dirname(manifestFile),
+    trusted,
+  )
+  if (allowlistWarning) warnings.push(allowlistWarning)
+
+  const records = {}
+  const vettedFiles = []
+  const flagged = []
+  const sourceCache = new Map()
+  for (const file of files) {
+    const { real, warning } = await resolveInsideRoot(file, rootReal)
+    if (!real) {
+      warnings.push(warning)
+      continue
+    }
+    const content = await fs.readFile(real, 'utf8').catch(() => null)
+    if (content === null) {
+      warnings.push(`skipped unreadable SKILL.md: ${file}`)
+      continue
+    }
+    const { findings } = scanSkillRisk(content)
+    const source = await resolveSkillSource(real, sourceCache)
+    // Two independent gates: risky content, and content from a publisher nobody vouched
+    // for. A finding is domain-legitimate in a security skill and alarming elsewhere, so
+    // neither gate alone is enough signal to auto-pin.
+    const reasons = [
+      ...(findings.length > 0 ? ['risk-findings'] : []),
+      ...(source && allowlist.has(source) ? [] : ['source-not-allowlisted']),
+    ]
+    if (reasons.length > 0) {
+      flagged.push({ file, source, reasons, findings })
+      continue
+    }
+    records[path.resolve(file)] = await computeVetRecord(real)
+    vettedFiles.push(file)
+  }
+
+  const { records: existing, warning } = await loadVetManifest(manifestFile)
+  if (warning) warnings.push(warning)
+  const updated = { ...existing, ...records }
+  await fs.mkdir(path.dirname(manifestFile), { recursive: true })
+  await fs.writeFile(manifestFile, `${JSON.stringify(updated, null, 2)}\n`, 'utf8')
+
+  return {
+    vettedCount: vettedFiles.length,
+    vettedFiles,
+    flagged,
+    allowlist: [...allowlist].sort(),
+    manifest: manifestFile,
+    warnings,
+  }
+}
+
+/**
+ * Parse argv, build and write the index — or, with --vet/--vet-repo, record vet pins.
+ * Returns { count, out, warnings } (index mode), { vetted, manifest, record } (--vet),
+ * or { vettedCount, vettedFiles, flagged, manifest, warnings } (--vet-repo).
  */
 export async function runCli(argv) {
   const roots = []
   let out = null
   let remote = null
   let vet = null
+  let vetRepo = null
   let manifest = null
+  const trusted = []
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -436,6 +726,13 @@ export async function runCli(argv) {
     } else if (arg === '--vet') {
       vet = argv[++i]
       if (!vet) throw new Error(`${arg} requires a SKILL.md path`)
+    } else if (arg === '--vet-repo') {
+      vetRepo = argv[++i]
+      if (!vetRepo) throw new Error(`${arg} requires a directory path`)
+    } else if (arg === '--trust') {
+      const source = argv[++i]
+      if (!source) throw new Error(`${arg} requires an <owner>/<repo> source`)
+      trusted.push(source)
     } else if (arg === '--manifest') {
       manifest = argv[++i]
       if (!manifest) throw new Error(`${arg} requires a file path`)
@@ -444,8 +741,12 @@ export async function runCli(argv) {
     }
   }
 
+  if (vet && vetRepo) throw new Error('--vet and --vet-repo are mutually exclusive')
+  // --vet is an explicit human decision about one file: it IS the allowlist override.
   if (vet) return runVet(vet, manifest)
-  if (manifest) throw new Error('--manifest is only valid together with --vet')
+  if (vetRepo) return runVetRepo(vetRepo, manifest, trusted)
+  if (trusted.length > 0) throw new Error('--trust is only valid together with --vet-repo')
+  if (manifest) throw new Error('--manifest is only valid together with --vet/--vet-repo')
 
   const scanRoots = roots.length > 0 ? roots : await defaultRoots()
   const outFile = path.resolve(out ?? process.env.CODEX_FLOW_SKILLS_INDEX ?? defaultOut())
@@ -479,6 +780,34 @@ if (isDirectRun) {
         console.log(`Vetted ${summary.vetted}`)
         console.log(`→ ${summary.manifest} (sha256 ${summary.record.sha256.slice(0, 12)}…)`)
         console.log('Rebuild the index to mark it vetted:true: node scripts/build-skills-index.mjs')
+        return
+      }
+      if (typeof summary.vettedCount === 'number') {
+        for (const warning of summary.warnings) console.warn(`⚠ ${warning}`)
+        console.log(`Vetted ${summary.vettedCount} skill(s) → ${summary.manifest}`)
+        console.log(`Allowlisted sources: ${summary.allowlist.join(', ')}`)
+        if (summary.flagged.length > 0) {
+          const countBy = (reason) =>
+            summary.flagged.filter((f) => f.reasons.includes(reason)).length
+          console.log(
+            `\n${summary.flagged.length} file(s) NOT vetted ` +
+              `(${countBy('risk-findings')} with risk findings, ` +
+              `${countBy('source-not-allowlisted')} from a non-allowlisted source) — read these yourself:`,
+          )
+          for (const { file, source, reasons, findings } of summary.flagged) {
+            console.log(`\n  ${file}`)
+            console.log(`    source: ${source ?? 'unknown'} — ${reasons.join(', ')}`)
+            for (const finding of findings) {
+              console.log(`    [${finding.pattern}] line ${finding.line}: ${finding.excerpt}`)
+            }
+          }
+          console.log(
+            '\nTrust a publisher so its clean skills auto-pin: --trust <owner>/<repo>' +
+              `\n(or list it in ${path.join(path.dirname(summary.manifest), VET_ALLOWLIST_NAME)})` +
+              '\nVet one file regardless of its source: --vet <SKILL.md>',
+          )
+        }
+        console.log('\nRebuild the index to mark vetted skills: node scripts/build-skills-index.mjs')
         return
       }
       const { count, local, out, warnings } = summary
