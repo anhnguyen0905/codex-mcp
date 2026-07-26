@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from 'vitest'
 import {
   DEFAULT_TERMINAL_CLOSE_DELAY_MS,
   MAX_TERMINAL_CLOSE_DELAY_MS,
+  RESOLVE_WINDOW_ID_TIMEOUT_MS,
   TERMINAL_CLOSE_DELAY_ENV,
   TERMINAL_KEEP_OPEN_ENV,
   TERMINAL_TTY_ENV,
@@ -19,6 +20,11 @@ import {
 const safeTty = '/dev/ttys003'
 
 describe('resolveCloseDelayMs', () => {
+  test('pins the default and maximum delay constants', () => {
+    expect(DEFAULT_TERMINAL_CLOSE_DELAY_MS).toBe(4000)
+    expect(MAX_TERMINAL_CLOSE_DELAY_MS).toBe(60_000)
+  })
+
   test('returns the default when the delay is absent', () => {
     const delayMs = resolveCloseDelayMs({})
 
@@ -278,13 +284,14 @@ describe('closeTerminalWindow', () => {
     )
 
     expect(closed).toBe(true)
+    expect(RESOLVE_WINDOW_ID_TIMEOUT_MS).toBe(5000)
     expect(spawnSyncFn).toHaveBeenCalledWith(
       'osascript',
       [
         '-e',
         'tell application "Terminal" to get id of first window whose selected tab\'s tty is "/dev/ttys003"',
       ],
-      { encoding: 'utf8', timeout: 5000 },
+      { encoding: 'utf8', timeout: RESOLVE_WINDOW_ID_TIMEOUT_MS },
     )
     expect(spawnFn).toHaveBeenCalledWith(
       'osascript',

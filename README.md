@@ -161,8 +161,9 @@ Clients that send an MCP `progressToken` (Claude Code does) get `notifications/p
 meaningful Codex event. Set `terminal: true` (or `CODEX_MCP_TERMINAL=1`) to also open a live-tailing
 window — Terminal.app on macOS, PowerShell on Windows, the first available emulator on Linux. On
 macOS, the window closes itself about 4 seconds after a successful run; it stays open after a failed
-or interrupted run. Windows and Linux windows already close with their process. If no window can
-open, the run still succeeds; follow the `liveLog` or the in-session progress instead.
+or interrupted run. The delay defaults to 4000 ms; `0` closes immediately, and values above `60000`
+are clamped. Windows and Linux windows already close with their process. If no window can open, the
+run still succeeds; follow the `liveLog` or the in-session progress instead.
 </details>
 
 ---
@@ -175,7 +176,7 @@ open, the run still succeeds; follow the `liveLog` or the in-session progress in
 | `CODEX_BIN` | Override the Codex binary path/name (e.g. `C:\tools\codex.exe`). |
 | `CODEX_MCP_TERMINAL=1` | Open the live-progress window by default. |
 | `CODEX_MCP_TERMINAL_KEEP_OPEN=1` | Never auto-close the live-progress window (the value must be exactly `1`). |
-| `CODEX_MCP_TERMINAL_CLOSE_DELAY_MS` | Set the grace delay in ms before closing (default `4000`; `0` closes immediately; values above `60000` are clamped, and unparseable values use the default). |
+| `CODEX_MCP_TERMINAL_CLOSE_DELAY_MS` | Set the close delay in ms; negative, non-integer, or unparseable input uses `4000`. |
 | `CODEX_MCP_AUTO_RESUME=0` | Disable bounded server-side session auto-resume. |
 | `CODEX_FLOW_SKILLS_INDEX` | Override the skill index path. |
 | `MCP_TOOL_TIMEOUT` | Raise Claude Code's MCP tool timeout (ms) for long runs. |

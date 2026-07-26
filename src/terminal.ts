@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { buildWatcherEnvExports } from './terminalCloser.js'
+import { buildWatcherEnvExports, type TerminalCloseEnv } from './terminalCloser.js'
 
 type SpawnFn = typeof spawn
 
@@ -40,6 +40,7 @@ export interface TerminalPaths {
 
 export interface OpenTerminalOptions extends Omit<TerminalPaths, 'logPath'> {
   platform: NodeJS.Platform
+  env?: TerminalCloseEnv
   spawnFn?: SpawnFn
 }
 
@@ -66,7 +67,10 @@ const escapePowerShell = (value: string): string => value.replace(/'/g, "''")
  */
 export const escapeDoubleQuotedShell = (value: string): string => value.replace(/[\\"`$]/g, '\\$&')
 
-const buildDarwinLaunch = ({ nodeBin, tailScript, logPath, commandFile }: TerminalPaths): TerminalLaunch => {
+const buildDarwinLaunch = (
+  { nodeBin, tailScript, logPath, commandFile }: TerminalPaths,
+  env: TerminalCloseEnv,
+): TerminalLaunch => {
   if (commandFile) {
     return { command: 'open', args: ['-a', 'Terminal', commandFile] }
   }
@@ -74,7 +78,7 @@ const buildDarwinLaunch = ({ nodeBin, tailScript, logPath, commandFile }: Termin
   const escapedPathCommand = `"${dq(nodeBin)}" "${dq(tailScript)}" "${dq(logPath)}"`
   // This fixed shell expression must expand inside the new Terminal window; only interpolated
   // paths are shell-escaped before AppleScript escaping protects the complete command string.
-  const watcherEnvExports = buildWatcherEnvExports(process.env).replaceAll('\n', '; ')
+  const watcherEnvExports = buildWatcherEnvExports(env).replaceAll('\n', '; ')
   const configPrefix = watcherEnvExports.length > 0 ? `${watcherEnvExports}; ` : ''
   const shellCommand = `export CODEX_MCP_TERMINAL_TTY="$(tty)"; ${configPrefix}${escapedPathCommand}`
   const escaped = escapeAppleScript(shellCommand)
@@ -116,8 +120,9 @@ const buildLinuxLaunch = ({ nodeBin, tailScript, logPath, linuxTerminal }: Termi
 export const buildTerminalLaunch = (
   platform: NodeJS.Platform,
   paths: TerminalPaths,
+  env: TerminalCloseEnv = process.env,
 ): TerminalLaunch | null => {
-  if (platform === 'darwin') return buildDarwinLaunch(paths)
+  if (platform === 'darwin') return buildDarwinLaunch(paths, env)
   if (platform === 'win32') return buildWindowsLaunch(paths)
   if (platform === 'linux') return buildLinuxLaunch(paths)
   return null
@@ -129,8 +134,20 @@ export const buildTerminalLaunch = (
  * viewer must never fail the actual Codex run. On other platforms, tail the `logPath` manually.
  */
 export const openTerminal = (logPath: string, options: OpenTerminalOptions): boolean => {
-  const { platform, nodeBin, tailScript, commandFile, linuxTerminal, spawnFn = spawn } = options
-  const launch = buildTerminalLaunch(platform, { nodeBin, tailScript, logPath, commandFile, linuxTerminal })
+  const {
+    platform,
+    nodeBin,
+    tailScript,
+    commandFile,
+    linuxTerminal,
+    env = process.env,
+    spawnFn = spawn,
+  } = options
+  const launch = buildTerminalLaunch(
+    platform,
+    { nodeBin, tailScript, logPath, commandFile, linuxTerminal },
+    env,
+  )
   if (launch === null) return false
 
   try {

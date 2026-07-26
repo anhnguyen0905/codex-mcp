@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { isBenignCliNotice } from './eventParser.js'
 import { LIVE_RUN_FINISHED_TYPE, type LiveRunFinishedStatus } from './progressFormatter.js'
 import { escapeDoubleQuotedShell, LINUX_TERMINALS, openTerminal, type LinuxTerminal } from './terminal.js'
-import { buildWatcherEnvExports } from './terminalCloser.js'
+import { buildWatcherEnvExports, type TerminalCloseEnv } from './terminalCloser.js'
 
 /** Keep at most this many run logs per workspace; older ones are pruned on each new run. */
 const MAX_LOG_FILES = 20
@@ -27,6 +27,7 @@ export interface LiveView {
 
 /** Injectable dependencies for tests (optional — production callers pass nothing). */
 export interface LiveViewDeps {
+  env?: TerminalCloseEnv
   openTerminalFn?: typeof openTerminal
 }
 
@@ -150,14 +151,19 @@ const pruneOldLogs = (logDir: string, keep: number): void => {
   }
 }
 
-const writeCommandFile = (logDir: string, stamp: string, logPath: string): string | undefined => {
+const writeCommandFile = (
+  logDir: string,
+  stamp: string,
+  logPath: string,
+  env: TerminalCloseEnv,
+): string | undefined => {
   if (process.platform !== 'darwin') return undefined
   try {
     const commandFile = join(logDir, `watch-${stamp}.command`)
     const dq = escapeDoubleQuotedShell
     // This fixed shell expression must expand inside the newly opened window; only the
     // interpolated paths belong behind the double-quoted shell escaper.
-    const watcherEnvExports = buildWatcherEnvExports(process.env)
+    const watcherEnvExports = buildWatcherEnvExports(env)
     const configLines = watcherEnvExports.length > 0 ? `${watcherEnvExports}\n` : ''
     const script = `#!/bin/zsh\nexport CODEX_MCP_TERMINAL_TTY="$(tty)"\n${configLines}exec "${dq(process.execPath)}" "${dq(TAIL_SCRIPT)}" "${dq(logPath)}"\n`
     writeFileSync(commandFile, script, { mode: 0o755 })
@@ -173,7 +179,7 @@ const writeCommandFile = (logDir: string, stamp: string, logPath: string): strin
  * a no-op sink so a broken viewer never fails the actual Codex run.
  */
 export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView => {
-  const { openTerminalFn = openTerminal } = deps
+  const { env = process.env, openTerminalFn = openTerminal } = deps
   try {
     // Refuse a symlinked control dir OR nested `live` dir: `mkdirSync`/writes would otherwise
     // follow it (mkdir -p does NOT fail on an existing symlink-to-dir) and drop an executable
@@ -204,8 +210,9 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
       platform: process.platform,
       nodeBin: process.execPath,
       tailScript: TAIL_SCRIPT,
-      commandFile: writeCommandFile(logDir, stamp, logPath),
+      commandFile: writeCommandFile(logDir, stamp, logPath, env),
       linuxTerminal: detectLinuxTerminal(),
+      env,
     })
 
     return {
