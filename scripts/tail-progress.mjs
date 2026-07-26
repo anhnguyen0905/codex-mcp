@@ -100,8 +100,7 @@ const tryCloseTerminal = (status) => {
         },
       }
     : undefined
-  console.log(`\n(run completed — closing this window in ${decision.delayMs / 1000}s…)`)
-  terminalCloser.closeTerminalWindow(
+  const closed = terminalCloser.closeTerminalWindow(
     {
       tty: process.env[terminalCloser.TERMINAL_TTY_ENV],
       delayMs: decision.delayMs,
@@ -109,6 +108,9 @@ const tryCloseTerminal = (status) => {
     },
     deps,
   )
+  if (!closed) return false
+
+  console.log(`\n(run completed — closing this window in ${decision.delayMs / 1000}s…)`)
   finish(0)
   return true
 }

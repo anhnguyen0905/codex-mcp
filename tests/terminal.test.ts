@@ -1,8 +1,13 @@
 import { EventEmitter } from 'node:events'
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import { TERMINAL_CLOSE_DELAY_ENV, TERMINAL_KEEP_OPEN_ENV } from '../src/terminalCloser.js'
 import { buildTerminalLaunch, escapeDoubleQuotedShell, openTerminal } from '../src/terminal.js'
 
 const paths = { nodeBin: '/usr/bin/node', tailScript: '/tools/tail.mjs', logPath: '/logs/a b.jsonl' }
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
 
 describe('buildTerminalLaunch', () => {
   test('darwin uses `open -a Terminal` with a .command wrapper when provided (no Apple Events)', () => {
@@ -26,6 +31,28 @@ describe('buildTerminalLaunch', () => {
 
     expect(doScript).toContain('export CODEX_MCP_TERMINAL_TTY=\\"$(tty)\\"; ')
     expect(doScript).not.toContain('\\$(tty)')
+  })
+
+  test('darwin osascript forwards allowlisted watcher config exports', () => {
+    vi.stubEnv(TERMINAL_KEEP_OPEN_ENV, '1')
+    vi.stubEnv(TERMINAL_CLOSE_DELAY_ENV, '9000')
+
+    const launch = buildTerminalLaunch('darwin', paths)
+    const doScript = launch?.args.at(-1) ?? ''
+
+    expect(doScript).toContain(`export ${TERMINAL_KEEP_OPEN_ENV}=1;`)
+    expect(doScript).toContain(`export ${TERMINAL_CLOSE_DELAY_ENV}=9000;`)
+  })
+
+  test('darwin osascript omits watcher config exports when unset', () => {
+    vi.stubEnv(TERMINAL_KEEP_OPEN_ENV, undefined)
+    vi.stubEnv(TERMINAL_CLOSE_DELAY_ENV, undefined)
+
+    const launch = buildTerminalLaunch('darwin', paths)
+    const doScript = launch?.args.at(-1) ?? ''
+
+    expect(doScript).not.toContain(TERMINAL_KEEP_OPEN_ENV)
+    expect(doScript).not.toContain(TERMINAL_CLOSE_DELAY_ENV)
   })
 
   test('darwin osascript neutralizes shell metacharacters in the log path', () => {

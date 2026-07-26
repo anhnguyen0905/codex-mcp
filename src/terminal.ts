@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { buildWatcherEnvExports } from './terminalCloser.js'
 
 type SpawnFn = typeof spawn
 
@@ -73,7 +74,9 @@ const buildDarwinLaunch = ({ nodeBin, tailScript, logPath, commandFile }: Termin
   const escapedPathCommand = `"${dq(nodeBin)}" "${dq(tailScript)}" "${dq(logPath)}"`
   // This fixed shell expression must expand inside the new Terminal window; only interpolated
   // paths are shell-escaped before AppleScript escaping protects the complete command string.
-  const shellCommand = `export CODEX_MCP_TERMINAL_TTY="$(tty)"; ${escapedPathCommand}`
+  const watcherEnvExports = buildWatcherEnvExports(process.env).replaceAll('\n', '; ')
+  const configPrefix = watcherEnvExports.length > 0 ? `${watcherEnvExports}; ` : ''
+  const shellCommand = `export CODEX_MCP_TERMINAL_TTY="$(tty)"; ${configPrefix}${escapedPathCommand}`
   const escaped = escapeAppleScript(shellCommand)
   return {
     command: 'osascript',
