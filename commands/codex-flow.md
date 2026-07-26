@@ -173,7 +173,7 @@ For each task in dependency order (sequential mode):
    - `model`: match the task's complexity — a stronger model for architectural, cross-cutting, or subtle-logic tasks; the default (or a faster/cheaper model) for small, mechanical, well-specified tasks. Note the choice in the Decision log.
    - `reasoningEffort`: map task complexity explicitly — `low` for mechanical, well-specified tasks; omit it for standard implementation work (use the CLI default); `high` for architectural, cross-cutting, or subtle-logic tasks. Note the choice in the Decision log.
    - `timeoutMs`: default 60 min; scale UP for large tasks rather than letting them die. The server automatically resumes a timed-out or dropped session within bounded limits. Do NOT immediately retry a failed run manually — inspect `attempts` and `resumeReasons` in the payload first, and ask the user before retrying only after the server's auto-resume allowance has already been used.
-   - `terminal`: `true` — opens a live-progress terminal window when supported; progress also streams into the session via MCP notifications
+   - `terminal`: `true` — opens a live-progress terminal window when supported; progress also streams into the session via MCP notifications; on macOS, the window closes itself after a successful run and stays open on failure
 2. **Check the returned `status` field** before anything else:
    - `success` → proceed normally.
    - `partial` (not a tool error) → the run ended without a completion marker or with unparseable
