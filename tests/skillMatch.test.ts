@@ -7,6 +7,8 @@ import {
   selectSkills,
   fitToBudget,
   stem,
+  idfWeight,
+  buildDocFrequency,
   DEFAULT_TOKEN_BUDGET,
 } from '../scripts/skill-match.mjs'
 
@@ -180,5 +182,70 @@ describe('scoreEntry morphology', () => {
 
     // Assert
     expect(score).toBeGreaterThan(0)
+  })
+})
+
+describe('idfWeight', () => {
+  test('weights a rare term above a term half the index uses', () => {
+    // Arrange
+    // A realistic corpus: "data" is everywhere, "incrementality" appears once.
+    const entries = [
+      ...Array.from({ length: 40 }, (_, i) => ({ name: `s${i}`, description: 'data analysis of things' })),
+      { name: 'lift', description: 'incrementality holdout measurement for paid media' },
+    ]
+    const stats = buildDocFrequency(entries)
+
+    // Act / Assert
+    expect(idfWeight('incrementality', stats)).toBeGreaterThan(idfWeight('data', stats))
+  })
+
+  test('returns a neutral weight without corpus stats', () => {
+    expect(idfWeight('anything', null)).toBe(1)
+  })
+})
+
+describe('selectSkills per facet', () => {
+  // Three strong marketing skills against one visualization skill: on a combined
+  // term list the marketing facet fills every slot a tight budget allows.
+  const FACETED = [
+    { name: 'content-engine', description: 'Platform-native content systems: campaign content, launch copy, copywriting.', file: '/a/1/SKILL.md', tokens: 600 },
+    { name: 'marketing-campaign', description: 'Plan and execute a marketing campaign: launch copy, campaign content, ad variants.', file: '/a/2/SKILL.md', tokens: 600 },
+    { name: 'crosspost', description: 'Distribute campaign content and launch copy across social platforms.', file: '/a/3/SKILL.md', tokens: 600 },
+    { name: 'dashboard-builder', description: 'Build monitoring dashboards operators actually use.', file: '/a/4/SKILL.md', tokens: 600 },
+  ]
+  const viz = ['dashboard', 'monitoring']
+  const marketing = ['campaign content', 'launch copy', 'copywriting']
+
+  test('keeps the weaker facet alive when the budget is tight', () => {
+    // Arrange — a flat term list lets the marketing facet take every slot
+    const flat = selectSkills(FACETED, [...viz, ...marketing], { tokenBudget: 1200 }).map((s) => s.name)
+
+    // Act — the same request expressed as two facets
+    const faceted = selectSkills(
+      FACETED,
+      [{ name: 'viz', terms: viz }, { name: 'marketing', terms: marketing }],
+      { tokenBudget: 1200 },
+    ).map((s) => s.name)
+
+    // Assert
+    expect(flat).not.toContain('dashboard-builder')
+    expect(faceted).toContain('dashboard-builder')
+  })
+
+  test('tags each selection with the facet that surfaced it', () => {
+    const selected = selectSkills(
+      FACETED,
+      [{ name: 'viz', terms: viz }, { name: 'marketing', terms: marketing }],
+      { tokenBudget: 6000 },
+    )
+
+    expect(selected.find((s) => s.name === 'dashboard-builder')?.facet).toBe('viz')
+  })
+
+  test('still accepts a flat term list (single-facet back-compat)', () => {
+    const selected = selectSkills(FACETED, viz, { tokenBudget: 6000 })
+
+    expect(selected[0].name).toBe('dashboard-builder')
+    expect(selected[0]).not.toHaveProperty('facet')
   })
 })

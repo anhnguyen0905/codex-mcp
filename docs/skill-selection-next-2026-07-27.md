@@ -18,6 +18,14 @@ Nguyên tắc chọn hướng: cái gì đo được trên harness thì làm tr�
 
 ---
 
+> **Cập nhật cuối ngày 2026-07-27:** đã làm #1 (IDF) và #2 (per-facet). Kết quả đo:
+> 100-case **62/100 không đổi**, 32-scenario giữ 32/32, full suite 636 pass.
+> IDF chỉ đổi thứ tự trên 16/100 scenario; per-facet chỉ có tác dụng khi budget hẹp
+> (≤1800 token). **Kết luận quan trọng: giới hạn hiện tại không còn ở retrieval mà ở
+> coverage của library** — 38 case fail còn lại cần Step 7d viết skill, không phải tune matcher.
+> Hệ quả cho lộ trình: hạ ưu tiên #3/#4 (alias/negatives — cùng bản chất tuning), đẩy
+> LLM reranker (giá trị ở precision + kích hoạt Step 7 đúng) và #10 (pre-author skill) lên trước.
+
 ## P1 — Mechanical, đo được ngay trên harness
 
 ### 1. IDF weighting (khả năng là win lớn nhất còn lại)

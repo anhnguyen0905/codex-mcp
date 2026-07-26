@@ -65,12 +65,41 @@ const normalizePhrase = (text) => text.toLowerCase().replace(/[-_/]+/g, ' ').rep
 // Phrase comparisons run on stemmed tokens so "project management" hits "project-manager".
 const stemPhrase = (text) => normalizePhrase(text).split(' ').map(stem).join(' ')
 
+// IDF weighting: a term that only a few skills mention ("incrementality", "gacha")
+// is far more diagnostic than one half the index uses ("data", "analysis"). Without
+// it, generic skills outrank specialists on a flat name/desc score.
+const IDF_PIVOT = 2.5 // a mid-frequency term lands near weight 1.0
+const IDF_MIN = 0.5
+const IDF_MAX = 3
+
+/** Document frequency of every stemmed token across the index (names + descriptions). */
+export function buildDocFrequency(entries) {
+  const df = new Map()
+  for (const entry of entries) {
+    for (const token of new Set([...words(entry.name), ...words(entry.description ?? '')])) {
+      df.set(token, (df.get(token) ?? 0) + 1)
+    }
+  }
+  return { df, total: entries.length }
+}
+
+/** Weight one term by rarity, clamped so a typo can't dominate and a common word still counts. */
+export function idfWeight(term, stats) {
+  if (!stats?.total) return 1
+  const raw = Math.log((stats.total + 1) / ((stats.df.get(stem(term)) ?? 0) + 1))
+  return Math.min(Math.max(raw / IDF_PIVOT, IDF_MIN), IDF_MAX)
+}
+
+// A phrase is as diagnostic as its rarest word.
+const phraseWeight = (phrase, stats) =>
+  stats ? Math.max(...phrase.split(' ').map((word) => idfWeight(word, stats))) : 1
+
 /**
  * Match one entry against derived terms, returning a breakdown:
  *   { score, nameHits, phraseHits, descHits } — enough for both ranking and the
  *   relevance floor (a single generic description word must not qualify a skill).
  */
-export function matchDetail(entry, terms) {
+export function matchDetail(entry, terms, stats = null) {
   const nameWords = new Set(words(entry.name))
   const descWords = new Set(words(entry.description))
   const descText = entry.description.toLowerCase()
@@ -91,41 +120,43 @@ export function matchDetail(entry, terms) {
       const phrase = stemPhrase(term)
       // Score phrases by specificity: a longer phrase hit outranks a single generic word.
       const phraseWords = phrase.split(' ').length
+      const weight = phraseWeight(phrase, stats)
       if (nameNorm.includes(phrase)) {
-        score += NAME_PHRASE + (phraseWords - 1) * DESC_PHRASE
+        score += (NAME_PHRASE + (phraseWords - 1) * DESC_PHRASE) * weight
         nameHits++
       } else if (descNorm.includes(phrase)) {
-        score += DESC_PHRASE + (phraseWords - 1) * DESC_WORD
+        score += (DESC_PHRASE + (phraseWords - 1) * DESC_WORD) * weight
         phraseHits++
       }
       continue
     }
+    const weight = idfWeight(term, stats)
     if (term.length < MIN_TERM_LEN) {
       if (nameWords.has(stemmed)) {
-        score += NAME_WORD
+        score += NAME_WORD * weight
         nameHits++
       } else if (descWords.has(stemmed)) {
-        score += DESC_WORD
+        score += DESC_WORD * weight
         descHits++
       }
       continue
     }
     if (nameWords.has(stemmed)) {
-      score += NAME_WORD
+      score += NAME_WORD * weight
       nameHits++
     } else if (descWords.has(stemmed)) {
-      score += DESC_WORD
+      score += DESC_WORD * weight
       descHits++
     } else if (descText.includes(term)) {
-      score += SUBSTRING
+      score += SUBSTRING * weight
     }
   }
   return { score, nameHits, phraseHits, descHits }
 }
 
 /** Score one index entry against derived terms (higher = more relevant; 0 = no match). */
-export function scoreEntry(entry, terms) {
-  return matchDetail(entry, terms).score
+export function scoreEntry(entry, terms, stats = null) {
+  return matchDetail(entry, terms, stats).score
 }
 
 // A skill clears the relevance floor only with a strong signal — a name hit, a
@@ -162,9 +193,9 @@ export function fitToBudget(ranked, { tokenBudget = DEFAULT_TOKEN_BUDGET, tokens
 }
 
 /** Rank entries by descending score, dropping non-matches. Ties broken by name. */
-export function rankCandidates(entries, terms) {
+export function rankCandidates(entries, terms, stats = buildDocFrequency(entries)) {
   return entries
-    .map((entry) => ({ ...entry, score: scoreEntry(entry, terms) }))
+    .map((entry) => ({ ...entry, score: scoreEntry(entry, terms, stats) }))
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
 }
@@ -176,10 +207,58 @@ export function rankCandidates(entries, terms) {
  * `tokensOf(entry)` to size skills by their real SKILL.md; otherwise a per-skill
  * estimate is used. Returns [{ name, description, file, score, tokens }].
  */
-export function selectSkills(entries, terms, { tokenBudget, tokensOf } = {}) {
-  const ranked = entries
-    .map((entry) => ({ ...entry, ...matchDetail(entry, terms) }))
-    .filter((entry) => entry.score > 0 && clearsFloor(entry))
-    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
-  return fitToBudget(ranked, { tokenBudget, tokensOf })
+export function selectSkills(entries, termsOrFacets, { tokenBudget = DEFAULT_TOKEN_BUDGET, tokensOf } = {}) {
+  const facets = normalizeFacets(termsOrFacets)
+  const stats = buildDocFrequency(entries)
+  const rankFor = (terms) =>
+    entries
+      .map((entry) => ({ ...entry, ...matchDetail(entry, terms, stats) }))
+      .filter((entry) => entry.score > 0 && clearsFloor(entry))
+      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+
+  // Each facet gets its own share of the budget: on a combined term list a strong
+  // facet crowds the weak one out of the ranking entirely (the "build a dashboard
+  // AND write the launch post" case), which is exactly what Step 2 forbids.
+  const share = Math.floor(tokenBudget / facets.length)
+  const taken = []
+  const chosen = new Set()
+  let used = 0
+
+  for (const facet of facets) {
+    const fitted = fitToBudget(
+      rankFor(facet.terms).filter((entry) => !chosen.has(entry.name)),
+      { tokenBudget: share, tokensOf },
+    )
+    for (const entry of fitted) {
+      chosen.add(entry.name)
+      used += entry.tokens
+      taken.push(facets.length > 1 ? { ...entry, facet: facet.name } : entry)
+    }
+  }
+
+  // Spend whatever the per-facet shares left over, so the budget stays a ceiling
+  // rather than a quota: keep taking the best remaining candidates across facets.
+  const remaining = tokenBudget - used
+  if (remaining > 0 && facets.length > 1) {
+    const rest = facets
+      .flatMap((facet) => rankFor(facet.terms).map((entry) => ({ ...entry, facet: facet.name })))
+      .filter((entry) => !chosen.has(entry.name))
+      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    for (const entry of fitToBudget(rest, { tokenBudget: remaining, tokensOf })) {
+      if (chosen.has(entry.name)) continue
+      chosen.add(entry.name)
+      taken.push(entry)
+    }
+  }
+
+  return taken.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+}
+
+/** Accept either a flat term list (single facet) or [{ name, terms }] facet groups. */
+function normalizeFacets(termsOrFacets) {
+  const value = termsOrFacets ?? []
+  if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'object' && value[0] !== null) {
+    return value.filter((facet) => Array.isArray(facet.terms) && facet.terms.length > 0)
+  }
+  return [{ name: 'all', terms: value }]
 }
