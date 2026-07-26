@@ -25,10 +25,29 @@ export interface TerminalCloseDecision {
   readonly delayMs: number
 }
 
+/**
+ * Build the allowlisted config exports that must cross into Terminal.app's user-session shell.
+ * Values outside these exact forms are omitted instead of escaped or interpolated.
+ */
+export const buildWatcherEnvExports = (env: TerminalCloseEnv): string => {
+  const exports: string[] = []
+  if (env[TERMINAL_KEEP_OPEN_ENV] === '1') {
+    exports.push(`export ${TERMINAL_KEEP_OPEN_ENV}=1`)
+  }
+
+  const closeDelay = env[TERMINAL_CLOSE_DELAY_ENV]
+  if (closeDelay !== undefined && /^\d+$/.test(closeDelay)) {
+    exports.push(`export ${TERMINAL_CLOSE_DELAY_ENV}=${closeDelay}`)
+  }
+  return exports.join('\n')
+}
+
 /** Clamp + validate the delay env var; invalid/absent → DEFAULT_TERMINAL_CLOSE_DELAY_MS. */
 export const resolveCloseDelayMs = (env: TerminalCloseEnv): number => {
-  const delayMs = Number.parseInt(env[TERMINAL_CLOSE_DELAY_ENV] ?? '', 10)
-  if (Number.isNaN(delayMs) || delayMs < 0) return DEFAULT_TERMINAL_CLOSE_DELAY_MS
+  const rawDelay = env[TERMINAL_CLOSE_DELAY_ENV]?.trim() ?? ''
+  if (!/^\d+$/.test(rawDelay)) return DEFAULT_TERMINAL_CLOSE_DELAY_MS
+
+  const delayMs = Number.parseInt(rawDelay, 10)
   return Math.min(delayMs, MAX_TERMINAL_CLOSE_DELAY_MS)
 }
 
@@ -102,7 +121,7 @@ export const buildCloseWindowLaunch = (
       '-e',
       `delay ${input.delayMs / 1000}`,
       '-e',
-      `tell application "Terminal" to close (every window whose id is ${input.windowId}) saving no`,
+      `tell application "Terminal" to if (count of tabs of window id ${input.windowId}) is 1 then close window id ${input.windowId} saving no`,
     ],
   }
 }

@@ -5,6 +5,7 @@ import { afterAll, afterEach, describe, expect, test, vi } from 'vitest'
 import { createLiveView } from '../src/liveView.js'
 import { LIVE_RUN_FINISHED_TYPE } from '../src/progressFormatter.js'
 import { escapeDoubleQuotedShell } from '../src/terminal.js'
+import { TERMINAL_CLOSE_DELAY_ENV, TERMINAL_KEEP_OPEN_ENV } from '../src/terminalCloser.js'
 
 const tempDirs: string[] = []
 const BENIGN_NOTICE =
@@ -14,6 +15,7 @@ afterAll(() => {
 })
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
 })
 
 /** A live view whose terminal launcher is a no-op so tests never open real windows. */
@@ -47,6 +49,8 @@ const readMarker = async (logPath: string): Promise<Record<string, unknown>> => 
 describe('createLiveView macOS command wrapper', () => {
   test('writes the tty export before the escaped exec command with executable permissions', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    vi.stubEnv(TERMINAL_KEEP_OPEN_ENV, undefined)
+    vi.stubEnv(TERMINAL_CLOSE_DELAY_ENV, undefined)
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-command-'))
     tempDirs.push(cwd)
     const launches: Array<{
@@ -86,6 +90,8 @@ describe('createLiveView macOS command wrapper', () => {
 
   test('keeps malicious log-path metacharacters escaped while leaving only tty expansion active', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    vi.stubEnv(TERMINAL_KEEP_OPEN_ENV, undefined)
+    vi.stubEnv(TERMINAL_CLOSE_DELAY_ENV, undefined)
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-$(touch pwned)`id`"-'))
     tempDirs.push(cwd)
     const commandFiles: string[] = []
@@ -105,6 +111,60 @@ describe('createLiveView macOS command wrapper', () => {
     expect(execLine).toContain('\\$(touch pwned)')
     expect(execLine).toContain('\\`id\\`')
     expect(execLine).not.toMatch(/[^\\]\$\(touch pwned\)/)
+
+    view.close()
+    if (!view.logPath) throw new Error('expected a live log path')
+    await readMarker(view.logPath)
+  })
+
+  test('forwards allowlisted watcher config exports between the tty and exec lines', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    vi.stubEnv(TERMINAL_KEEP_OPEN_ENV, '1')
+    vi.stubEnv(TERMINAL_CLOSE_DELAY_ENV, '9000')
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-command-'))
+    tempDirs.push(cwd)
+    let commandFile: string | undefined
+
+    const view = createLiveView(cwd, {
+      openTerminalFn: (_logPath, options) => {
+        commandFile = options.commandFile
+        return true
+      },
+    })
+
+    if (!commandFile) throw new Error('expected a macOS .command wrapper')
+    const lines = readFileSync(commandFile, 'utf8').split('\n')
+    expect(lines.slice(1, 5)).toEqual([
+      'export CODEX_MCP_TERMINAL_TTY="$(tty)"',
+      `export ${TERMINAL_KEEP_OPEN_ENV}=1`,
+      `export ${TERMINAL_CLOSE_DELAY_ENV}=9000`,
+      expect.stringMatching(/^exec /),
+    ])
+
+    view.close()
+    if (!view.logPath) throw new Error('expected a live log path')
+    await readMarker(view.logPath)
+  })
+
+  test('omits watcher config exports when neither server-side value is set', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    vi.stubEnv(TERMINAL_KEEP_OPEN_ENV, undefined)
+    vi.stubEnv(TERMINAL_CLOSE_DELAY_ENV, undefined)
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-command-'))
+    tempDirs.push(cwd)
+    let commandFile: string | undefined
+
+    const view = createLiveView(cwd, {
+      openTerminalFn: (_logPath, options) => {
+        commandFile = options.commandFile
+        return true
+      },
+    })
+
+    if (!commandFile) throw new Error('expected a macOS .command wrapper')
+    const content = readFileSync(commandFile, 'utf8')
+    expect(content).not.toContain(TERMINAL_KEEP_OPEN_ENV)
+    expect(content).not.toContain(TERMINAL_CLOSE_DELAY_ENV)
 
     view.close()
     if (!view.logPath) throw new Error('expected a live log path')

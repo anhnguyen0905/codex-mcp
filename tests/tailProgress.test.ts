@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, test } from 'vitest'
 import { LIVE_RUN_FINISHED_TYPE } from '../src/progressFormatter.js'
+import { TERMINAL_CLOSE_DELAY_ENV, TERMINAL_KEEP_OPEN_ENV } from '../src/terminalCloser.js'
 
 const TAIL_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'tail-progress.mjs')
 const EXIT_TIMEOUT_MS = 10_000
@@ -26,6 +27,7 @@ afterAll(() => {
 
 interface WatcherResult {
   code: number | null
+  stderr: string
   stdout: string
 }
 
@@ -35,9 +37,18 @@ const runWatcher = (
   env: NodeJS.ProcessEnv = {},
   tailScript = TAIL_SCRIPT,
 ): { done: Promise<WatcherResult> } => {
+  const inheritedEnv = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key]) => key !== TERMINAL_KEEP_OPEN_ENV && key !== TERMINAL_CLOSE_DELAY_ENV,
+    ),
+  )
   const child = spawn(process.execPath, [tailScript, logPath], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, ...env },
+    env: { ...inheritedEnv, ...env },
+  })
+  let stderr = ''
+  child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+    stderr += chunk
   })
   let stdout = ''
   child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
@@ -46,11 +57,15 @@ const runWatcher = (
   const done = new Promise<WatcherResult>((resolve, reject) => {
     const killTimer = setTimeout(() => {
       child.kill('SIGKILL')
-      reject(new Error(`watcher did not exit within ${EXIT_TIMEOUT_MS}ms; stdout:\n${stdout}`))
+      reject(
+        new Error(
+          `watcher did not exit within ${EXIT_TIMEOUT_MS}ms; stdout:\n${stdout}\nstderr:\n${stderr}`,
+        ),
+      )
     }, EXIT_TIMEOUT_MS)
     child.on('close', (code) => {
       clearTimeout(killTimer)
-      resolve({ code, stdout })
+      resolve({ code, stderr, stdout })
     })
     child.on('error', (error) => {
       clearTimeout(killTimer)
@@ -81,8 +96,8 @@ describe('tail-progress watcher auto-exit', () => {
       `${JSON.stringify({ type: LIVE_RUN_FINISHED_TYPE, status: 'completed', sessionId: 'sess-1' })}\n`,
     )
 
-    const { code, stdout } = await watcher.done
-    expect(code).toBe(0)
+    const { code, stderr, stdout } = await watcher.done
+    expect(code, stderr).toBe(0)
     expect(stdout).toContain('(run completed — closing this window in 2.5s…)')
     expect(JSON.parse(readFileSync(closeCommandLogPath, 'utf8'))).toEqual({
       command: 'osascript',
@@ -90,9 +105,30 @@ describe('tail-progress watcher auto-exit', () => {
         '-e',
         'delay 2.5',
         '-e',
-        'tell application "Terminal" to close (every window whose id is 3845) saving no',
+        'tell application "Terminal" to if (count of tabs of window id 3845) is 1 then close window id 3845 saving no',
       ],
     })
+  })
+
+  test('prints the old watcher line instead of the countdown when closing fails', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-tail-'))
+    tempDirs.push(dir)
+    const logPath = join(dir, 'run.jsonl')
+    writeFileSync(
+      logPath,
+      `${JSON.stringify({ type: LIVE_RUN_FINISHED_TYPE, status: 'completed', sessionId: null })}\n`,
+    )
+
+    const { code, stdout } = await runWatcher(logPath, {
+      CODEX_MCP_TERMINAL_CLOSE_DELAY_MS: '2500',
+      CODEX_MCP_TERMINAL_TTY: '/dev/ttys999',
+      CODEX_TAIL_CLOSE_CMD_LOG: dir,
+      CODEX_TAIL_TEST_PLATFORM: 'darwin',
+    }).done
+
+    expect(code).toBe(0)
+    expect(stdout).toContain('(run finished — closing watcher)')
+    expect(stdout).not.toContain('(run completed — closing this window in 2.5s…)')
   })
 
   test.each([
@@ -200,7 +236,7 @@ describe('tail-progress watcher auto-exit', () => {
     const closeCommandLogPath = join(dir, 'close-command.json')
     writeFileSync(logPath, '{"type":"thread.started","thread_id":"sess-2"}\n')
 
-    const { code, stdout } = await runWatcher(logPath, {
+    const { code, stderr, stdout } = await runWatcher(logPath, {
       CODEX_MCP_TERMINAL_TTY: '/dev/ttys999',
       CODEX_TAIL_CLOSE_CMD_LOG: closeCommandLogPath,
       CODEX_TAIL_TEST_PLATFORM: 'darwin',
@@ -208,7 +244,7 @@ describe('tail-progress watcher auto-exit', () => {
     }).done
 
     expect(code).toBe(1)
-    expect(stdout).toContain('giving up')
+    expect(stdout, stderr).toContain('giving up')
     expect(existsSync(closeCommandLogPath)).toBe(false)
   })
 

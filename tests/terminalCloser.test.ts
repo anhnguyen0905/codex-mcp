@@ -8,6 +8,7 @@ import {
   TERMINAL_TTY_ENV,
   buildCloseWindowLaunch,
   buildResolveWindowIdLaunch,
+  buildWatcherEnvExports,
   closeTerminalWindow,
   decideTerminalClose,
   isSafeTtyPath,
@@ -36,10 +37,57 @@ describe('resolveCloseDelayMs', () => {
     expect(delayMs).toBe(MAX_TERMINAL_CLOSE_DELAY_MS)
   })
 
-  test.each(['abc', '-5'])('returns the default for invalid delay %j', (raw) => {
+  test.each(['abc', '-5', '1000ms', '1.5'])('returns the default for invalid delay %j', (raw) => {
     const delayMs = resolveCloseDelayMs({ [TERMINAL_CLOSE_DELAY_ENV]: raw })
 
     expect(delayMs).toBe(DEFAULT_TERMINAL_CLOSE_DELAY_MS)
+  })
+
+  test('uses a configured digits-only delay', () => {
+    const delayMs = resolveCloseDelayMs({ [TERMINAL_CLOSE_DELAY_ENV]: '9000' })
+
+    expect(delayMs).toBe(9000)
+  })
+})
+
+describe('buildWatcherEnvExports', () => {
+  test('emits both allowlisted watcher config values', () => {
+    const exports = buildWatcherEnvExports({
+      [TERMINAL_KEEP_OPEN_ENV]: '1',
+      [TERMINAL_CLOSE_DELAY_ENV]: '9000',
+      UNRELATED: 'ignored',
+    })
+
+    expect(exports).toBe(
+      `export ${TERMINAL_KEEP_OPEN_ENV}=1\nexport ${TERMINAL_CLOSE_DELAY_ENV}=9000`,
+    )
+  })
+
+  test.each(['true', 'yes', '0', '', '1 '])(
+    'does not emit keep-open for non-allowlisted value %j',
+    (value) => {
+      const exports = buildWatcherEnvExports({ [TERMINAL_KEEP_OPEN_ENV]: value })
+
+      expect(exports).toBe('')
+    },
+  )
+
+  test.each(['9000ms', '-1', '1e4', '9 000', 'abc', '9000\n'])(
+    'does not emit a delay for non-digits value %j',
+    (value) => {
+      const exports = buildWatcherEnvExports({ [TERMINAL_CLOSE_DELAY_ENV]: value })
+
+      expect(exports).toBe('')
+    },
+  )
+
+  test('returns an empty prefix when neither value qualifies', () => {
+    const exports = buildWatcherEnvExports({
+      [TERMINAL_KEEP_OPEN_ENV]: 'yes',
+      [TERMINAL_CLOSE_DELAY_ENV]: '-1',
+    })
+
+    expect(exports).toBe('')
   })
 })
 
@@ -196,7 +244,7 @@ describe('buildCloseWindowLaunch', () => {
         '-e',
         'delay 4',
         '-e',
-        'tell application "Terminal" to close (every window whose id is 3845) saving no',
+        'tell application "Terminal" to if (count of tabs of window id 3845) is 1 then close window id 3845 saving no',
       ],
     })
   })
@@ -244,7 +292,7 @@ describe('closeTerminalWindow', () => {
         '-e',
         'delay 4',
         '-e',
-        'tell application "Terminal" to close (every window whose id is 3845) saving no',
+        'tell application "Terminal" to if (count of tabs of window id 3845) is 1 then close window id 3845 saving no',
       ],
       { stdio: 'ignore', detached: true },
     )

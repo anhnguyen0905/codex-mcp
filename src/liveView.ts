@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { isBenignCliNotice } from './eventParser.js'
 import { LIVE_RUN_FINISHED_TYPE, type LiveRunFinishedStatus } from './progressFormatter.js'
 import { escapeDoubleQuotedShell, LINUX_TERMINALS, openTerminal, type LinuxTerminal } from './terminal.js'
+import { buildWatcherEnvExports } from './terminalCloser.js'
 
 /** Keep at most this many run logs per workspace; older ones are pruned on each new run. */
 const MAX_LOG_FILES = 20
@@ -156,7 +157,9 @@ const writeCommandFile = (logDir: string, stamp: string, logPath: string): strin
     const dq = escapeDoubleQuotedShell
     // This fixed shell expression must expand inside the newly opened window; only the
     // interpolated paths belong behind the double-quoted shell escaper.
-    const script = `#!/bin/zsh\nexport CODEX_MCP_TERMINAL_TTY="$(tty)"\nexec "${dq(process.execPath)}" "${dq(TAIL_SCRIPT)}" "${dq(logPath)}"\n`
+    const watcherEnvExports = buildWatcherEnvExports(process.env)
+    const configLines = watcherEnvExports.length > 0 ? `${watcherEnvExports}\n` : ''
+    const script = `#!/bin/zsh\nexport CODEX_MCP_TERMINAL_TTY="$(tty)"\n${configLines}exec "${dq(process.execPath)}" "${dq(TAIL_SCRIPT)}" "${dq(logPath)}"\n`
     writeFileSync(commandFile, script, { mode: 0o755 })
     return commandFile
   } catch {
