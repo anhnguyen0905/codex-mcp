@@ -15,7 +15,6 @@ afterAll(() => {
 })
 afterEach(() => {
   vi.restoreAllMocks()
-  vi.unstubAllEnvs()
 })
 
 /** A live view whose terminal launcher is a no-op so tests never open real windows. */
@@ -49,8 +48,6 @@ const readMarker = async (logPath: string): Promise<Record<string, unknown>> => 
 describe('createLiveView macOS command wrapper', () => {
   test('writes the tty export before the escaped exec command with executable permissions', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
-    vi.stubEnv(TERMINAL_KEEP_OPEN_ENV, undefined)
-    vi.stubEnv(TERMINAL_CLOSE_DELAY_ENV, undefined)
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-command-'))
     tempDirs.push(cwd)
     const launches: Array<{
@@ -61,6 +58,7 @@ describe('createLiveView macOS command wrapper', () => {
     }> = []
 
     const view = createLiveView(cwd, {
+      env: {},
       openTerminalFn: (logPath, options) => {
         launches.push({
           commandFile: options.commandFile,
@@ -90,13 +88,12 @@ describe('createLiveView macOS command wrapper', () => {
 
   test('keeps malicious log-path metacharacters escaped while leaving only tty expansion active', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
-    vi.stubEnv(TERMINAL_KEEP_OPEN_ENV, undefined)
-    vi.stubEnv(TERMINAL_CLOSE_DELAY_ENV, undefined)
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-$(touch pwned)`id`"-'))
     tempDirs.push(cwd)
     const commandFiles: string[] = []
 
     const view = createLiveView(cwd, {
+      env: {},
       openTerminalFn: (_logPath, options) => {
         if (options.commandFile) commandFiles.push(options.commandFile)
         return true
@@ -119,13 +116,15 @@ describe('createLiveView macOS command wrapper', () => {
 
   test('forwards allowlisted watcher config exports between the tty and exec lines', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
-    vi.stubEnv(TERMINAL_KEEP_OPEN_ENV, '1')
-    vi.stubEnv(TERMINAL_CLOSE_DELAY_ENV, '9000')
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-command-'))
     tempDirs.push(cwd)
     let commandFile: string | undefined
 
     const view = createLiveView(cwd, {
+      env: {
+        [TERMINAL_KEEP_OPEN_ENV]: '1',
+        [TERMINAL_CLOSE_DELAY_ENV]: '9000',
+      },
       openTerminalFn: (_logPath, options) => {
         commandFile = options.commandFile
         return true
@@ -148,13 +147,12 @@ describe('createLiveView macOS command wrapper', () => {
 
   test('omits watcher config exports when neither server-side value is set', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
-    vi.stubEnv(TERMINAL_KEEP_OPEN_ENV, undefined)
-    vi.stubEnv(TERMINAL_CLOSE_DELAY_ENV, undefined)
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-command-'))
     tempDirs.push(cwd)
     let commandFile: string | undefined
 
     const view = createLiveView(cwd, {
+      env: {},
       openTerminalFn: (_logPath, options) => {
         commandFile = options.commandFile
         return true

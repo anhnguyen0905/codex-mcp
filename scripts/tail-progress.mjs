@@ -17,6 +17,7 @@ if (!logPath) {
 // importing dist/ so auto-exit works even in a checkout that has not been built.
 const RUN_FINISHED_TYPE = 'live.run_finished'
 const TEST_PLATFORM_OVERRIDES = new Set(['darwin', 'linux', 'win32'])
+const TEST_WINDOW_ID_ENV = 'CODEX_TAIL_TEST_WINDOW_ID'
 
 // The pretty formatter lives in dist/. Degrade to raw JSONL passthrough when it is missing
 // (unbuilt checkout) — following and marker-based exit must keep working regardless.
@@ -91,9 +92,14 @@ const tryCloseTerminal = (status) => {
   // Test-only and never set in production; setting it suppresses the real close and writes the
   // would-be argv to its path.
   const commandLogPath = process.env.CODEX_TAIL_CLOSE_CMD_LOG
+  const testWindowId = process.env[TEST_WINDOW_ID_ENV]
   const deps = commandLogPath !== undefined
     ? {
-        spawnSyncFn: () => ({ status: 0, stdout: '3845\n', error: undefined }),
+        spawnSyncFn: () => ({
+          status: 0,
+          stdout: testWindowId === undefined ? '' : `${testWindowId}\n`,
+          error: undefined,
+        }),
         spawnFn: (command, args) => {
           writeFileSync(commandLogPath, JSON.stringify({ command, args }), 'utf8')
           return { on: () => {}, unref: () => {} }

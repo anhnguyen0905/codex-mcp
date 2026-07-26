@@ -19,6 +19,7 @@ import { TERMINAL_CLOSE_DELAY_ENV, TERMINAL_KEEP_OPEN_ENV } from '../src/termina
 const TAIL_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'tail-progress.mjs')
 const EXIT_TIMEOUT_MS = 10_000
 const MARKER_DELAY_MS = 300
+const TEST_WINDOW_ID = '3845'
 
 const tempDirs: string[] = []
 afterAll(() => {
@@ -88,6 +89,7 @@ describe('tail-progress watcher auto-exit', () => {
       CODEX_MCP_TERMINAL_TTY: '/dev/ttys999',
       CODEX_TAIL_CLOSE_CMD_LOG: closeCommandLogPath,
       CODEX_TAIL_TEST_PLATFORM: 'darwin',
+      CODEX_TAIL_TEST_WINDOW_ID: TEST_WINDOW_ID,
     })
     // Let the watcher start following before the run "settles".
     await new Promise((resolve) => setTimeout(resolve, MARKER_DELAY_MS))
@@ -105,7 +107,7 @@ describe('tail-progress watcher auto-exit', () => {
         '-e',
         'delay 2.5',
         '-e',
-        'tell application "Terminal" to if (count of tabs of window id 3845) is 1 then close window id 3845 saving no',
+        `tell application "Terminal" to if (count of tabs of window id ${TEST_WINDOW_ID}) is 1 then close window id ${TEST_WINDOW_ID} saving no`,
       ],
     })
   })

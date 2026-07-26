@@ -7,7 +7,7 @@ export const DEFAULT_TERMINAL_CLOSE_DELAY_MS = 4000
 /** Upper clamp; a huge delay would leave a zombie osascript waiting for hours. */
 export const MAX_TERMINAL_CLOSE_DELAY_MS = 60_000
 /** Bound the synchronous lookup so a stuck Terminal cannot wedge the watcher's exit path. */
-const RESOLVE_WINDOW_ID_TIMEOUT_MS = 5000
+export const RESOLVE_WINDOW_ID_TIMEOUT_MS = 5000
 
 /** Env var names, exported so the launcher and the watcher can never drift apart. */
 export const TERMINAL_TTY_ENV = 'CODEX_MCP_TERMINAL_TTY'
