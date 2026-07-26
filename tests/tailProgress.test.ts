@@ -90,7 +90,7 @@ describe('tail-progress watcher auto-exit', () => {
         '-e',
         'delay 2.5',
         '-e',
-        'tell application "Terminal" to close (every window whose selected tab\'s tty is "/dev/ttys999") saving no',
+        'tell application "Terminal" to close (every window whose id is 3845) saving no',
       ],
     })
   })

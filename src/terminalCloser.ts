@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import type { LiveRunFinishedStatus } from './progressFormatter.js'
 import type { TerminalLaunch } from './terminal.js'
 
@@ -6,6 +6,8 @@ import type { TerminalLaunch } from './terminal.js'
 export const DEFAULT_TERMINAL_CLOSE_DELAY_MS = 4000
 /** Upper clamp; a huge delay would leave a zombie osascript waiting for hours. */
 export const MAX_TERMINAL_CLOSE_DELAY_MS = 60_000
+/** Bound the synchronous lookup so a stuck Terminal cannot wedge the watcher's exit path. */
+const RESOLVE_WINDOW_ID_TIMEOUT_MS = 5000
 
 /** Env var names, exported so the launcher and the watcher can never drift apart. */
 export const TERMINAL_TTY_ENV = 'CODEX_MCP_TERMINAL_TTY'
@@ -33,6 +35,10 @@ export const resolveCloseDelayMs = (env: TerminalCloseEnv): number => {
 /** Strict allowlist for a tty device path — anything else is refused (AppleScript injection guard). */
 export const isSafeTtyPath = (value: string | undefined): boolean =>
   value !== undefined && /^\/dev\/(tty|pts)[A-Za-z0-9]*(\/[A-Za-z0-9]+)?$/.test(value)
+
+/** Allowlist for a Terminal window id: digits only, so it can never inject AppleScript. */
+export const isSafeWindowId = (value: string | undefined): boolean =>
+  value !== undefined && /^\d+$/.test(value)
 
 /**
  * Pure decision: close only on a `completed` run, on darwin, when not opted out,
@@ -65,12 +71,30 @@ export const decideTerminalClose = (input: {
   }
 }
 
-/** Build the detached close command; null when the platform/tty makes closing unsupported. */
+/**
+ * Build the synchronous lookup while the tab is alive; Terminal resets its tty after process exit.
+ */
+export const buildResolveWindowIdLaunch = (
+  platform: NodeJS.Platform,
+  tty: string,
+): TerminalLaunch | null => {
+  if (platform !== 'darwin' || !isSafeTtyPath(tty)) return null
+
+  return {
+    command: 'osascript',
+    args: [
+      '-e',
+      `tell application "Terminal" to get id of first window whose selected tab's tty is "${tty}"`,
+    ],
+  }
+}
+
+/** Build the detached close command; null when the platform/window id is unsupported or unsafe. */
 export const buildCloseWindowLaunch = (
   platform: NodeJS.Platform,
-  input: { readonly tty: string; readonly delayMs: number },
+  input: { readonly windowId: string; readonly delayMs: number },
 ): TerminalLaunch | null => {
-  if (platform !== 'darwin' || !isSafeTtyPath(input.tty)) return null
+  if (platform !== 'darwin' || !isSafeWindowId(input.windowId)) return null
 
   return {
     command: 'osascript',
@@ -78,7 +102,7 @@ export const buildCloseWindowLaunch = (
       '-e',
       `delay ${input.delayMs / 1000}`,
       '-e',
-      `tell application "Terminal" to close (every window whose selected tab's tty is "${input.tty}") saving no`,
+      `tell application "Terminal" to close (every window whose id is ${input.windowId}) saving no`,
     ],
   }
 }
@@ -86,13 +110,30 @@ export const buildCloseWindowLaunch = (
 /** Best-effort fire-and-forget close. Returns false on any failure; never throws. */
 export const closeTerminalWindow = (
   input: { readonly tty: string; readonly delayMs: number; readonly platform: NodeJS.Platform },
-  deps?: { readonly spawnFn?: typeof import('node:child_process').spawn },
+  deps?: {
+    readonly spawnFn?: typeof import('node:child_process').spawn
+    readonly spawnSyncFn?: typeof import('node:child_process').spawnSync
+  },
 ): boolean => {
-  const launch = buildCloseWindowLaunch(input.platform, input)
-  if (launch === null) return false
+  const resolveLaunch = buildResolveWindowIdLaunch(input.platform, input.tty)
+  if (resolveLaunch === null) return false
 
   try {
-    const child = (deps?.spawnFn ?? spawn)(launch.command, launch.args, {
+    const result = (deps?.spawnSyncFn ?? spawnSync)(resolveLaunch.command, resolveLaunch.args, {
+      encoding: 'utf8',
+      timeout: RESOLVE_WINDOW_ID_TIMEOUT_MS,
+    })
+    // spawnSync reports a timeout via `error` even when status is zero and stdout looks valid.
+    if (result === undefined || result === null || result.error !== undefined) return false
+    if (result.status !== 0 || typeof result.stdout !== 'string') return false
+
+    const windowId = result.stdout.trim()
+    if (!isSafeWindowId(windowId)) return false
+
+    const closeLaunch = buildCloseWindowLaunch(input.platform, { windowId, delayMs: input.delayMs })
+    if (closeLaunch === null) return false
+
+    const child = (deps?.spawnFn ?? spawn)(closeLaunch.command, closeLaunch.args, {
       stdio: 'ignore',
       detached: true,
     })

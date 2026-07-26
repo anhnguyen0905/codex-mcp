@@ -93,6 +93,7 @@ const tryCloseTerminal = (status) => {
   const commandLogPath = process.env.CODEX_TAIL_CLOSE_CMD_LOG
   const deps = commandLogPath !== undefined
     ? {
+        spawnSyncFn: () => ({ status: 0, stdout: '3845\n', error: undefined }),
         spawnFn: (command, args) => {
           writeFileSync(commandLogPath, JSON.stringify({ command, args }), 'utf8')
           return { on: () => {}, unref: () => {} }

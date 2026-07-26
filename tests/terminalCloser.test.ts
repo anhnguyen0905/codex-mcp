@@ -7,9 +7,11 @@ import {
   TERMINAL_KEEP_OPEN_ENV,
   TERMINAL_TTY_ENV,
   buildCloseWindowLaunch,
+  buildResolveWindowIdLaunch,
   closeTerminalWindow,
   decideTerminalClose,
   isSafeTtyPath,
+  isSafeWindowId,
   resolveCloseDelayMs,
 } from '../src/terminalCloser.js'
 
@@ -55,6 +57,25 @@ describe('isSafeTtyPath', () => {
     '/etc/passwd',
   ])('refuses unsafe tty path %j', (tty) => {
     expect(isSafeTtyPath(tty)).toBe(false)
+  })
+})
+
+describe('isSafeWindowId', () => {
+  test('accepts a digits-only window id', () => {
+    expect(isSafeWindowId('3845')).toBe(true)
+  })
+
+  test.each([
+    '',
+    undefined,
+    '38 45',
+    '-1',
+    '3845; do shell script "id"',
+    '0x1',
+    '3845"',
+    '3845\n',
+  ])('refuses unsafe window id %j', (windowId) => {
+    expect(isSafeWindowId(windowId)).toBe(false)
   })
 })
 
@@ -139,9 +160,35 @@ describe('decideTerminalClose', () => {
   })
 })
 
+describe('buildResolveWindowIdLaunch', () => {
+  test('builds the exact osascript argv for darwin', () => {
+    const launch = buildResolveWindowIdLaunch('darwin', safeTty)
+
+    expect(launch).toEqual({
+      command: 'osascript',
+      args: [
+        '-e',
+        'tell application "Terminal" to get id of first window whose selected tab\'s tty is "/dev/ttys003"',
+      ],
+    })
+  })
+
+  test.each(['win32', 'linux'] as const)('returns null on %s', (platform) => {
+    const launch = buildResolveWindowIdLaunch(platform, safeTty)
+
+    expect(launch).toBeNull()
+  })
+
+  test('returns null before interpolating an unsafe tty', () => {
+    const launch = buildResolveWindowIdLaunch('darwin', '/dev/ttys0$(id)')
+
+    expect(launch).toBeNull()
+  })
+})
+
 describe('buildCloseWindowLaunch', () => {
   test('builds the exact osascript argv for darwin', () => {
-    const launch = buildCloseWindowLaunch('darwin', { tty: safeTty, delayMs: 4000 })
+    const launch = buildCloseWindowLaunch('darwin', { windowId: '3845', delayMs: 4000 })
 
     expect(launch).toEqual({
       command: 'osascript',
@@ -149,43 +196,55 @@ describe('buildCloseWindowLaunch', () => {
         '-e',
         'delay 4',
         '-e',
-        'tell application "Terminal" to close (every window whose selected tab\'s tty is "/dev/ttys003") saving no',
+        'tell application "Terminal" to close (every window whose id is 3845) saving no',
       ],
     })
   })
 
-  test.each(['win32', 'linux', 'aix'] as const)('returns null on %s', (platform) => {
-    const launch = buildCloseWindowLaunch(platform, { tty: safeTty, delayMs: 4000 })
+  test.each(['win32', 'linux'] as const)('returns null on %s', (platform) => {
+    const launch = buildCloseWindowLaunch(platform, { windowId: '3845', delayMs: 4000 })
 
     expect(launch).toBeNull()
   })
 
-  test('returns null before interpolating an unsafe tty', () => {
-    const launch = buildCloseWindowLaunch('darwin', { tty: '/dev/ttys0$(id)', delayMs: 4000 })
+  test('returns null before interpolating an unsafe window id', () => {
+    const launch = buildCloseWindowLaunch('darwin', {
+      windowId: '3845; do shell script "id"',
+      delayMs: 4000,
+    })
 
     expect(launch).toBeNull()
   })
 })
 
 describe('closeTerminalWindow', () => {
-  test('spawns a detached osascript, attaches an error listener, and unreferences it', () => {
+  test('resolves the window id and spawns a detached closer by id', () => {
     const child = new EventEmitter() as EventEmitter & { unref: ReturnType<typeof vi.fn> }
     child.unref = vi.fn()
     const spawnFn = vi.fn(() => child)
+    const spawnSyncFn = vi.fn(() => ({ status: 0, stdout: '3845\n' }))
 
     const closed = closeTerminalWindow(
       { tty: safeTty, delayMs: 4000, platform: 'darwin' },
-      { spawnFn: spawnFn as never },
+      { spawnFn: spawnFn as never, spawnSyncFn: spawnSyncFn as never },
     )
 
     expect(closed).toBe(true)
+    expect(spawnSyncFn).toHaveBeenCalledWith(
+      'osascript',
+      [
+        '-e',
+        'tell application "Terminal" to get id of first window whose selected tab\'s tty is "/dev/ttys003"',
+      ],
+      { encoding: 'utf8', timeout: 5000 },
+    )
     expect(spawnFn).toHaveBeenCalledWith(
       'osascript',
       [
         '-e',
         'delay 4',
         '-e',
-        'tell application "Terminal" to close (every window whose selected tab\'s tty is "/dev/ttys003") saving no',
+        'tell application "Terminal" to close (every window whose id is 3845) saving no',
       ],
       { stdio: 'ignore', detached: true },
     )
@@ -195,26 +254,124 @@ describe('closeTerminalWindow', () => {
 
   test('returns false without spawning when the launch is unsupported', () => {
     const spawnFn = vi.fn()
+    const spawnSyncFn = vi.fn()
 
     const closed = closeTerminalWindow(
       { tty: safeTty, delayMs: 4000, platform: 'linux' },
-      { spawnFn: spawnFn as never },
+      { spawnFn: spawnFn as never, spawnSyncFn: spawnSyncFn as never },
+    )
+
+    expect(closed).toBe(false)
+    expect(spawnSyncFn).not.toHaveBeenCalled()
+    expect(spawnFn).not.toHaveBeenCalled()
+  })
+
+  test('returns false without spawning when the resolve probe exits non-zero', () => {
+    const spawnFn = vi.fn()
+    const spawnSyncFn = vi.fn(() => ({ status: 1, stdout: '3845\n' }))
+
+    const closed = closeTerminalWindow(
+      { tty: safeTty, delayMs: 4000, platform: 'darwin' },
+      { spawnFn: spawnFn as never, spawnSyncFn: spawnSyncFn as never },
     )
 
     expect(closed).toBe(false)
     expect(spawnFn).not.toHaveBeenCalled()
   })
 
-  test('returns false and does not rethrow when spawn throws', () => {
-    const spawnFn = vi.fn(() => {
-      throw new Error('spawn blew up')
+  test.each([
+    [
+      'reports a timeout error with otherwise valid output',
+      { status: 0, stdout: '3845\n', error: new Error('ETIMEDOUT') },
+    ],
+    ['is terminated by a signal', { status: null, signal: 'SIGTERM', stdout: '3845\n' }],
+    ['returns null stdout', { status: 0, stdout: null }],
+    ['returns undefined stdout', { status: 0, stdout: undefined }],
+    ['returns whitespace-only stdout', { status: 0, stdout: '   \n\t ' }],
+  ])('returns false without spawning when the resolve probe %s', (_label, result) => {
+    const spawnFn = vi.fn()
+    const spawnSyncFn = vi.fn(() => result)
+
+    const closed = closeTerminalWindow(
+      { tty: safeTty, delayMs: 4000, platform: 'darwin' },
+      { spawnFn: spawnFn as never, spawnSyncFn: spawnSyncFn as never },
+    )
+
+    expect(closed).toBe(false)
+    expect(spawnFn).not.toHaveBeenCalled()
+  })
+
+  test('returns false without spawning when the resolve probe returns no result', () => {
+    const spawnFn = vi.fn()
+    const spawnSyncFn = vi.fn(() => undefined)
+
+    const closed = closeTerminalWindow(
+      { tty: safeTty, delayMs: 4000, platform: 'darwin' },
+      { spawnFn: spawnFn as never, spawnSyncFn: spawnSyncFn as never },
+    )
+
+    expect(closed).toBe(false)
+    expect(spawnFn).not.toHaveBeenCalled()
+  })
+
+  test.each(['', 'not-a-number'])(
+    'returns false without spawning when the resolve probe stdout is %j',
+    (stdout) => {
+      const spawnFn = vi.fn()
+      const spawnSyncFn = vi.fn(() => ({ status: 0, stdout }))
+
+      const closed = closeTerminalWindow(
+        { tty: safeTty, delayMs: 4000, platform: 'darwin' },
+        { spawnFn: spawnFn as never, spawnSyncFn: spawnSyncFn as never },
+      )
+
+      expect(closed).toBe(false)
+      expect(spawnFn).not.toHaveBeenCalled()
+    },
+  )
+
+  test('returns false without spawning when the resolve probe throws', () => {
+    const spawnFn = vi.fn()
+    const spawnSyncFn = vi.fn(() => {
+      throw new Error('probe blew up')
     })
 
     let closed: boolean | undefined
     expect(() => {
       closed = closeTerminalWindow(
         { tty: safeTty, delayMs: 4000, platform: 'darwin' },
-        { spawnFn: spawnFn as never },
+        { spawnFn: spawnFn as never, spawnSyncFn: spawnSyncFn as never },
+      )
+    }).not.toThrow()
+    expect(closed).toBe(false)
+    expect(spawnFn).not.toHaveBeenCalled()
+  })
+
+  test('returns false without probing or spawning when the tty is unsafe', () => {
+    const spawnFn = vi.fn()
+    const spawnSyncFn = vi.fn()
+
+    const closed = closeTerminalWindow(
+      { tty: '/dev/ttys0$(id)', delayMs: 4000, platform: 'darwin' },
+      { spawnFn: spawnFn as never, spawnSyncFn: spawnSyncFn as never },
+    )
+
+    expect(closed).toBe(false)
+    expect(spawnSyncFn).not.toHaveBeenCalled()
+    expect(spawnFn).not.toHaveBeenCalled()
+  })
+
+  test('returns false and does not rethrow when the detached spawn throws', () => {
+    const spawnFn = vi.fn(() => {
+      throw new Error('spawn blew up')
+    })
+    const spawnSyncFn = vi.fn(() => ({ status: 0, stdout: '3845\n' }))
+
+    let closed: boolean | undefined
+    expect(() => {
+      closed = closeTerminalWindow(
+        { tty: safeTty, delayMs: 4000, platform: 'darwin' },
+        { spawnFn: spawnFn as never, spawnSyncFn: spawnSyncFn as never },
       )
     }).not.toThrow()
     expect(closed).toBe(false)
