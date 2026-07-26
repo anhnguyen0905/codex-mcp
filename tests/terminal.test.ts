@@ -20,10 +20,18 @@ describe('buildTerminalLaunch', () => {
     expect(joined).toContain('/logs/a b.jsonl')
   })
 
+  test('darwin osascript exports the new window tty without escaping its command substitution', () => {
+    const launch = buildTerminalLaunch('darwin', paths)
+    const doScript = launch?.args.at(-1) ?? ''
+
+    expect(doScript).toContain('export CODEX_MCP_TERMINAL_TTY=\\"$(tty)\\"; ')
+    expect(doScript).not.toContain('\\$(tty)')
+  })
+
   test('darwin osascript neutralizes shell metacharacters in the log path', () => {
     const evil = '/logs/$(touch pwned)`id`".jsonl'
     const launch = buildTerminalLaunch('darwin', { ...paths, logPath: evil })
-    const joined = launch?.args.join(' ') ?? ''
+    const joined = (launch?.args.join(' ') ?? '').split('; ').slice(1).join('; ')
     // path text survives, but every shell metachar is backslash-escaped so nothing expands
     expect(joined).toContain('touch pwned')
     expect(joined).toContain('\\$') // the `$` was backslash-escaped (escaper ran)
@@ -77,6 +85,34 @@ describe('buildTerminalLaunch', () => {
 
   test('linux returns null when no emulator was detected', () => {
     expect(buildTerminalLaunch('linux', paths)).toBeNull()
+  })
+
+  test('win32 and linux launch commands remain unchanged and do not export a tty', () => {
+    const windowsLaunch = buildTerminalLaunch('win32', {
+      nodeBin: 'C:\\node\\node.exe',
+      tailScript: 'C:\\tool\\tail.mjs',
+      logPath: 'C:\\logs\\a.jsonl',
+    })
+    const linuxLaunch = buildTerminalLaunch('linux', {
+      nodeBin: '/usr/bin/node',
+      tailScript: '/tools/tail.mjs',
+      logPath: '/logs/a.jsonl',
+      linuxTerminal: { command: 'gnome-terminal', execFlag: ['--'] },
+    })
+
+    expect(windowsLaunch).toEqual({
+      command: 'powershell.exe',
+      args: [
+        '-NoProfile',
+        '-Command',
+        'Start-Process -FilePath \'C:\\node\\node.exe\' -ArgumentList \'"C:\\tool\\tail.mjs"\',\'"C:\\logs\\a.jsonl"\'',
+      ],
+    })
+    expect(linuxLaunch).toEqual({
+      command: 'gnome-terminal',
+      args: ['--', '/usr/bin/node', '/tools/tail.mjs', '/logs/a.jsonl'],
+    })
+    expect(JSON.stringify([windowsLaunch, linuxLaunch])).not.toContain('CODEX_MCP_TERMINAL_TTY')
   })
 
   test('returns null on unsupported platforms', () => {

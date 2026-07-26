@@ -1,15 +1,19 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, describe, expect, test, vi } from 'vitest'
 import { createLiveView } from '../src/liveView.js'
 import { LIVE_RUN_FINISHED_TYPE } from '../src/progressFormatter.js'
+import { escapeDoubleQuotedShell } from '../src/terminal.js'
 
 const tempDirs: string[] = []
 const BENIGN_NOTICE =
   '`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.'
 afterAll(() => {
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true })
+})
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 /** A live view whose terminal launcher is a no-op so tests never open real windows. */
@@ -39,6 +43,74 @@ const readMarker = async (logPath: string): Promise<Record<string, unknown>> => 
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
   }
 }
+
+describe('createLiveView macOS command wrapper', () => {
+  test('writes the tty export before the escaped exec command with executable permissions', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-command-'))
+    tempDirs.push(cwd)
+    const launches: Array<{
+      commandFile: string | undefined
+      logPath: string
+      nodeBin: string
+      tailScript: string
+    }> = []
+
+    const view = createLiveView(cwd, {
+      openTerminalFn: (logPath, options) => {
+        launches.push({
+          commandFile: options.commandFile,
+          logPath,
+          nodeBin: options.nodeBin,
+          tailScript: options.tailScript,
+        })
+        return true
+      },
+    })
+
+    const launch = launches[0]
+    if (!launch?.commandFile) throw new Error('expected a macOS .command wrapper')
+    const content = readFileSync(launch.commandFile, 'utf8')
+    expect(content).toBe(
+      `#!/bin/zsh\nexport CODEX_MCP_TERMINAL_TTY="$(tty)"\nexec "${escapeDoubleQuotedShell(launch.nodeBin)}" "${escapeDoubleQuotedShell(launch.tailScript)}" "${escapeDoubleQuotedShell(launch.logPath)}"\n`,
+    )
+    expect(content.indexOf('export CODEX_MCP_TERMINAL_TTY="$(tty)"')).toBeLessThan(
+      content.indexOf('exec '),
+    )
+    expect(statSync(launch.commandFile).mode & 0o777).toBe(0o755)
+
+    view.close()
+    if (!view.logPath) throw new Error('expected a live log path')
+    await readMarker(view.logPath)
+  })
+
+  test('keeps malicious log-path metacharacters escaped while leaving only tty expansion active', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-$(touch pwned)`id`"-'))
+    tempDirs.push(cwd)
+    const commandFiles: string[] = []
+
+    const view = createLiveView(cwd, {
+      openTerminalFn: (_logPath, options) => {
+        if (options.commandFile) commandFiles.push(options.commandFile)
+        return true
+      },
+    })
+
+    const commandFile = commandFiles[0]
+    if (!commandFile) throw new Error('expected a macOS .command wrapper')
+    const content = readFileSync(commandFile, 'utf8')
+    const execLine = content.split('\n').find((line) => line.startsWith('exec ')) ?? ''
+    expect(content).toContain('export CODEX_MCP_TERMINAL_TTY="$(tty)"')
+    expect(execLine).toContain('\\$(touch pwned)')
+    expect(execLine).toContain('\\`id\\`')
+    expect(execLine).not.toMatch(/[^\\]\$\(touch pwned\)/)
+
+    view.close()
+    if (!view.logPath) throw new Error('expected a live log path')
+    await readMarker(view.logPath)
+  })
+})
 
 describe('createLiveView completion marker', () => {
   test('writes a completed marker (with sessionId) when the stream saw turn.completed', async () => {
