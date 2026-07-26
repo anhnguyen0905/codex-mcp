@@ -1,7 +1,7 @@
 # Skill Selection — Scope Scenario Eval Report
 
-- Generated: 2026-07-26T17:57:50.886Z
-- Index: `/Users/danielnguyen/.claude/skill-library/INDEX.md` (640 skills)
+- Generated: 2026-07-26T18:02:08.656Z
+- Index: `/Users/danielnguyen/.claude/skill-library/INDEX.md` (643 skills)
 - Scenarios: 32
 - Context budget per scenario: ~6,000 tokens (≈3% of a 200k window)
 - **Passed: 32/32 (100.0%)**

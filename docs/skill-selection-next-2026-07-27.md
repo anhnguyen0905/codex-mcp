@@ -25,6 +25,14 @@ Nguyên tắc chọn hướng: cái gì đo được trên harness thì làm tr�
 > coverage của library** — 38 case fail còn lại cần Step 7d viết skill, không phải tune matcher.
 > Hệ quả cho lộ trình: hạ ưu tiên #3/#4 (alias/negatives — cùng bản chất tuning), đẩy
 > LLM reranker (giá trị ở precision + kích hoạt Step 7 đúng) và #10 (pre-author skill) lên trước.
+>
+> **Cập nhật #10 — đã làm 3 skill đầu:** `performance-marketing`, `unit-economics`, `media-planning`
+> viết qua đúng đường Step 7d (gap analysis → không adopt được → tự viết có provenance → reindex).
+> 100-case **62 → 70/100**, 32-scenario giữ 32/32, index 640 → 643. Xác nhận lại kết luận ở trên:
+> mỗi skill viết thêm đổi được ~2-3 case, còn tune matcher đổi 0 — coverage là chỗ nghẽn thật.
+> 30 case fail còn lại cần: `warehouse-modeling` (B11/B13/B15/B17/B20), `marketing-attribution`,
+> `causal-inference`, `event-taxonomy`, `survey-design`, `aso`, `localization-copy`, `okr-planning`,
+> `creative-brief`, `influencer-strategy`, `sop-authoring`.
 
 ## P1 — Mechanical, đo được ngay trên harness
 

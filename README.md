@@ -102,7 +102,7 @@ node scripts/build-skills-index.mjs            # → ~/.claude/skill-library/IND
 
 Verified by a 32-scenario scope eval (`npm run skills:eval`) — latest **32/32** — plus a
 100-request non-engineering scope run (data analysis, marketing planning, performance marketing,
-market research, content, product): **62/100** covered by an existing skill, the rest queued for
+market research, content, product): **70/100** covered by an existing skill, the rest queued for
 Step 7 acquisition/authoring. Full procedure:
 [`skills/skill-selection/SKILL.md`](skills/skill-selection/SKILL.md).
 
