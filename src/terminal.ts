@@ -70,7 +70,10 @@ const buildDarwinLaunch = ({ nodeBin, tailScript, logPath, commandFile }: Termin
     return { command: 'open', args: ['-a', 'Terminal', commandFile] }
   }
   const dq = escapeDoubleQuotedShell
-  const shellCommand = `"${dq(nodeBin)}" "${dq(tailScript)}" "${dq(logPath)}"`
+  const escapedPathCommand = `"${dq(nodeBin)}" "${dq(tailScript)}" "${dq(logPath)}"`
+  // This fixed shell expression must expand inside the new Terminal window; only interpolated
+  // paths are shell-escaped before AppleScript escaping protects the complete command string.
+  const shellCommand = `export CODEX_MCP_TERMINAL_TTY="$(tty)"; ${escapedPathCommand}`
   const escaped = escapeAppleScript(shellCommand)
   return {
     command: 'osascript',

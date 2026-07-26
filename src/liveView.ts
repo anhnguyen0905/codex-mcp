@@ -154,7 +154,9 @@ const writeCommandFile = (logDir: string, stamp: string, logPath: string): strin
   try {
     const commandFile = join(logDir, `watch-${stamp}.command`)
     const dq = escapeDoubleQuotedShell
-    const script = `#!/bin/zsh\nexec "${dq(process.execPath)}" "${dq(TAIL_SCRIPT)}" "${dq(logPath)}"\n`
+    // This fixed shell expression must expand inside the newly opened window; only the
+    // interpolated paths belong behind the double-quoted shell escaper.
+    const script = `#!/bin/zsh\nexport CODEX_MCP_TERMINAL_TTY="$(tty)"\nexec "${dq(process.execPath)}" "${dq(TAIL_SCRIPT)}" "${dq(logPath)}"\n`
     writeFileSync(commandFile, script, { mode: 0o755 })
     return commandFile
   } catch {
