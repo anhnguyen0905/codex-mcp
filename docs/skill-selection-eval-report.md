@@ -1,7 +1,7 @@
 # Skill Selection — Scope Scenario Eval Report
 
-- Generated: 2026-07-13T16:25:03.768Z
-- Index: `/Users/danielnguyen/.claude/skill-library/INDEX.md` (348 skills)
+- Generated: 2026-07-26T17:48:43.664Z
+- Index: `/Users/danielnguyen/.claude/skill-library/INDEX.md` (640 skills)
 - Scenarios: 32
 - Context budget per scenario: ~6,000 tokens (≈3% of a 200k window)
 - **Passed: 32/32 (100.0%)**
@@ -10,37 +10,37 @@
 
 | # | Scope | Facet | Selected skills (relevance-ranked) | ~Tokens | Verdict |
 |---|-------|-------|-------------------------------------|---------|---------|
-| S01 | engineering | engineering | exec-typescript, constant-time-analysis, mcp-builder | 1,537 | ✅ PASS |
-| S02 | engineering | engineering | exec-go | 338 | ✅ PASS |
-| S03 | engineering | engineering | exec-python, modern-python, zarr-python | 1,533 | ✅ PASS |
-| S04 | data-viz | data | d3-viz, using-tmux-for-interactive-commands, matplotlib | 1,800 | ✅ PASS |
-| S05 | data-analysis | data | polars, exploratory-data-analysis, polars-bio, astropy, matlab, dask | 3,600 | ✅ PASS |
-| S06 | data-analysis | data | statistical-analysis, statistical-power, statsmodels | 1,800 | ✅ PASS |
-| S07 | data-analysis | data | exploratory-data-analysis, astropy, matlab | 1,800 | ✅ PASS |
-| S08 | marketing | marketing | market-research-reports | 600 | ✅ PASS |
-| S09 | product | product | product-manager, plan-backlog, project-manager | 1,643 | ✅ PASS |
-| S10 | design | design | frontend-design, frontend-slides, frontend-slides, canvas-design, experimental-design, expo-tailwind-setup, web-artifacts-builder | 4,200 | ✅ PASS |
-| S11 | design | design | frontend-slides, frontend-slides, scientific-slides, golden-html, golden-html-kw, golden-html-multi, pptx, pptx, theme-factory | 5,400 | ✅ PASS |
-| S12 | security | security | libfuzzer, coverage-analysis, atheris, ffuf-web-fuzzing, fuzzing-dictionary, fuzzing-obstacles, aflpp, cargo-fuzz, genotoxic, ruzzy | 6,000 | ✅ PASS |
-| S13 | security | security | semgrep-rule-creator, semgrep, semgrep-rule-variant-creator, audit-augmentation, sarif-parsing, Trail of Bits Security Skills, audit-prep-assistant, yara-rule-authoring | 4,800 | ✅ PASS |
+| S01 | engineering | engineering | exec-typescript, nodejs-keccak256, constant-time-analysis, mcp-builder, mcp-server-patterns | 2,737 | ✅ PASS |
+| S02 | engineering | engineering | exec-go, golang-patterns, golang-testing, swift-concurrency-6-2 | 2,138 | ✅ PASS |
+| S03 | engineering | engineering | exec-python, python-patterns, generating-python-installer, modern-python, python-testing, zarr-python | 3,333 | ✅ PASS |
+| S04 | data-viz | data | d3-viz, matplotlib, scientific-visualization, using-tmux-for-interactive-commands, claude-d3js-skill, etetoolkit, seaborn | 4,200 | ✅ PASS |
+| S05 | data-analysis | data | polars, exploratory-data-analysis, polars-bio, astropy, exec-deliverable, matlab, dask | 4,200 | ✅ PASS |
+| S06 | data-analysis | data | statistical-analysis, statistical-power, statsmodels, ai-regression-testing, clinical-decision-support, experimental-design, geomaster, matlab, matplotlib, peer-review | 6,000 | ✅ PASS |
+| S07 | data-analysis | data | exploratory-data-analysis, astropy, exec-deliverable, matlab | 2,400 | ✅ PASS |
+| S08 | marketing | marketing | market-research-reports, market-research, competitive-report-structure, benchmark-methodology, clinical-reports, session-report | 3,560 | ✅ PASS |
+| S09 | product | product | product-manager, product-capability, carrier-relationship-management, citation-management, logistics-exception-management, plan-backlog, product-lens, project-manager, returns-reverse-logistics | 5,400 | ✅ PASS |
+| S10 | design | design | frontend-design, frontend-design-direction, frontend-slides, frontend-slides, frontend-slides, api-design, canvas-design, design-fundamentals, design-system, experimental-design | 6,000 | ✅ PASS |
+| S11 | design | design | frontend-slides, frontend-slides, frontend-slides, scientific-slides, golden-html, golden-html-kw, golden-html-multi, pptx, pptx, theme-factory | 6,000 | ✅ PASS |
+| S12 | security | security | libfuzzer, coverage-analysis, atheris, ffuf-web-fuzzing, fuzzing-dictionary, fuzzing-obstacles, aflpp, cargo-fuzz, genotoxic, golang-testing | 6,000 | ✅ PASS |
+| S13 | security | security | semgrep-rule-creator, semgrep, semgrep-rule-variant-creator, audit-augmentation, sarif-parsing, Trail of Bits Security Skills, audit-prep-assistant, laravel-verification, quarkus-verification, springboot-verification | 6,000 | ✅ PASS |
 | S14 | security | security | algorand-vulnerability-scanner, cairo-vulnerability-scanner, solana-vulnerability-scanner, ton-vulnerability-scanner, cosmos-vulnerability-scanner, substrate-vulnerability-scanner, entry-point-analyzer, firebase-apk-scanner, guidelines-advisor, property-based-testing | 6,000 | ✅ PASS |
 | S15 | bioinformatics | data | bulk-rnaseq, scanpy, scvi-tools | 1,800 | ✅ PASS |
 | S16 | bioinformatics | data | scanpy, anndata, cellxgene-census, bulk-rnaseq, scvelo, scvi-tools, arboreto, geniml, hugging-science | 5,400 | ✅ PASS |
-| S17 | document | document | pdf, pdf, docx, docx, golden-pdf, golden-pdf-ch, golden-pdf-kw, liteparse | 4,783 | ✅ PASS |
-| S18 | document | document | xlsx, xlsx, docx, docx, golden-word, markitdown | 3,600 | ✅ PASS |
-| S19 | testing | engineering | exec-self-testing, test-driven-development, constant-time-testing, mutation-testing, property-based-testing, testing-handbook-generator, webapp-testing | 3,957 | ✅ PASS |
-| S20 | testing | engineering | property-based-testing, hypothesis-generation, constant-time-testing, exec-self-testing, mutation-testing, testing-handbook-generator, webapp-testing, hypogenic | 4,557 | ✅ PASS |
-| S21 | debugging | engineering | systematic-debugging | 600 | ✅ PASS |
-| S22 | scientific-writing | product | citation-management, scientific-writing, paper-lookup, bgpt-paper-search, research-lookup | 3,000 | ✅ PASS |
-| S23 | ml | data | pytorch-lightning, pyhealth, shap, histolab, scanpy, get-available-resources, pennylane | 4,200 | ✅ PASS |
-| S24 | reinforcement-learning | data | stable-baselines3, pufferlib, pi-agent | 1,800 | ✅ PASS |
-| S25 | chemistry | data | rdkit, molecular-dynamics, datamol, molfeat | 2,400 | ✅ PASS |
-| S26 | quantum | data | qiskit, cirq, qutip, pennylane | 2,400 | ✅ PASS |
+| S17 | document | document | nutrient-document-processing, pdf, pdf, docx, docx, golden-pdf, golden-pdf-ch, golden-pdf-kw, liteparse, canvas-design | 5,983 | ✅ PASS |
+| S18 | document | document | xlsx, docx, docx, xlsx, golden-word, DroneZombie_Building, markitdown, nutrient-document-processing | 4,800 | ✅ PASS |
+| S19 | testing | engineering | test-driven-development, quarkus-tdd, springboot-tdd, tdd-workflow, exec-self-testing, django-tdd, golang-testing, kotlin-testing, laravel-tdd, perl-testing | 5,757 | ✅ PASS |
+| S20 | testing | engineering | property-based-testing, fsharp-testing, kotlin-testing, rust-testing, hypothesis-generation, ai-regression-testing, constant-time-testing, cpp-testing, csharp-testing, e2e-testing | 6,000 | ✅ PASS |
+| S21 | debugging | engineering | systematic-debugging, agent-introspection-debugging, quality-nonconformance, click-path-audit | 2,400 | ✅ PASS |
+| S22 | scientific-writing | product | scientific-writing, citation-management, paper-lookup, bgpt-paper-search, parallel-web, research-lookup, scholar-evaluation, venue-templates | 4,800 | ✅ PASS |
+| S23 | ml | data | pytorch-lightning, pytorch-patterns, pyhealth, shap, transformers, histolab, scanpy, get-available-resources, pennylane | 5,400 | ✅ PASS |
+| S24 | reinforcement-learning | data | stable-baselines3, pufferlib, agent-architecture-audit, agent-eval, agent-harness-construction, agent-introspection-debugging, agent-payment-x402, agent-self-evaluation, agent-sort, autonomous-agent-harness | 5,903 | ✅ PASS |
+| S25 | chemistry | data | rdkit, molecular-dynamics, datamol, molfeat, rowan | 3,000 | ✅ PASS |
+| S26 | quantum | data | qiskit, cirq, pennylane, qutip | 2,400 | ✅ PASS |
 | S27 | game-design | product | game-designer-balance, game-director, game-designer-systems | 1,800 | ✅ PASS |
-| S28 | game-design | product | game-designer-systems, game-designer-balance, game-director, project-manager, pufferlib | 3,000 | ✅ PASS |
-| S29 | mobile | engineering | expo-ui, expo-router, expo-web-to-native, expo-brownfield, expo-tailwind-setup, expo-native-ui, expo-data-fetching, eas-observe, Expo Skills, expo-app-clip | 6,000 | ✅ PASS |
-| S30 | browser-automation | engineering | playwright-skill, webapp-testing | 1,200 | ✅ PASS |
-| S31 | multi-facet | data+marketing | market-research-reports | 600 | ✅ PASS |
+| S28 | game-design | product | game-designer-systems, game-designer-balance, game-director, design-system, latency-critical-systems, flox-environments, hexagonal-architecture, project-manager, pufferlib, swift-protocol-di-testing | 5,990 | ✅ PASS |
+| S29 | mobile | engineering | expo-ui, react-native-patterns, expo-router, expo-web-to-native, expo-brownfield, expo-tailwind-setup, expo-native-ui, expo-data-fetching, eas-observe, Expo Skills | 6,000 | ✅ PASS |
+| S30 | browser-automation | engineering | playwright-skill, webapp-testing, browser-qa, automation-audit-ops, netmiko-ssh-automation | 3,000 | ✅ PASS |
+| S31 | multi-facet | data+marketing | market-research, market-research-reports, dashboard-builder, scientific-visualization, d3-viz, marketing-campaign | 3,549 | ✅ PASS |
 | S32 | uncovered | engineering | _(none)_ | 0 | ✅ PASS |
 
 ## Method & scope of this eval

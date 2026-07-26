@@ -6,7 +6,9 @@
 //   node scripts/build-skills-index.mjs --vet <SKILL.md path> [--manifest <file>]
 //
 // Defaults:
-//   roots: ~/.claude/skills and ~/claude-skill-library (those that exist)
+//   roots: ~/.claude/skills, ~/claude-skill-library, and the skills/ dir of every
+//          installed plugin (~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/skills,
+//          newest version per plugin) — those that exist
 //   out:   ~/.claude/skill-library/INDEX.md
 //
 // Index format (one line per skill, grep-friendly):
@@ -28,6 +30,10 @@
 //     indexed exactly as before and never require a manifest.
 //   - URL pointer entries merged from REMOTE.md are never loadable directly; they
 //     must be cloned (into quarantine) and vetted before use.
+//   - Installed plugin skills are TRUSTED like ~/.claude/skills: the user chose to
+//     install that plugin, and its skills are already loadable by the agent. Indexing
+//     them only makes selection aware of what is already on the machine — without it,
+//     selection reports "no skill exists" for domains a plugin already covers.
 //
 // vetted.json format (flat map, keyed by absolute SKILL.md path):
 //   { "<path>": { "gitCommit": "<sha|null>", "sha256": "<hex>", "vettedAt": "<ISO>" } }
@@ -51,10 +57,75 @@ const QUARANTINE_DIR_NAME = 'quarantine'
 const REMOTE_DIR_NAME = 'remote'
 const VET_MANIFEST_NAME = 'vetted.json'
 
-const defaultRoots = () => [
-  path.join(os.homedir(), '.claude', 'skills'),
-  path.join(os.homedir(), 'claude-skill-library'),
-]
+const PLUGIN_CACHE_SEGMENTS = ['.claude', 'plugins', 'cache']
+const PLUGIN_SKILLS_DIR_NAME = 'skills'
+
+/**
+ * Compare two version directory names newest-last: numeric segment by segment
+ * (so 0.10.0 sorts after 0.9.0), falling back to a lexical compare for
+ * non-numeric names (e.g. `dev`, `main`).
+ */
+export function compareVersionDirs(a, b) {
+  const parse = (name) => name.split('.').map((segment) => Number.parseInt(segment, 10))
+  const left = parse(a)
+  const right = parse(b)
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const l = left[i]
+    const r = right[i]
+    if (Number.isNaN(l) || Number.isNaN(r) || l === undefined || r === undefined) {
+      return a.localeCompare(b)
+    }
+    if (l !== r) return l - r
+  }
+  return 0
+}
+
+/** Directory names directly under `dir` (no symlinks, sorted). Missing dir → []. */
+async function readSubdirNames(dir) {
+  const dirents = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
+  return dirents
+    .filter((dirent) => dirent.isDirectory() && !dirent.isSymbolicLink())
+    .map((dirent) => dirent.name)
+    .sort()
+}
+
+/**
+ * Discover the skills/ dir of every installed plugin under
+ * ~/.claude/plugins/cache/<marketplace>/<plugin>/[<version>/]skills, keeping only
+ * the newest version per plugin so multiple cached releases don't duplicate entries.
+ */
+export async function pluginSkillRoots(homeDir = os.homedir()) {
+  const cacheDir = path.join(homeDir, ...PLUGIN_CACHE_SEGMENTS)
+  const roots = []
+  for (const marketplace of await readSubdirNames(cacheDir)) {
+    for (const plugin of await readSubdirNames(path.join(cacheDir, marketplace))) {
+      const pluginDir = path.join(cacheDir, marketplace, plugin)
+      const unversioned = path.join(pluginDir, PLUGIN_SKILLS_DIR_NAME)
+      if (await fs.stat(unversioned).then((s) => s.isDirectory(), () => false)) {
+        roots.push(unversioned)
+        continue
+      }
+      const versions = await readSubdirNames(pluginDir)
+      const newest = versions.sort(compareVersionDirs).at(-1)
+      if (!newest) continue
+      const skillsDir = path.join(pluginDir, newest, PLUGIN_SKILLS_DIR_NAME)
+      if (await fs.stat(skillsDir).then((s) => s.isDirectory(), () => false)) roots.push(skillsDir)
+    }
+  }
+  return roots
+}
+
+/**
+ * Scan roots when none are passed: the user's own skills, the skill library, and
+ * every installed plugin's skills (all trusted — see the security model above).
+ */
+export async function defaultRoots(homeDir = os.homedir()) {
+  return [
+    path.join(homeDir, '.claude', 'skills'),
+    path.join(homeDir, 'claude-skill-library'),
+    ...(await pluginSkillRoots(homeDir)),
+  ]
+}
 
 const defaultOut = () => path.join(os.homedir(), '.claude', 'skill-library', 'INDEX.md')
 
@@ -376,7 +447,7 @@ export async function runCli(argv) {
   if (vet) return runVet(vet, manifest)
   if (manifest) throw new Error('--manifest is only valid together with --vet')
 
-  const scanRoots = roots.length > 0 ? roots : defaultRoots()
+  const scanRoots = roots.length > 0 ? roots : await defaultRoots()
   const outFile = path.resolve(out ?? process.env.CODEX_FLOW_SKILLS_INDEX ?? defaultOut())
 
   const { entries: localEntries, warnings } = await buildIndex(scanRoots)

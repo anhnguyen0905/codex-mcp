@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Plugin skills in the index** — `build-skills-index` now also scans `~/.claude/plugins/cache/<marketplace>/<plugin>/[<version>/]skills` (newest version per plugin, `compareVersionDirs`) and treats those skills as trusted. On a real machine the index went 362 → 640 entries (43 → 294 trusted), making installed marketing/research/data skills selectable instead of invisible.
+- **Morphological folding in the matcher** — `skill-match.stem()` folds a small, deliberately conservative set of variants (management/manager, analytics/analysis, visualization/visualisation, plurals) so "project management" reaches `project-manager`.
+
+### Changed
+
+- **`skill-selection` Step 7 is now acquire-or-author** — a domain facet may no longer end with zero skills. The ladder is: re-index and re-grep (including the plugin skill dirs) → vet an unvetted on-disk candidate → search for an existing skill (bounded to 2 rounds) → author the missing `SKILL.md` **before execution**, with provenance and "derived, unverified" labels, then rebuild the index and load it. Step 5 must report skills blocked by the vet gate instead of falling through to the gap path; Step 2's facet table grew from 5 to 11 facets (data engineering, visualization/reporting, growth/paid media, research, finance/bizops, localization) with real vocabulary; Step 4 anchors short terms and warns that a name match is not a domain match.
+- **`/codex-flow` Phase 2** — 0 index matches is a valid *matching* result but never a *selection* result; a domain task must not reach Phase 4 with an empty `Skills:` field.
+
 ## [0.13.0] - 2026-07-24
 
 ### Added

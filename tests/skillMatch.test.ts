@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'vitest'
 
 // @ts-expect-error — plain .mjs script, not part of the tsc build
-import { scoreEntry, rankCandidates, selectSkills, fitToBudget, DEFAULT_TOKEN_BUDGET } from '../scripts/skill-match.mjs'
+import {
+  scoreEntry,
+  rankCandidates,
+  selectSkills,
+  fitToBudget,
+  stem,
+  DEFAULT_TOKEN_BUDGET,
+} from '../scripts/skill-match.mjs'
 
 const INDEX = [
   { name: 'exec-typescript', description: 'TypeScript/JavaScript execution idioms — type safety, async correctness, Node conventions.', file: '/a/exec-typescript/SKILL.md' },
@@ -143,5 +150,35 @@ describe('selectSkills', () => {
     const selected = selectSkills(tdd, ['test driven', 'testing'], { budget: 3 })
 
     expect(selected.map((s: { name: string }) => s.name)).toContain('test-driven-development')
+  })
+})
+
+describe('stem', () => {
+  test('folds the morphological variants that cost real matches', () => {
+    // Arrange / Act / Assert — "project management" must reach "project-manager"
+    expect(stem('management')).toBe(stem('manager'))
+    expect(stem('analytics')).toBe(stem('analysis'))
+    expect(stem('visualizations')).toBe(stem('visualisation'))
+    expect(stem('reports')).toBe(stem('reporting'))
+  })
+
+  test('leaves short and unrelated tokens alone', () => {
+    expect(stem('sql')).toBe('sql')
+    expect(stem('css')).toBe('css')
+    expect(stem('seo')).toBe('seo')
+    expect(stem('market')).toBe('market')
+  })
+})
+
+describe('scoreEntry morphology', () => {
+  test('matches a differently-inflected term against the skill name', () => {
+    // Arrange
+    const entry = { name: 'project-manager', description: 'Sprint planning, dependency mapping, critical path.', file: '/a/p/SKILL.md' }
+
+    // Act
+    const score = scoreEntry(entry, ['project management'])
+
+    // Assert
+    expect(score).toBeGreaterThan(0)
   })
 })

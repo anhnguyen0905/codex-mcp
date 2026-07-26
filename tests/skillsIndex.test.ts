@@ -4,7 +4,15 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
 // @ts-expect-error — plain .mjs script, not part of the tsc build
-import { parseSkillMeta, buildIndex, renderIndex, runCli } from '../scripts/build-skills-index.mjs'
+import {
+  parseSkillMeta,
+  buildIndex,
+  renderIndex,
+  runCli,
+  compareVersionDirs,
+  pluginSkillRoots,
+  defaultRoots,
+} from '../scripts/build-skills-index.mjs'
 
 const SKILL = (name: string, description: string) =>
   `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\nBody.\n`
@@ -117,6 +125,100 @@ describe('renderIndex', () => {
     const last = lines[lines.length - 1]
     expect(last).toBe('a-skill | Line one with / pipe. | /tmp/a/SKILL.md')
     expect(output).toContain('# Format: <name> | <description> | <SKILL.md path>')
+  })
+})
+
+describe('compareVersionDirs', () => {
+  test('orders numeric version dirs newest-last, not lexically', () => {
+    // Arrange
+    const versions = ['0.9.0', '0.13.0', '0.10.0', '0.3.0']
+
+    // Act
+    const sorted = [...versions].sort(compareVersionDirs)
+
+    // Assert
+    expect(sorted).toEqual(['0.3.0', '0.9.0', '0.10.0', '0.13.0'])
+  })
+
+  test('falls back to a lexical compare for non-numeric names', () => {
+    expect([...['main', 'dev']].sort(compareVersionDirs)).toEqual(['dev', 'main'])
+  })
+})
+
+describe('pluginSkillRoots', () => {
+  const addPluginSkill = async (rel: string, name: string) => {
+    const dir = path.join(root, '.claude', 'plugins', 'cache', rel, name)
+    await mkdir(dir, { recursive: true })
+    await writeFile(path.join(dir, 'SKILL.md'), SKILL(name, `${name} description.`), 'utf8')
+  }
+
+  test('returns only the newest version of each installed plugin', async () => {
+    // Arrange
+    await addPluginSkill('mkt/plugin-a/0.9.0/skills', 'old-skill')
+    await addPluginSkill('mkt/plugin-a/0.10.0/skills', 'new-skill')
+
+    // Act
+    const roots = await pluginSkillRoots(root)
+
+    // Assert
+    expect(roots).toEqual([
+      path.join(root, '.claude', 'plugins', 'cache', 'mkt', 'plugin-a', '0.10.0', 'skills'),
+    ])
+  })
+
+  test('supports plugins whose skills dir is not nested under a version', async () => {
+    await addPluginSkill('mkt/plugin-b/skills', 'flat-skill')
+
+    const roots = await pluginSkillRoots(root)
+
+    expect(roots).toEqual([
+      path.join(root, '.claude', 'plugins', 'cache', 'mkt', 'plugin-b', 'skills'),
+    ])
+  })
+
+  test("includes the flow's own cached plugin so exec-* language skills stay selectable", async () => {
+    await addPluginSkill('codex-mcp/codex-flow/0.13.0/skills', 'exec-python')
+
+    expect(await pluginSkillRoots(root)).toEqual([
+      path.join(root, '.claude', 'plugins', 'cache', 'codex-mcp', 'codex-flow', '0.13.0', 'skills'),
+    ])
+  })
+
+  test('returns an empty list when no plugin cache exists', async () => {
+    expect(await pluginSkillRoots(root)).toEqual([])
+  })
+
+  test('indexes plugin skills as trusted (no vetted flag)', async () => {
+    // Arrange
+    await addPluginSkill('mkt/plugin-c/1.0.0/skills', 'market-research')
+
+    // Act
+    const { entries } = await buildIndex(await pluginSkillRoots(root))
+
+    // Assert
+    expect(entries).toEqual([
+      expect.objectContaining({ name: 'market-research', description: 'market-research description.' }),
+    ])
+    expect(entries[0]).not.toHaveProperty('vetted')
+  })
+})
+
+describe('defaultRoots', () => {
+  test('scans the user skills dir, the library, and installed plugin skills', async () => {
+    // Arrange
+    const pluginSkills = path.join(root, '.claude', 'plugins', 'cache', 'mkt', 'p', '1.0.0', 'skills')
+    await mkdir(path.join(pluginSkills, 'x'), { recursive: true })
+    await writeFile(path.join(pluginSkills, 'x', 'SKILL.md'), SKILL('x', 'X.'), 'utf8')
+
+    // Act
+    const roots = await defaultRoots(root)
+
+    // Assert
+    expect(roots).toEqual([
+      path.join(root, '.claude', 'skills'),
+      path.join(root, 'claude-skill-library'),
+      pluginSkills,
+    ])
   })
 })
 

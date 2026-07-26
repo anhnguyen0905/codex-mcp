@@ -67,12 +67,14 @@ Also load `codex-flow:session-report` (report templates and PIC rules).
 2. **Select domain skills from the local index** per `codex-flow:skill-selection`: derive search
    terms from the requirements + stack, grep the index, load every relevant skill that fits a
    ~3%-of-context budget (≈6000 tokens; no fixed count) and concretely changes the plan or the
-   Codex prompts. Do NOT install or blind-load whole collections; 0 matches is fine. Also identify
-   **skill gaps** — domains the plan depends on that no indexed skill covers. For each gap, follow
-   `codex-flow:skill-selection` Step 7: search for an existing skill first; if none is found, write
-   the needed rules immediately into PLAN.md's *Skills to create* entry so Phase 4 can embed them.
-   Decide separately whether those rules must be promoted into a reusable `SKILL.md` before
-   execution because the plan depends on it or can remain inline until the Step 8 retro.
+   Codex prompts. Do NOT install or blind-load whole collections. The index scans the user's
+   skills, the skill library, AND every installed plugin's `skills/` dir — rebuild it before
+   concluding a domain is uncovered. 0 index matches is fine as a *matching* result but never as a
+   *selection* result: for each uncovered facet the plan depends on, run `codex-flow:skill-selection`
+   Step 7 to closure — re-index, vet an unvetted candidate, search for an existing skill, and if
+   nothing can be adopted, **author the missing `SKILL.md` now** (before execution), rebuild the
+   index, and load it. Record adopted/authored skills in PLAN.md *Skills plan*; a domain task must
+   never reach Phase 4 with an empty `Skills:` field.
 3. Write `.codex-flow/PLAN.md` in the project root containing:
    - **Context**: what the project is, conventions Codex must follow
    - **Objective**: the confirmed goal from Phase 1

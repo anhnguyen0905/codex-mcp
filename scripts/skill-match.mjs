@@ -10,9 +10,60 @@ const DESC_WORD = 2
 const DESC_PHRASE = 3
 const SUBSTRING = 1
 
-const words = (text) => (text.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+// Conservative morphological folding so a term matches the same concept written in
+// another form ("project management" vs "project-manager", "analytics" vs "analysis").
+// Deliberately small: over-stemming invents matches, which costs more than a miss.
+const STEM_ALIASES = new Map([
+  ['analysis', 'analy'],
+  ['analyses', 'analy'],
+  ['analytics', 'analy'],
+  ['analytical', 'analy'],
+  ['analyze', 'analy'],
+  ['analyzing', 'analy'],
+  ['management', 'manage'],
+  ['manager', 'manage'],
+  ['managing', 'manage'],
+  ['optimization', 'optimiz'],
+  ['optimisation', 'optimiz'],
+  ['optimize', 'optimiz'],
+  ['optimizing', 'optimiz'],
+  ['visualisation', 'visualiz'],
+  ['visualization', 'visualiz'],
+  ['visualize', 'visualiz'],
+  ['statistics', 'statistic'],
+  ['statistical', 'statistic'],
+  ['forecasting', 'forecast'],
+  ['modeling', 'model'],
+  ['modelling', 'model'],
+  ['planning', 'plan'],
+  ['pricing', 'price'],
+  ['reporting', 'report'],
+  ['testing', 'test'],
+  ['writing', 'write'],
+])
+
+/** Fold one token: alias table first, then a plural strip. Tokens ≤4 chars stay as-is. */
+export function stem(token) {
+  const alias = STEM_ALIASES.get(token)
+  if (alias) return alias
+  const singular = depluralize(token)
+  // Re-check the alias table after depluralizing so "visualizations" also folds to
+  // the "visualisation/visualization" alias, not just to "visualization".
+  return STEM_ALIASES.get(singular) ?? singular
+}
+
+function depluralize(token) {
+  if (token.length > 4 && token.endsWith('ies')) return `${token.slice(0, -3)}y`
+  if (token.length > 4 && token.endsWith('es') && !token.endsWith('ses')) return token.slice(0, -2)
+  if (token.length > 4 && token.endsWith('s') && !token.endsWith('ss')) return token.slice(0, -1)
+  return token
+}
+
+const words = (text) => (text.toLowerCase().match(/[a-z0-9]+/g) ?? []).map(stem)
 // Normalize separators (hyphen/underscore/slash) to spaces so "test-driven" == "test driven".
 const normalizePhrase = (text) => text.toLowerCase().replace(/[-_/]+/g, ' ').replace(/\s+/g, ' ').trim()
+// Phrase comparisons run on stemmed tokens so "project management" hits "project-manager".
+const stemPhrase = (text) => normalizePhrase(text).split(' ').map(stem).join(' ')
 
 /**
  * Match one entry against derived terms, returning a breakdown:
@@ -23,8 +74,8 @@ export function matchDetail(entry, terms) {
   const nameWords = new Set(words(entry.name))
   const descWords = new Set(words(entry.description))
   const descText = entry.description.toLowerCase()
-  const nameNorm = normalizePhrase(entry.name)
-  const descNorm = normalizePhrase(entry.description)
+  const nameNorm = stemPhrase(entry.name)
+  const descNorm = stemPhrase(entry.description)
 
   let score = 0
   let nameHits = 0
@@ -34,9 +85,10 @@ export function matchDetail(entry, terms) {
   for (const rawTerm of terms) {
     const term = rawTerm.toLowerCase().trim()
     if (!term) continue
+    const stemmed = stem(term)
 
     if (/[-_/\s]/.test(term)) {
-      const phrase = normalizePhrase(term)
+      const phrase = stemPhrase(term)
       // Score phrases by specificity: a longer phrase hit outranks a single generic word.
       const phraseWords = phrase.split(' ').length
       if (nameNorm.includes(phrase)) {
@@ -49,19 +101,19 @@ export function matchDetail(entry, terms) {
       continue
     }
     if (term.length < MIN_TERM_LEN) {
-      if (nameWords.has(term)) {
+      if (nameWords.has(stemmed)) {
         score += NAME_WORD
         nameHits++
-      } else if (descWords.has(term)) {
+      } else if (descWords.has(stemmed)) {
         score += DESC_WORD
         descHits++
       }
       continue
     }
-    if (nameWords.has(term)) {
+    if (nameWords.has(stemmed)) {
       score += NAME_WORD
       nameHits++
-    } else if (descWords.has(term)) {
+    } else if (descWords.has(stemmed)) {
       score += DESC_WORD
       descHits++
     } else if (descText.includes(term)) {
