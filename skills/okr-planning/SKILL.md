@@ -21,8 +21,8 @@ signups" is the KR it serves. Objectives without KRs are slogans; KRs with no in
 
 A KR should describe a change outside your team — user behaviour, revenue, quality, retention, cost —
 not the volume of work the team emitted. Ten shipped features are output; the retention or conversion
-change they cause is the outcome. Output KRs are attractive because they are controllable, which is
-why they never falsify the strategy: you can hit all of them and learn nothing.
+change they cause is the outcome. Output KRs are attractive because they are controllable, which is why
+they never falsify the strategy: you can hit all of them and learn nothing.
 
 ## Writing a measurable KR
 
@@ -32,15 +32,15 @@ nobody can say at review whether the target was ambitious, trivial or already me
 already in a trusted dashboard; a KR whose measurement must first be built will not be measured, and
 rates beat raw counts, which drift with volume.
 
-Keep to roughly 3–5 KRs per objective and few objectives per team; the limit is the point, because
-OKRs are a prioritisation instrument and a list of twelve is a list of none. Things that matter but are
-routine — uptime, support SLA, compliance — are health metrics you watch, not OKRs you push.
+Keep to roughly 3–5 KRs per objective and few objectives per team; the limit is the point, because OKRs
+are a prioritisation instrument and a list of twelve is a list of none. Routine matters — uptime,
+support SLA, compliance — are health metrics you watch, not OKRs you push.
 
 Lagging indicators (revenue, retention, NPS) confirm the result but move too late to steer inside a
 quarter. Leading indicators (activation rate, time-to-first-value, pipeline created) move early and are
-actionable but are only proxies — a proxy optimised in isolation is how a team hits its leading KR
-while the lagging one worsens. Pair them: one lagging KR to prove the objective, one leading KR you can
-act on next week, and the causal assumption between them written down so the review can test it.
+actionable but are only proxies — a proxy optimised in isolation is how a team hits its leading KR while
+the lagging one worsens. Pair them: one lagging KR to prove the objective, one leading KR actionable
+next week, and the causal assumption between them written down so the review can test it.
 
 ## Cascading vs aligning
 
