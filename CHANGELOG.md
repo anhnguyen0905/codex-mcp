@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`.github/workflows/publish.yml`** — pushing a `v*` tag now publishes to npm automatically. Since 0.15.1 pins `.mcp.json` to a published version, a tagged release that was never published would point every plugin install at a package that does not exist, so publishing can no longer be a manual step someone forgets. The job re-checks that the tag matches `package.json`, runs the release-consistency gate against the tag tree, builds and tests, then publishes with `--provenance`. Auth is OIDC trusted publishing — no token is stored in the repo or in CI; a `NPM_TOKEN` secret is read only as a fallback if trusted publishing is not configured.
+
 ## [0.15.1] - 2026-07-27
 
 ### Changed

@@ -1,0 +1,78 @@
+# Publishes the npm package when a v* tag is pushed.
+#
+# Why this exists: since 0.15.1 the plugin's .mcp.json launches
+# `npx -y @anhnguyen0905/codex-mcp@<version>`. A tagged release whose version was
+# never published leaves every plugin install pointing at a package that does not
+# exist — a worse failure than the -32000 bug that motivated the npx launcher.
+# Publishing must therefore be part of the release, not a manual step someone can
+# forget.
+#
+# Auth: OIDC trusted publishing — no token is stored anywhere. Configure it once at
+#   npmjs.com → package → Settings → Trusted publishers → GitHub Actions
+#   (repository: anhnguyen0905/codex-mcp, workflow: publish.yml)
+# and this workflow authenticates per-run with a short-lived OIDC credential.
+#
+# Fallback: if trusted publishing is not configured, add a granular access token as
+# the NPM_TOKEN repository secret. It is read from the secret store at run time and
+# is never written to the repo — .gitignore already blocks .npmrc and .env* as a
+# second line of defence. Prefer OIDC: npm is restricting tokens that bypass 2FA.
+
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC trusted publishing + provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      # Trusted publishing needs npm >= 11.5.1; runner images can ship older.
+      - name: ensure a trusted-publishing-capable npm
+        run: npm install -g npm@latest
+
+      - run: npm ci
+
+      - name: tag must match package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $pkg"
+            exit 1
+          fi
+          echo "publishing version $pkg"
+
+      # Same gate CI runs, plus the tag-tree check: every version-bearing file and
+      # the .mcp.json npx pin must agree with package.json.
+      - run: node scripts/check-release-consistency.mjs --tag
+
+      - run: npm run build
+      - run: npm test
+
+      - name: publish
+        run: npm publish --access public --provenance
+        env:
+          # Empty under OIDC trusted publishing; used only by the token fallback.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: verify the published version resolves
+        run: |
+          published="$(npm view "@anhnguyen0905/codex-mcp@${GITHUB_REF_NAME#v}" version)"
+          echo "registry reports $published"
