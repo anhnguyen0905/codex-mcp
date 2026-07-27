@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.15.1] - 2026-07-27
+
+### Changed
+
+- **The plugin now launches the published npm tarball instead of building at install time.** 0.15.0 fixed the `-32000` failure by having `.mcp.json` install deps and run `tsc` on first start, which works but makes the very first connection depend on npm and the network at exactly the moment the client is waiting for a handshake. `.mcp.json` now runs `npx -y @anhnguyen0905/codex-mcp@0.15.1`, and the npm tarball ships a prebuilt `dist/` (already covered by `files[]`), so there is no clone-time build at all. The version is pinned rather than `@latest` so a plugin release cannot drift onto a server build it was never tested against.
+- **`scripts/check-release-consistency.mjs` now also checks the `.mcp.json` npx pin**, since pinning adds one more place a release can forget to bump. `extractMcpPinnedVersion` returns `undefined` for a non-pinned launcher, so switching back to a local-build config does not fail the gate.
+- README's standalone-install section leads with npm again, and the `-32000` troubleshooting note reflects the npx launcher.
+
 ## [0.15.0] - 2026-07-27
 
 ### Added

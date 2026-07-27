@@ -29,6 +29,19 @@ export const VERSION_SOURCES = [
 ]
 
 export const CHANGELOG_FILE = 'CHANGELOG.md'
+export const MCP_CONFIG_FILE = '.mcp.json'
+export const PACKAGE_NAME = '@anhnguyen0905/codex-mcp'
+
+// Pure: read the version pinned in .mcp.json's npx invocation, e.g.
+// args: ["-y", "@anhnguyen0905/codex-mcp@1.2.3"] -> "1.2.3".
+// Returns undefined when the launcher is not the pinned-npx form, so a
+// deliberate switch back to a local-build launcher does not fail the gate.
+export const extractMcpPinnedVersion = (jsonText) => {
+  const args = JSON.parse(jsonText)?.mcpServers?.codex?.args
+  if (!Array.isArray(args)) return undefined
+  const spec = args.find((arg) => typeof arg === 'string' && arg.startsWith(`${PACKAGE_NAME}@`))
+  return spec?.slice(PACKAGE_NAME.length + 1) || undefined
+}
 
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -88,6 +101,14 @@ const collectEntries = (readFile) => {
     } catch (error) {
       errors.push(`  ERROR reading ${source.file}: ${error.message}`)
     }
+  }
+  try {
+    const pinned = extractMcpPinnedVersion(readFile(MCP_CONFIG_FILE))
+    if (pinned !== undefined) {
+      entries.push({ label: `${MCP_CONFIG_FILE} npx pin`, version: pinned })
+    }
+  } catch (error) {
+    errors.push(`  ERROR reading ${MCP_CONFIG_FILE}: ${error.message}`)
   }
   return { entries, errors }
 }

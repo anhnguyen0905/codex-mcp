@@ -42,10 +42,10 @@ codex login          # ChatGPT Plus/Pro/Team — or set OPENAI_API_KEY
 <summary>Alternative: install the MCP server standalone (no plugin)</summary>
 
 ```bash
-# straight from this repo (recommended — always the current release)
-claude mcp add --scope user codex -- npx -y github:anhnguyen0905/codex-mcp
-# from npm — note the registry lags behind GitHub releases
+# from npm (recommended — ships a prebuilt dist, nothing to compile)
 claude mcp add --scope user codex -- npx -y @anhnguyen0905/codex-mcp
+# or straight from this repo, which builds from source on first run
+claude mcp add --scope user codex -- npx -y github:anhnguyen0905/codex-mcp
 ```
 
 `claude mcp list` should then show `codex … ✔ Connected`. Copy
@@ -56,11 +56,18 @@ command, or just use the plugin install above which bundles both.
 <details>
 <summary>Troubleshooting: <code>Failed to reconnect to Plugin:codex-flow:codex: -32000</code></summary>
 
-The plugin is distributed as a git clone and `dist/` is gitignored, so a freshly installed plugin
-has no build yet. Since v0.15.0 the bundled `.mcp.json` installs deps and builds on first start, so
-the first session after install takes a few extra seconds and then connects normally.
+The plugin is distributed as a git clone and `dist/` is gitignored, so up to v0.14.0 a freshly
+installed plugin had no build and its `node dist/index.js` launcher exited immediately.
 
-If you are on an older install, patch it once:
+Since v0.15.1 the bundled `.mcp.json` runs the published npm tarball
+(`npx -y @anhnguyen0905/codex-mcp@<version>`), which ships a prebuilt `dist/` — nothing is compiled
+at install time. Updating the plugin is the fix:
+
+```
+/plugin update codex-flow@codex-mcp
+```
+
+If you are pinned to an older version, patch that install once instead:
 
 ```bash
 cd ~/.claude/plugins/cache/codex-mcp/codex-flow/<version>

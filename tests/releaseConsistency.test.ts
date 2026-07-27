@@ -4,6 +4,7 @@ import { describe, expect, test } from 'vitest'
 import {
   changelogHasVersion,
   extractJsonVersions,
+  extractMcpPinnedVersion,
   findMismatches,
 } from '../scripts/check-release-consistency.mjs'
 // @ts-expect-error — plain .mjs script, not part of the tsc build
@@ -37,6 +38,40 @@ describe('extractJsonVersions', () => {
     const entries = extractJsonVersions('plugin.json', '{}', [['version']])
 
     expect(entries[0].version).toBeUndefined()
+  })
+})
+
+describe('extractMcpPinnedVersion', () => {
+  const withArgs = (args: unknown) => JSON.stringify({ mcpServers: { codex: { args } } })
+
+  test('reads the version pinned in the npx invocation', () => {
+    const pinned = extractMcpPinnedVersion(withArgs(['-y', '@anhnguyen0905/codex-mcp@1.2.3']))
+
+    expect(pinned).toBe('1.2.3')
+  })
+
+  test('returns undefined for a local-build launcher so the gate stays opt-in', () => {
+    const pinned = extractMcpPinnedVersion(withArgs(['dist/index.js']))
+
+    expect(pinned).toBeUndefined()
+  })
+
+  test('returns undefined for an unpinned @latest-style spec rather than a bogus version', () => {
+    const pinned = extractMcpPinnedVersion(withArgs(['-y', '@anhnguyen0905/codex-mcp']))
+
+    expect(pinned).toBeUndefined()
+  })
+
+  test('returns undefined when the codex server declares no args', () => {
+    const pinned = extractMcpPinnedVersion(JSON.stringify({ mcpServers: { codex: {} } }))
+
+    expect(pinned).toBeUndefined()
+  })
+
+  test('a stale pin is reported as a mismatch against the package version', () => {
+    const entries = [{ label: '.mcp.json npx pin', version: extractMcpPinnedVersion(withArgs(['-y', '@anhnguyen0905/codex-mcp@0.15.0'])) }]
+
+    expect(findMismatches(entries, '0.15.1')).toHaveLength(1)
   })
 })
 
