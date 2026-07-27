@@ -85,16 +85,31 @@ structured result (`sessionId`, `agentMessage`, `fileChanges`, `commands`, token
 
 Instead of blind-loading whole skill collections, `/codex-flow` selects only the skills a task
 needs from a **local index**: it classifies the request's role facets (engineering, data,
-marketing, design…) and loads every relevant skill that fits a context budget (~3% of the window),
-embedding distilled rule blocks into the Codex prompts. Skills on disk cost zero context until
-selected; third-party skills are vetted once before first use.
+marketing, growth, research, design…) and loads every relevant skill that fits a context budget
+(~3% of the window), embedding distilled rule blocks into the Codex prompts. Skills on disk cost
+zero context until selected; third-party skills are vetted once before first use.
+
+The index covers `~/.claude/skills`, `~/claude-skill-library`, **and the `skills/` dir of every
+installed plugin** (newest version per plugin) — so selection knows about skills the machine
+already has instead of reporting a gap. And a domain facet never ends with zero skills: when
+nothing indexed fits, Step 7 re-indexes, vets, searches (`gh`/catalog/web), and — failing all of
+that — **authors the missing `SKILL.md` before execution**, so the library grows toward the work.
 
 ```bash
 node scripts/sync-awesome-skills.mjs --clone   # build a local library from awesome-claude-skills
 node scripts/build-skills-index.mjs            # → ~/.claude/skill-library/INDEX.md
 ```
 
-Verified by a 32-scenario scope eval (`npm run skills:eval`) — latest **32/32**. Full procedure:
+Besides the phase skills, the plugin ships 15 domain skills authored through Step 7 — paid media,
+unit economics, media planning, warehouse modeling, event taxonomy, attribution, causal inference,
+survey design, ASO, localisation, OKRs, creative briefs, influencer strategy, SOPs and data-quality
+checks — so they are indexed and selectable out of the box. Their numeric thresholds are labelled *derived, unverified*: replace them with your
+own account history before treating any of them as a target.
+
+Verified by a 32-scenario scope eval (`npm run skills:eval`) — latest **32/32** — plus a
+100-request non-engineering scope run (data analysis, marketing planning, performance marketing,
+market research, content, product): **87/100** covered by an existing skill, the rest queued for
+Step 7 acquisition/authoring. Full procedure:
 [`skills/skill-selection/SKILL.md`](skills/skill-selection/SKILL.md).
 
 ### Parallel execution for large backlogs

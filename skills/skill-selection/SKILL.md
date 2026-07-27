@@ -14,8 +14,13 @@ ever contain the skills its current work needs.
 - Path: `$CODEX_FLOW_SKILLS_INDEX` if set, else `~/.claude/skill-library/INDEX.md`.
 - Missing or stale (skills were added since it was rebuilt)? Rebuild it:
   `node "${CLAUDE_PLUGIN_ROOT}/scripts/build-skills-index.mjs" [extra skill dirs ...]`
-  — defaults scan `~/.claude/skills` and `~/claude-skill-library` (including promoted skills
-  under `remote/`), and merge the `REMOTE.md` pointer catalog for anything not yet local.
+  — defaults scan `~/.claude/skills`, `~/claude-skill-library` (including promoted skills
+  under `remote/`), and the `skills/` dir of every installed plugin
+  (`~/.claude/plugins/cache/<marketplace>/<plugin>/<newest version>/skills`), then merge the
+  `REMOTE.md` pointer catalog for anything not yet local. Installed plugin skills are trusted
+  and load by name — an index that omits them makes selection claim a gap the machine already fills.
+- Sanity-check the count before trusting a "no match": an index with only a few dozen entries
+  almost certainly predates the plugin scan. Rebuild, then match again.
   Anything under a `quarantine/` directory (where `--clone` lands third-party repos) is NEVER
   indexed — quarantined skills only become visible through the explicit vet step in Step 5.
 - Still no index → skip selection, continue the phase with its named `codex-flow:*` skills only,
@@ -31,13 +36,27 @@ Requests are not always engineering. First identify 1–2 **role facets** the ta
 | Facet | Examples of terms it generates |
 |-------|-------------------------------|
 | Engineering | language (python, typescript…), framework (django, react…), storage (postgres, redis…), domain (auth, payments, migrations, e2e, performance…) |
-| Data / analytics | sql, pandas, etl, visualization, dashboards, statistics, forecasting |
-| Marketing / content | campaign, copywriting, seo, landing page, social, brand voice |
-| Product / planning | prd, roadmap, backlog, user research, metrics, pricing |
+| Data / analytics | pandas, statistics, cohort, retention, funnel, segmentation, forecasting, experiment, significance |
+| Data engineering | sql, warehouse, star schema, dbt, etl, orchestration, event taxonomy, data quality, reconciliation |
+| Visualization / reporting | chart, palette, dashboard, slides/pptx, spreadsheet/xlsx, infographic, executive summary |
+| Marketing / content | campaign, positioning, messaging, copywriting, seo, landing page, social, brand voice, content calendar, launch |
+| Growth / paid media | roas, cpi, cac, ltv, payback, attribution, incrementality, bidding, media plan, creative fatigue, aso |
+| Research | market sizing, competitor, benchmark, survey design, cross-tab, persona, interview, scenario / what-if |
+| Product / planning | prd, roadmap, backlog, prioritization, metrics, kpi tree, okr, pricing, unit economics |
+| Finance / BizOps | business case, budget allocation, forecast, margin, sensitivity, sop |
 | Design | ui, accessibility, motion, design system, typography |
+| Localization | translation, locale, tone preservation, market adaptation |
 
 Then derive 3–8 search terms **per facet**. A request can span facets (e.g. "build a dashboard
 and write the launch post") — select for each facet independently within the shared budget.
+
+- **Derive the terms from the confirmed requirements and acceptance criteria**, not only from the
+  user's original sentence. The interview is what turns "build a dashboard" into "weekly retention
+  report, exported to xlsx, labels in vi-VN" — the acceptance criteria are where facets like
+  reporting, localisation, or accessibility actually surface. Classify against the confirmed scope.
+- **Re-run selection per task once the backlog is decomposed.** A task exposes facets the plan level
+  did not (a migration task's data-safety facet, a copy task's brand-voice facet). Each task's
+  `Skills:` field is a selection result, not a copy of the plan's list.
 
 ## Step 3 — Evaluate what is already loaded
 
@@ -54,7 +73,15 @@ Before loading anything new, list the skills already present in the session (per
 
 - Grep the index case-insensitively per term (one line per skill: `name | description | path`,
   where path is a local SKILL.md or a remote repo URL).
+- **Anchor short terms.** Bare substring grep on a 3-letter term matches inside unrelated words
+  (`sql` → `expo-examples`, `seo` → `eas-observe`, `ads` → `bulk-rnaseq`). For any term under ~5
+  characters, grep on a word boundary (`grep -iE '\b<term>\b'`) and require a second term from the
+  same facet to co-occur before shortlisting.
 - Shortlist by **description** relevance, not name similarity.
+- **A name match is not a domain match.** When a candidate's only strong signal is its name
+  (e.g. `brand-guidelines` for "brand voice" — it is actually a color/typography guide), read the
+  SKILL.md and confirm its stated purpose before loading. Discard on mismatch; that is a 0-match
+  facet, which Step 7 then handles.
 - Read the full SKILL.md of at most 5 candidates before deciding.
 
 ## Step 5 — Load within a context budget (no fixed count)
@@ -83,7 +110,36 @@ Before loading anything new, list the skills already present in the session (per
   (`<library>/quarantine/…`, where `--clone` puts repos) are unindexed by design: promote one by
   vetting it as above, moving it to `<library>/remote/…`, running `--vet` on the new path, and
   rebuilding the index. URL pointers get cloned into quarantine first, then promoted the same way.
+- **Never let the vet gate masquerade as a gap.** When a facet's best candidates are all
+  `vetted:false`, that is an unvetted-skill situation, not a missing-skill situation: the content is
+  already on disk. Vet the top candidates for that facet right there (read the SKILL.md, then
+  `--vet` + rebuild) and load them. Only if a candidate fails the vet do you treat the facet as
+  0-match. Either way, tell the user which indexed skills were blocked and what you did about them —
+  never fall silently through to Step 7 and re-author a skill the library already has.
 - Record the chosen skills in PLAN.md under **Skills plan** as *Skills to use* (name, path, what it informs).
+
+### Step 5 verdict — every facet resolves to LOAD, VET, or AUTHOR
+
+Selection ends in a **verdict per facet**, not in prose. State it explicitly in PLAN.md and to the
+user before Phase 4. Exactly three verdicts exist:
+
+- **`LOAD`** — name the skills, their paths, and what each one informs.
+- **`VET`** — name the indexed candidates blocked by the vet gate and say they are *being vetted now*.
+  This is a Step 5 job, never a gap; the verdict is not final until it becomes `LOAD` or the
+  candidate fails its vet.
+- **`AUTHOR`** — no adoptable skill exists: name the skill to be written and hand off to Step 7c/7d.
+
+Rules:
+
+- **Exactly one verdict per facet.** No facet may be left unresolved, and none may carry two.
+- **Prose is not a verdict.** "No relevant skills found", "nothing matched", "will use general
+  knowledge" are all missing verdicts — the failure mode this gate exists to catch is selection
+  quietly ending with no skill.
+- **A `LOAD` verdict may not include a skill whose stated purpose does not match the facet.** Name
+  similarity is not a match (Step 4's `brand-guidelines`-for-"brand voice" case is the canonical
+  example). A wrong-domain skill is worse than none, because its rules get embedded into a Codex
+  prompt. Demote it to `AUTHOR` rather than claim coverage.
+- **Record the verdict in PLAN.md under Skills plan**, per facet, so review can check it.
 
 ## Step 6 — Embed for Codex (per task, stateless)
 
@@ -96,18 +152,53 @@ Codex has no skill system — it sees only the prompt and files on disk. Per tas
 - If the distilled blocks grow large, write them to `.codex-flow/SKILLS-T<n>.md` and instruct
   Codex to read that file instead of bloating the prompt.
 
-## Step 7 — Gap fallback (material gaps only)
+## Step 7 — Acquire or author (a domain facet never ends with zero skills)
 
-Only when the plan genuinely depends on a domain no indexed skill covers:
+A facet the plan depends on must not reach Phase 4 empty. "0 matches" is a normal outcome of
+*matching*; it is never an acceptable outcome of *selection*. When a facet has no loadable skill
+after Steps 4–5, work down this ladder and stop at the first success:
 
-1. Search for an existing skill (`gh search repos`, `gh search code`, re-sync the collection:
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-awesome-skills.mjs" --clone` — clones land in
-   `<library>/quarantine/`).
-2. Found → vet and promote out of quarantine (Step 5), rebuild the index, load it.
-3. Not found → record the planned skill under PLAN.md **Skills plan** → *Skills to create*, with
-   its working name, gap, promotion timing, and needed rules inline so Phase 4 can embed them.
-   Promote those rules into a reusable `SKILL.md` before execution when planned, or at the retro
-   step (Step 8).
+**7a — Look again locally before concluding anything is missing.**
+The index can be stale or the terms wrong. Rebuild it (Step 1), then re-grep with the facet's
+vocabulary from the Step 2 table. Also grep the installed plugins' skill dirs directly as a
+safety net — a fresh install may postdate the last rebuild:
+`grep -ril "<term>" ~/.claude/plugins/cache/*/*/*/skills --include=SKILL.md`
+
+**7b — Unvetted candidate on disk?** Then it is a Step 5 vet job, not a gap. Vet and load it.
+
+**7c — Search for an existing skill (bounded to 2 rounds).**
+- `gh search repos "<domain> claude skill"`, `gh search code "name: <domain>" --filename SKILL.md`
+- re-sync the catalog: `node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-awesome-skills.mjs" --clone`
+  (clones land in `<library>/quarantine/`)
+- web search when the domain is a named practice with public canon (e.g. incrementality testing,
+  MMM, ASO) — you are looking for the *method*, not only for a packaged skill.
+Found a skill → vet + promote out of quarantine (Step 5), rebuild the index, load it.
+
+**7d — Nothing to adopt? Author the skill NOW, before execution.**
+Do not defer to the retro and do not hand Codex a bare prompt. Write
+`<library>/<skill-name>/SKILL.md` containing what a competent practitioner of that domain would
+insist on, grounded in what 7c actually turned up:
+
+- frontmatter `name` + one-line `description` (so the index can match it next time)
+- the domain's core method/steps, the metrics or formulas that matter, and their definitions
+- the standard failure modes and what "wrong" looks like (this is what stops Codex from
+  inventing plausible-but-wrong numbers)
+- a checklist a reviewer can verify the output against
+- **provenance**: cite the sources 7c produced; mark anything you reasoned out yourself as
+  "derived, unverified" so the reviewer knows what to check
+
+Then rebuild the index and load it like any other trusted local skill. It now exists for every
+later flow — this is how the library grows toward the work actually being done.
+
+**7e — Bound the effort, and be honest about what you produced.**
+Cap 7c at 2 search rounds and 7d at one authored skill per facet. If the domain is genuinely
+outside your knowledge and 7c found nothing citable, still write the skill, but keep it to what
+you can defend, label the unverified parts, and tell the user which facet rests on a
+self-authored skill — so they can correct it before Codex builds on it.
+
+Record every outcome in PLAN.md **Skills plan**: *Skills to use* (adopted or authored, with path)
+and, for anything still thin, *Skills to strengthen* with the open question. A domain task whose
+`Skills:` field is empty is a planning defect — fix it here, not in review.
 
 ## Step 8 — Register back (retro, after final review)
 
@@ -115,6 +206,9 @@ The index is a living asset — every flow should leave it richer than it found 
 
 - New reusable domain knowledge → create `<library>/<skill-name>/SKILL.md` (frontmatter: `name` +
   one-line `description`), rebuild the index, mention it in the final summary.
+- Skills authored under Step 7d already exist; here you **upgrade** them with what execution and
+  review taught you — correct the parts labelled "derived, unverified", add the failure modes that
+  actually bit, drop the guidance that proved useless.
 - Skills cloned/fetched, vetted, and promoted during the flow are already local with a pinned
   record in `vetted.json` — they persist automatically; the next flow loads them with zero extra
   work (unless their content changes, which flips them back to `vetted:false`).
@@ -122,6 +216,11 @@ The index is a living asset — every flow should leave it richer than it found 
 ## Rules
 
 - Never install or load a whole collection because one member might be useful.
+- **A domain facet never ends with zero skills.** "No index match" is a trigger for Step 7
+  (re-index → vet → search → author), never a final answer. Handing Codex a domain task with no
+  domain skill is the one outcome this skill exists to prevent.
+- Never report a gap you did not first try to close: rebuild the index and grep the installed
+  plugin skill dirs before claiming nothing covers the domain.
 - Selection is additive: the per-phase `codex-flow:*` skills named by the command are always
   loaded regardless of index matches.
 - Do not force-load tangential skills to fill the budget — the budget is a ceiling, not a target;

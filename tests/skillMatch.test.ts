@@ -1,7 +1,16 @@
 import { describe, expect, test } from 'vitest'
 
 // @ts-expect-error — plain .mjs script, not part of the tsc build
-import { scoreEntry, rankCandidates, selectSkills, fitToBudget, DEFAULT_TOKEN_BUDGET } from '../scripts/skill-match.mjs'
+import {
+  scoreEntry,
+  rankCandidates,
+  selectSkills,
+  fitToBudget,
+  stem,
+  idfWeight,
+  buildDocFrequency,
+  DEFAULT_TOKEN_BUDGET,
+} from '../scripts/skill-match.mjs'
 
 const INDEX = [
   { name: 'exec-typescript', description: 'TypeScript/JavaScript execution idioms — type safety, async correctness, Node conventions.', file: '/a/exec-typescript/SKILL.md' },
@@ -143,5 +152,100 @@ describe('selectSkills', () => {
     const selected = selectSkills(tdd, ['test driven', 'testing'], { budget: 3 })
 
     expect(selected.map((s: { name: string }) => s.name)).toContain('test-driven-development')
+  })
+})
+
+describe('stem', () => {
+  test('folds the morphological variants that cost real matches', () => {
+    // Arrange / Act / Assert — "project management" must reach "project-manager"
+    expect(stem('management')).toBe(stem('manager'))
+    expect(stem('analytics')).toBe(stem('analysis'))
+    expect(stem('visualizations')).toBe(stem('visualisation'))
+    expect(stem('reports')).toBe(stem('reporting'))
+  })
+
+  test('leaves short and unrelated tokens alone', () => {
+    expect(stem('sql')).toBe('sql')
+    expect(stem('css')).toBe('css')
+    expect(stem('seo')).toBe('seo')
+    expect(stem('market')).toBe('market')
+  })
+})
+
+describe('scoreEntry morphology', () => {
+  test('matches a differently-inflected term against the skill name', () => {
+    // Arrange
+    const entry = { name: 'project-manager', description: 'Sprint planning, dependency mapping, critical path.', file: '/a/p/SKILL.md' }
+
+    // Act
+    const score = scoreEntry(entry, ['project management'])
+
+    // Assert
+    expect(score).toBeGreaterThan(0)
+  })
+})
+
+describe('idfWeight', () => {
+  test('weights a rare term above a term half the index uses', () => {
+    // Arrange
+    // A realistic corpus: "data" is everywhere, "incrementality" appears once.
+    const entries = [
+      ...Array.from({ length: 40 }, (_, i) => ({ name: `s${i}`, description: 'data analysis of things' })),
+      { name: 'lift', description: 'incrementality holdout measurement for paid media' },
+    ]
+    const stats = buildDocFrequency(entries)
+
+    // Act / Assert
+    expect(idfWeight('incrementality', stats)).toBeGreaterThan(idfWeight('data', stats))
+  })
+
+  test('returns a neutral weight without corpus stats', () => {
+    expect(idfWeight('anything', null)).toBe(1)
+  })
+})
+
+describe('selectSkills per facet', () => {
+  // Three strong marketing skills against one visualization skill: on a combined
+  // term list the marketing facet fills every slot a tight budget allows.
+  const FACETED = [
+    { name: 'content-engine', description: 'Platform-native content systems: campaign content, launch copy, copywriting.', file: '/a/1/SKILL.md', tokens: 600 },
+    { name: 'marketing-campaign', description: 'Plan and execute a marketing campaign: launch copy, campaign content, ad variants.', file: '/a/2/SKILL.md', tokens: 600 },
+    { name: 'crosspost', description: 'Distribute campaign content and launch copy across social platforms.', file: '/a/3/SKILL.md', tokens: 600 },
+    { name: 'dashboard-builder', description: 'Build monitoring dashboards operators actually use.', file: '/a/4/SKILL.md', tokens: 600 },
+  ]
+  const viz = ['dashboard', 'monitoring']
+  const marketing = ['campaign content', 'launch copy', 'copywriting']
+
+  test('keeps the weaker facet alive when the budget is tight', () => {
+    // Arrange — a flat term list lets the marketing facet take every slot
+    const flat = selectSkills(FACETED, [...viz, ...marketing], { tokenBudget: 1200 }).map((s) => s.name)
+
+    // Act — the same request expressed as two facets
+    const faceted = selectSkills(
+      FACETED,
+      [{ name: 'viz', terms: viz }, { name: 'marketing', terms: marketing }],
+      { tokenBudget: 1200 },
+    ).map((s) => s.name)
+
+    // Assert
+    expect(flat).not.toContain('dashboard-builder')
+    expect(faceted).toContain('dashboard-builder')
+  })
+
+  test('tags each selection with the facet that surfaced it', () => {
+    const selected = selectSkills(
+      FACETED,
+      [{ name: 'viz', terms: viz }, { name: 'marketing', terms: marketing }],
+      { tokenBudget: 6000 },
+    )
+
+    expect(selected.find((s) => s.name === 'dashboard-builder')?.facet).toBe('viz')
+  })
+
+  test('still accepts a flat term list (single-facet back-compat)', () => {
+    const selected = selectSkills(FACETED, viz, { tokenBudget: 6000 })
+
+    expect(selected[0].name).toBe('dashboard-builder')
+    expect(selected[0]).not.toHaveProperty('facet')
   })
 })

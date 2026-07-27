@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] - 2026-07-28
+
+### Added
+
+- **Plugin skills in the index** — `build-skills-index` now also scans `~/.claude/plugins/cache/<marketplace>/<plugin>/[<version>/]skills` (newest version per plugin, `compareVersionDirs`) and treats those skills as trusted. On a real machine the index went 362 → 640 entries (43 → 294 trusted), making installed marketing/research/data skills selectable instead of invisible.
+- **IDF term weighting** — `buildDocFrequency` + `idfWeight` score a term by rarity across the index (clamped to 0.5–3×), so a diagnostic term ("incrementality", "gacha") outweighs one half the index uses ("data", "analysis"). Measured effect: reorders 16 of 100 scenario selections, flips no verdict — ranking was not the binding constraint, library coverage is. Kept because the shortlist order is what a future LLM reranker sees.
+- **Per-facet selection** — `selectSkills(entries, [{ name, terms }])` gives each role facet its own share of the token budget, with a remainder pass so the budget stays a ceiling. This closes a doc↔code mismatch: `skill-selection` Step 2 has always required per-facet selection, but the matcher only accepted one flat term list, letting a strong facet crowd a weak one out (the eval's documented S31 limitation). Demonstrable at a tight budget: at 1200–1800 tokens a flat list drops `dashboard-builder` entirely from "build the dashboard and write the launch post"; per-facet keeps it. Flat term lists still work unchanged.
+- **Morphological folding in the matcher** — `skill-match.stem()` folds a small, deliberately conservative set of variants (management/manager, analytics/analysis, visualization/visualisation, plurals) so "project management" reaches `project-manager`.
+
+- **Fifteen Step-7d authored skills** — all written through the Step 7 acquire-or-author path and shipped under `skills/`: `performance-marketing`, `unit-economics`, `media-planning`, `warehouse-modeling`, `event-taxonomy`, `marketing-attribution`, `causal-inference`, `survey-design`, `aso`, `localization-copy`, `okr-planning`, `creative-brief`, `influencer-strategy`, `sop-authoring`, `data-quality-checks`. The 100-request scope run went 23/100 → **87/100**; every numeric threshold is labelled *derived, unverified*.
+- **First three Step-7d authored skills** — `performance-marketing`, `unit-economics`, and `media-planning` were written into the skill library through the Step 7 acquire-or-author path (gap analysis → no adoptable skill found → author with provenance labels → reindex). The 100-request scope run went 62/100 → **70/100**; the 32-scenario eval stayed 32/32. They now ship with the plugin under `skills/`, so every install gets them indexed as trusted plugin skills.
+
+### Changed
+
+- **`skill-selection` Step 7 is now acquire-or-author** — a domain facet may no longer end with zero skills. The ladder is: re-index and re-grep (including the plugin skill dirs) → vet an unvetted on-disk candidate → search for an existing skill (bounded to 2 rounds) → author the missing `SKILL.md` **before execution**, with provenance and "derived, unverified" labels, then rebuild the index and load it. Step 5 must report skills blocked by the vet gate instead of falling through to the gap path; Step 2's facet table grew from 5 to 11 facets (data engineering, visualization/reporting, growth/paid media, research, finance/bizops, localization) with real vocabulary; Step 4 anchors short terms and warns that a name match is not a domain match.
+- **`/codex-flow` Phase 2** — 0 index matches is a valid *matching* result but never a *selection* result; a domain task must not reach Phase 4 with an empty `Skills:` field.
+
 ## [0.13.0] - 2026-07-24
 
 ### Added
