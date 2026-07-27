@@ -65,7 +65,7 @@ Also load `codex-flow:session-report` (report templates and PIC rules).
 
 1. Explore the codebase to understand relevant architecture and conventions.
 2. **Select domain skills from the local index** per `codex-flow:skill-selection`: derive search
-   terms from the requirements + stack, grep the index, load every relevant skill that fits a
+   terms from the confirmed requirements + acceptance criteria + stack, grep the index, load every relevant skill that fits a
    ~3%-of-context budget (≈6000 tokens; no fixed count) and concretely changes the plan or the
    Codex prompts. Do NOT install or blind-load whole collections. The index scans the user's
    skills, the skill library, AND every installed plugin's `skills/` dir — rebuild it before
@@ -75,6 +75,10 @@ Also load `codex-flow:session-report` (report templates and PIC rules).
    nothing can be adopted, **author the missing `SKILL.md` now** (before execution), rebuild the
    index, and load it. Record adopted/authored skills in PLAN.md *Skills plan*; a domain task must
    never reach Phase 4 with an empty `Skills:` field.
+   **Every facet must end in one explicit verdict** — `LOAD` (named skills + paths), `VET` (named
+   indexed candidates being vetted now), or `AUTHOR` (named skill to write via Step 7c/7d) — stated
+   in PLAN.md *Skills plan* and to the user. Prose like "no relevant skills found" is not a verdict,
+   and a `LOAD` verdict may not name a skill whose stated purpose does not match the facet.
 3. Write `.codex-flow/PLAN.md` in the project root containing:
    - **Context**: what the project is, conventions Codex must follow
    - **Objective**: the confirmed goal from Phase 1
@@ -87,11 +91,13 @@ Also load `codex-flow:session-report` (report templates and PIC rules).
    - **Risk & blast radius**: sensitive areas the change touches (auth, data, migrations, config),
      what could break beyond the target files, and the rollback point (baseline ref from Phase 0)
    - **Skills plan**:
-     - *Skills to use*: the domain skills selected in step 2 (name, path, what each informs; write
-       `*Skills to use*: —` when no index match)
-     - *Skills to create*: planned new skills for uncovered gaps (working name, the gap each fills,
-       the needed rules inline, and whether they are promoted into a reusable `SKILL.md` before
-       execution or at the retro; write `*Skills to create*: —` when no gaps)
+     - *Verdict per facet*: one of `LOAD` / `VET` / `AUTHOR` for every facet the plan depends on —
+       there is no empty state, because a facet with no indexed match resolves to `AUTHOR`
+     - *Skills to use*: the domain skills selected in step 2 (name, path, what each informs), plus
+       any skill authored in this flow
+     - *Skills to create*: the `AUTHOR` verdicts still outstanding (working name, the gap each fills,
+       the needed rules inline); write `*Skills to create*: —` only when every facet resolved to
+       `LOAD` or `VET`
    - **Known-red baseline**: pre-existing test failures from Phase 0
    - **Out of scope**: things Codex must NOT do
    - **Acceptance criteria**: how the result will be verified (tests to pass, behaviors to check)
