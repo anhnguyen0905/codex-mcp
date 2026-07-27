@@ -9,6 +9,8 @@ const NAME_PHRASE = 5
 const DESC_WORD = 2
 const DESC_PHRASE = 3
 const SUBSTRING = 1
+// Missed phrases retain reduced constituent-word credit without rivaling exact phrases.
+export const PARTIAL_FACTOR = 0.6
 
 // Conservative morphological folding so a term matches the same concept written in
 // another form ("project management" vs "project-manager", "analytics" vs "analysis").
@@ -94,27 +96,63 @@ export function idfWeight(term, stats) {
 const phraseWeight = (phrase, stats) =>
   stats ? Math.max(...phrase.split(' ').map((word) => idfWeight(word, stats))) : 1
 
+function scorePartialPhrase(phrase, nameWords, descWords, stats, partialFactor) {
+  let score = 0
+  let nameWordHits = 0
+  let totalHits = 0
+
+  for (const word of phrase.split(' ')) {
+    if (word.length < MIN_TERM_LEN) continue
+    const weight = idfWeight(word, stats)
+    if (nameWords.has(word)) {
+      score += NAME_WORD * weight * partialFactor
+      nameWordHits++
+      totalHits++
+    } else if (descWords.has(word)) {
+      score += DESC_WORD * weight * partialFactor
+      totalHits++
+    }
+  }
+
+  return { score, nameWordHits, totalHits }
+}
+
+function scoreWordTerm(term, stemmed, nameWords, descWords, descText, stats) {
+  const weight = idfWeight(term, stats)
+  if (nameWords.has(stemmed)) {
+    return { score: NAME_WORD * weight, nameHits: 1, descHits: 0 }
+  }
+  if (descWords.has(stemmed)) {
+    return { score: DESC_WORD * weight, nameHits: 0, descHits: 1 }
+  }
+  const score = term.length >= MIN_TERM_LEN && descText.includes(term) ? SUBSTRING * weight : 0
+  return { score, nameHits: 0, descHits: 0 }
+}
+
 /**
  * Match one entry against derived terms, returning a breakdown:
- *   { score, nameHits, phraseHits, descHits } — enough for both ranking and the
- *   relevance floor (a single generic description word must not qualify a skill).
+ *   { score, nameHits, phraseHits, descHits, matchedTerms } — enough
+ *   for ranking, the relevance floor, and downstream shortlist attribution.
  */
-export function matchDetail(entry, terms, stats = null) {
+export function matchDetail(entry, terms, stats = null, tuning = {}) {
   const nameWords = new Set(words(entry.name))
   const descWords = new Set(words(entry.description))
   const descText = entry.description.toLowerCase()
   const nameNorm = stemPhrase(entry.name)
   const descNorm = stemPhrase(entry.description)
+  const partialFactor = tuning.partialFactor ?? PARTIAL_FACTOR
 
   let score = 0
   let nameHits = 0
   let phraseHits = 0
   let descHits = 0
+  const matchedTerms = []
 
   for (const rawTerm of terms) {
     const term = rawTerm.toLowerCase().trim()
     if (!term) continue
     const stemmed = stem(term)
+    const scoreBeforeTerm = score
 
     if (/[-_/\s]/.test(term)) {
       const phrase = stemPhrase(term)
@@ -127,41 +165,31 @@ export function matchDetail(entry, terms, stats = null) {
       } else if (descNorm.includes(phrase)) {
         score += (DESC_PHRASE + (phraseWords - 1) * DESC_WORD) * weight
         phraseHits++
+      } else {
+        const partial = scorePartialPhrase(phrase, nameWords, descWords, stats, partialFactor)
+        score += partial.score
+        if (partial.nameWordHits >= 2) nameHits++
+        else if (partial.totalHits >= 2) phraseHits++
+        else if (partial.totalHits === 1) descHits++
       }
-      continue
+    } else {
+      const wordMatch = scoreWordTerm(term, stemmed, nameWords, descWords, descText, stats)
+      score += wordMatch.score
+      nameHits += wordMatch.nameHits
+      descHits += wordMatch.descHits
     }
-    const weight = idfWeight(term, stats)
-    if (term.length < MIN_TERM_LEN) {
-      if (nameWords.has(stemmed)) {
-        score += NAME_WORD * weight
-        nameHits++
-      } else if (descWords.has(stemmed)) {
-        score += DESC_WORD * weight
-        descHits++
-      }
-      continue
-    }
-    if (nameWords.has(stemmed)) {
-      score += NAME_WORD * weight
-      nameHits++
-    } else if (descWords.has(stemmed)) {
-      score += DESC_WORD * weight
-      descHits++
-    } else if (descText.includes(term)) {
-      score += SUBSTRING * weight
-    }
+
+    if (score > scoreBeforeTerm) matchedTerms.push(rawTerm)
   }
-  return { score, nameHits, phraseHits, descHits }
+  return { score, nameHits, phraseHits, descHits, matchedTerms }
 }
 
 /** Score one index entry against derived terms (higher = more relevant; 0 = no match). */
-export function scoreEntry(entry, terms, stats = null) {
-  return matchDetail(entry, terms, stats).score
+export function scoreEntry(entry, terms, stats = null, tuning = {}) {
+  return matchDetail(entry, terms, stats, tuning).score
 }
 
-// A skill clears the relevance floor only with a strong signal — a name hit, a
-// phrase hit, or ≥2 distinct description terms. One generic desc word (e.g. "batch"
-// leaking into an unrelated skill) is not enough to qualify an uncovered domain.
+// A skill clears the relevance floor only with a name hit, phrase hit, or ≥2 description terms.
 const clearsFloor = (d) => d.nameHits > 0 || d.phraseHits > 0 || d.descHits >= 2
 
 // Selection is bounded by CONTEXT budget, not a fixed skill count: load every
@@ -193,9 +221,9 @@ export function fitToBudget(ranked, { tokenBudget = DEFAULT_TOKEN_BUDGET, tokens
 }
 
 /** Rank entries by descending score, dropping non-matches. Ties broken by name. */
-export function rankCandidates(entries, terms, stats = buildDocFrequency(entries)) {
+export function rankCandidates(entries, terms, stats = buildDocFrequency(entries), tuning = {}) {
   return entries
-    .map((entry) => ({ ...entry, score: scoreEntry(entry, terms, stats) }))
+    .map((entry) => ({ ...entry, score: scoreEntry(entry, terms, stats, tuning) }))
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
 }
@@ -207,12 +235,16 @@ export function rankCandidates(entries, terms, stats = buildDocFrequency(entries
  * `tokensOf(entry)` to size skills by their real SKILL.md; otherwise a per-skill
  * estimate is used. Returns [{ name, description, file, score, tokens }].
  */
-export function selectSkills(entries, termsOrFacets, { tokenBudget = DEFAULT_TOKEN_BUDGET, tokensOf } = {}) {
+export function selectSkills(
+  entries,
+  termsOrFacets,
+  { tokenBudget = DEFAULT_TOKEN_BUDGET, tokensOf, tuning = {} } = {},
+) {
   const facets = normalizeFacets(termsOrFacets)
   const stats = buildDocFrequency(entries)
   const rankFor = (terms) =>
     entries
-      .map((entry) => ({ ...entry, ...matchDetail(entry, terms, stats) }))
+      .map((entry) => ({ ...entry, ...matchDetail(entry, terms, stats, tuning) }))
       .filter((entry) => entry.score > 0 && clearsFloor(entry))
       .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
 
@@ -252,6 +284,142 @@ export function selectSkills(entries, termsOrFacets, { tokenBudget = DEFAULT_TOK
   }
 
   return taken.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+}
+
+const DEFAULT_SHORTLIST_MAX_TERMS = 4 // enough evidence for pruning without repeating the full query
+const DEFAULT_SHORTLIST_DESC_CHARS = 120 // bounds per-candidate context while retaining a useful summary
+const DEFAULT_SHORTLIST_MAX_ENTRIES = 30 // keeps the escalation payload within its prompt-level budget
+const SHORTLIST_MAX_CHARS = 4_000 // ~1k tokens: the reranker's escalation-payload allowance
+const SHORTLIST_NAME_CHARS = 64 // preserves distinctive skill slugs without letting one consume a line
+const SHORTLIST_FACET_CHARS = 32 // facet labels stay recognizable without crowding out evidence
+const SHORTLIST_TERM_CHARS = 48 // query evidence stays useful while pathological terms remain bounded
+const SHORTLIST_PROVENANCE_CHARS = 72 // identifies origin without exposing long machine-specific paths
+const SHORTLIST_SCORE_DECIMALS = 1 // stable score precision makes candidates compact and comparable
+
+function assertNonNegativeInteger(value, name) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative integer`)
+  }
+}
+
+function assertShortlistEntry(entry, index) {
+  if (!entry || typeof entry !== 'object') throw new TypeError(`selected[${index}] must be an object`)
+  if (typeof entry.name !== 'string') throw new TypeError(`selected[${index}].name must be a string`)
+  if (typeof entry.description !== 'string') {
+    throw new TypeError(`selected[${index}].description must be a string`)
+  }
+  if (!Number.isFinite(entry.score)) throw new TypeError(`selected[${index}].score must be finite`)
+  if (!Array.isArray(entry.matchedTerms) || !entry.matchedTerms.every((term) => typeof term === 'string')) {
+    throw new TypeError(`selected[${index}].matchedTerms must be an array of strings`)
+  }
+  if (entry.facet !== undefined && typeof entry.facet !== 'string') {
+    throw new TypeError(`selected[${index}].facet must be a string when provided`)
+  }
+  if (entry.vetted !== undefined && typeof entry.vetted !== 'boolean') {
+    throw new TypeError(`selected[${index}].vetted must be a boolean when provided`)
+  }
+  if (entry.file !== undefined && (typeof entry.file !== 'string' || !entry.file.trim())) {
+    throw new TypeError(`selected[${index}].file must be a non-empty string when provided`)
+  }
+}
+
+const singleLine = (value) => value.replace(/\s+/g, ' ').trim()
+
+function truncateInline(value, maxChars) {
+  const normalized = singleLine(value)
+  if (normalized.length <= maxChars) return normalized
+  return `${normalized.slice(0, maxChars).trimEnd()}…`
+}
+
+function truncateDescription(description, maxChars) {
+  const normalized = singleLine(description)
+  if (normalized.length <= maxChars) return normalized
+
+  const clipped = normalized.slice(0, maxChars)
+  const boundary = normalized[maxChars] === ' ' ? clipped.length : clipped.lastIndexOf(' ')
+  if (boundary <= 0) return truncateInline(normalized, maxChars)
+  return `${clipped.slice(0, boundary).trimEnd()}…`
+}
+
+function provenanceFromFile(file) {
+  if (!file) return ''
+  if (/^https?:\/\//i.test(file)) {
+    const origin = new URL(file).origin
+    return ` source=${truncateInline(`url:${origin}`, SHORTLIST_PROVENANCE_CHARS)}`
+  }
+
+  const segments = file.replaceAll('\\', '/').split('/').filter(Boolean)
+  const skillDirectory = segments.at(-1)?.toLowerCase() === 'skill.md'
+    ? segments.at(-2)
+    : segments.at(-1)
+  const remoteIndex = segments.findIndex((segment) => segment === 'remote')
+  if (remoteIndex >= 0) {
+    const repository = segments[remoteIndex + 1]
+    const tail = [repository, skillDirectory].filter(Boolean).join('/')
+    return ` source=${truncateInline(`remote:${tail}`, SHORTLIST_PROVENANCE_CHARS)}`
+  }
+  const kind = segments.includes('plugins') ? 'plugin' : 'local'
+  return skillDirectory
+    ? ` source=${truncateInline(`${kind}:${skillDirectory}`, SHORTLIST_PROVENANCE_CHARS)}`
+    : ''
+}
+
+const trustMarker = (entry) => {
+  if (entry.vetted === false) return 'UNVETTED'
+  if (entry.vetted === true) return 'VETTED'
+  return 'LOCAL'
+}
+
+function formatShortlistEntry(entry, index, maxTerms, descChars) {
+  assertShortlistEntry(entry, index)
+  const name = truncateInline(entry.name, SHORTLIST_NAME_CHARS)
+  const facet = entry.facet ? ` [${truncateInline(entry.facet, SHORTLIST_FACET_CHARS)}]` : ''
+  const terms = entry.matchedTerms
+    .slice(0, maxTerms)
+    .map((term) => truncateInline(term, SHORTLIST_TERM_CHARS))
+    .join(', ')
+  const description = truncateDescription(entry.description, descChars)
+  const trust = trustMarker(entry)
+  const provenance = provenanceFromFile(entry.file)
+  return (
+    `- ${name}${facet} score=${entry.score.toFixed(SHORTLIST_SCORE_DECIMALS)} via: ${terms} ` +
+    `[${trust}${provenance}] — description(data)=${JSON.stringify(description)}`
+  )
+}
+
+function renderShortlistLines(lines, totalEntries) {
+  const omitted = totalEntries - lines.length
+  const omittedLine = omitted > 0 ? `- (+${omitted} lower-ranked candidates omitted)` : null
+  return omittedLine ? [...lines, omittedLine].join('\n') : lines.join('\n')
+}
+
+/**
+ * Render the compact, confidence-bearing candidate block consumed by the prompt-level reranker.
+ * Total output stays within the reranker's ~1k-token escalation-payload allowance.
+ */
+export function formatShortlist(
+  selected,
+  {
+    maxTerms = DEFAULT_SHORTLIST_MAX_TERMS,
+    descChars = DEFAULT_SHORTLIST_DESC_CHARS,
+    maxEntries = DEFAULT_SHORTLIST_MAX_ENTRIES,
+  } = {},
+) {
+  if (!Array.isArray(selected)) throw new TypeError('selected must be an array')
+  assertNonNegativeInteger(maxTerms, 'maxTerms')
+  assertNonNegativeInteger(descChars, 'descChars')
+  assertNonNegativeInteger(maxEntries, 'maxEntries')
+  if (selected.length === 0) return ''
+
+  const candidateLimit = Math.min(selected.length, maxEntries)
+  const lines = []
+  for (let index = 0; index < candidateLimit; index++) {
+    const line = formatShortlistEntry(selected[index], index, maxTerms, descChars)
+    const nextLines = [...lines, line]
+    if (renderShortlistLines(nextLines, selected.length).length >= SHORTLIST_MAX_CHARS) break
+    lines.push(line)
+  }
+  return renderShortlistLines(lines, selected.length)
 }
 
 /** Accept either a flat term list (single facet) or [{ name, terms }] facet groups. */

@@ -6,7 +6,7 @@ Trạng thái hiện tại (đã đo, không phải giả định):
 |---|---|
 | Index | 640 entry (294 trusted / 318 remote `vetted:false` / 9 URL pointer) |
 | Eval gốc 32 scenario | 32/32 |
-| 100 case non-engineering (`.codex-flow/skill-selection-test/scenarios-100.json`) | 62/100 |
+| 100 case non-engineering (`tests/fixtures/scenarios-100.json`) | 62/100 |
 | Đã làm hôm nay | plugin roots vào index (362→640), Step 7 acquire-or-author, facet 5→11, stemming (59→62) |
 
 38 case còn fail đã phân loại trong `.codex-flow/skill-selection-test/IMPLEMENTED.md` §4:

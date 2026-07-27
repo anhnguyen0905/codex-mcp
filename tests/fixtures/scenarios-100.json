@@ -1,0 +1,1732 @@
+{
+  "note": "100 non-engineering scope scenarios (CASES.md) run through the deterministic retrieval core. `terms` = what a competent Step-2 classifier derives. `expectAny` = at least one must land in the top-3. A FAIL here is the Step 7 authoring/acquisition queue, not a harness bug. expectAny lists were widened on 2026-07-28 to the real names of the skills authored through Step 7d; the original entries for uncovered domains were placeholders standing for 'a skill that covers this'.",
+  "scenarios": [
+    {
+      "id": "A01",
+      "scope": "data-basic",
+      "facet": "data",
+      "request": "EDA cho sales_2026.xlsx: missing value, outlier, phan bo",
+      "terms": [
+        "exploratory data analysis",
+        "missing values",
+        "outliers",
+        "spreadsheet",
+        "xlsx",
+        "distribution"
+      ],
+      "expectAny": [
+        "exploratory-data-analysis",
+        "xlsx"
+      ]
+    },
+    {
+      "id": "A02",
+      "scope": "data-basic",
+      "facet": "data",
+      "request": "Clean users_raw.csv: normalize phone, dedupe email",
+      "terms": [
+        "data cleaning",
+        "deduplicate",
+        "normalization",
+        "csv",
+        "tabular data"
+      ],
+      "expectAny": [
+        "exploratory-data-analysis",
+        "xlsx",
+        "polars"
+      ]
+    },
+    {
+      "id": "A03",
+      "scope": "data-basic",
+      "facet": "data",
+      "request": "Revenue by month and region, pivot to Excel",
+      "terms": [
+        "pivot table",
+        "spreadsheet",
+        "xlsx",
+        "aggregation",
+        "excel"
+      ],
+      "expectAny": [
+        "xlsx"
+      ]
+    },
+    {
+      "id": "A04",
+      "scope": "data-basic",
+      "facet": "data",
+      "request": "Compare two monthly Excel files, flag SKU deltas over 20%",
+      "terms": [
+        "excel",
+        "xlsx",
+        "compare spreadsheets",
+        "variance",
+        "tabular"
+      ],
+      "expectAny": [
+        "xlsx"
+      ]
+    },
+    {
+      "id": "A05",
+      "scope": "data-basic",
+      "facet": "data",
+      "request": "Descriptive statistics for a 1200-respondent survey",
+      "terms": [
+        "descriptive statistics",
+        "mean median",
+        "standard deviation",
+        "survey data",
+        "statistical analysis"
+      ],
+      "expectAny": [
+        "statistical-analysis"
+      ]
+    },
+    {
+      "id": "A06",
+      "scope": "data-basic",
+      "facet": "data",
+      "request": "Merge 3 CSVs on user_id and report rows lost in the join",
+      "terms": [
+        "join dataframes",
+        "merge csv",
+        "pandas",
+        "polars",
+        "data loss"
+      ],
+      "expectAny": [
+        "polars",
+        "exploratory-data-analysis"
+      ]
+    },
+    {
+      "id": "A07",
+      "scope": "data-basic",
+      "facet": "data",
+      "request": "Count DAU/WAU/MAU from an event log, weekly table",
+      "terms": [
+        "active users",
+        "event log",
+        "aggregation",
+        "weekly metrics",
+        "retention metrics"
+      ],
+      "expectAny": [
+        "clickhouse-io",
+        "polars",
+        "exploratory-data-analysis"
+      ]
+    },
+    {
+      "id": "A08",
+      "scope": "data-basic",
+      "facet": "data",
+      "request": "Data quality checks on transactions: duplicates, negative amounts, bad timestamps",
+      "terms": [
+        "data quality",
+        "validation",
+        "duplicates",
+        "anomaly",
+        "tabular data"
+      ],
+      "expectAny": [
+        "data-quality-checks",
+        "exploratory-data-analysis",
+        "data-quality"
+      ]
+    },
+    {
+      "id": "A09",
+      "scope": "data-basic",
+      "facet": "data",
+      "request": "Flatten a nested Firebase JSON export for spreadsheet analysis",
+      "terms": [
+        "nested json",
+        "flatten",
+        "parse",
+        "tabular",
+        "conversion"
+      ],
+      "expectAny": [
+        "data-quality-checks",
+        "polars",
+        "liteparse",
+        "xlsx"
+      ]
+    },
+    {
+      "id": "A10",
+      "scope": "data-basic",
+      "facet": "reporting",
+      "request": "Two-page write-up explaining a churn dataset to non-technical stakeholders",
+      "terms": [
+        "executive summary",
+        "internal communication",
+        "writing",
+        "explain data",
+        "stakeholder report"
+      ],
+      "expectAny": [
+        "internal-comms",
+        "article-writing"
+      ]
+    },
+    {
+      "id": "B11",
+      "scope": "data-eng",
+      "facet": "data-engineering",
+      "request": "BigQuery SQL for D1/D7/D30 retention by install cohort",
+      "terms": [
+        "sql",
+        "cohort retention",
+        "warehouse query",
+        "bigquery",
+        "analytics sql"
+      ],
+      "expectAny": [
+        "warehouse-modeling",
+        "postgres-patterns",
+        "clickhouse-io"
+      ]
+    },
+    {
+      "id": "B12",
+      "scope": "data-eng",
+      "facet": "data-engineering",
+      "request": "Optimize an 8-minute SQL query over a 2B-row event table",
+      "terms": [
+        "query optimization",
+        "sql performance",
+        "index",
+        "partition",
+        "warehouse"
+      ],
+      "expectAny": [
+        "postgres-patterns",
+        "clickhouse-io",
+        "data-throughput-accelerator"
+      ]
+    },
+    {
+      "id": "B13",
+      "scope": "data-eng",
+      "facet": "data-engineering",
+      "request": "Design a star schema warehouse for user, session, purchase",
+      "terms": [
+        "star schema",
+        "dimensional modeling",
+        "warehouse design",
+        "fact table",
+        "sql schema"
+      ],
+      "expectAny": [
+        "warehouse-modeling",
+        "clickhouse-io",
+        "postgres-patterns"
+      ]
+    },
+    {
+      "id": "B14",
+      "scope": "data-eng",
+      "facet": "data-engineering",
+      "request": "Daily ETL pipeline from Meta Ads API into BigQuery",
+      "terms": [
+        "etl pipeline",
+        "api integration",
+        "ingestion",
+        "scheduling",
+        "connector"
+      ],
+      "expectAny": [
+        "api-connector-builder",
+        "data-throughput-accelerator",
+        "data-scraper-agent"
+      ]
+    },
+    {
+      "id": "B15",
+      "scope": "data-eng",
+      "facet": "data-engineering",
+      "request": "dbt model for fact_purchase with uniqueness and not_null tests",
+      "terms": [
+        "dbt",
+        "transformation model",
+        "sql tests",
+        "warehouse",
+        "data build tool"
+      ],
+      "expectAny": [
+        "warehouse-modeling",
+        "dbt-patterns",
+        "postgres-patterns"
+      ]
+    },
+    {
+      "id": "B16",
+      "scope": "data-eng",
+      "facet": "finance",
+      "request": "Reconcile a 3% revenue gap between two sources",
+      "terms": [
+        "reconciliation",
+        "revenue",
+        "billing",
+        "audit numbers",
+        "discrepancy"
+      ],
+      "expectAny": [
+        "finance-billing-ops"
+      ]
+    },
+    {
+      "id": "B17",
+      "scope": "data-eng",
+      "facet": "data",
+      "request": "SQL for a 5-step funnel with per-step conversion",
+      "terms": [
+        "funnel analysis",
+        "conversion",
+        "sql",
+        "event sequence",
+        "step drop-off"
+      ],
+      "expectAny": [
+        "warehouse-modeling",
+        "funnel-analytics",
+        "postgres-patterns"
+      ]
+    },
+    {
+      "id": "B18",
+      "scope": "data-eng",
+      "facet": "product",
+      "request": "Event tracking taxonomy for a new mobile app",
+      "terms": [
+        "event tracking",
+        "taxonomy",
+        "instrumentation",
+        "naming convention",
+        "analytics schema"
+      ],
+      "expectAny": [
+        "product-lens",
+        "event-taxonomy"
+      ]
+    },
+    {
+      "id": "B19",
+      "scope": "data-eng",
+      "facet": "data-engineering",
+      "request": "Migrate 5 years of history to a new schema with no downtime",
+      "terms": [
+        "database migration",
+        "zero downtime",
+        "backfill",
+        "schema change",
+        "rollback"
+      ],
+      "expectAny": [
+        "database-migrations"
+      ]
+    },
+    {
+      "id": "B20",
+      "scope": "data-eng",
+      "facet": "data-engineering",
+      "request": "Data dictionary for 40 warehouse tables",
+      "terms": [
+        "data dictionary",
+        "schema documentation",
+        "column description",
+        "warehouse",
+        "docs"
+      ],
+      "expectAny": [
+        "warehouse-modeling",
+        "postgres-patterns",
+        "update-docs",
+        "docx"
+      ]
+    },
+    {
+      "id": "C21",
+      "scope": "data-advanced",
+      "facet": "data",
+      "request": "Forecast 6 months of revenue from 24 months with seasonality",
+      "terms": [
+        "forecasting",
+        "time series",
+        "seasonality",
+        "arima",
+        "demand planning"
+      ],
+      "expectAny": [
+        "timesfm-forecasting",
+        "inventory-demand-planning",
+        "statsmodels"
+      ]
+    },
+    {
+      "id": "C22",
+      "scope": "data-advanced",
+      "facet": "data",
+      "request": "A/B test analysis: +4.2% conversion, n=18k per arm, significant?",
+      "terms": [
+        "ab test",
+        "statistical significance",
+        "hypothesis test",
+        "confidence interval",
+        "experiment analysis"
+      ],
+      "expectAny": [
+        "statistical-analysis",
+        "statistical-power",
+        "experimental-design"
+      ]
+    },
+    {
+      "id": "C23",
+      "scope": "data-advanced",
+      "facet": "data",
+      "request": "Sample size for detecting 3% uplift at 80% power",
+      "terms": [
+        "sample size",
+        "statistical power",
+        "mde",
+        "experiment design",
+        "power analysis"
+      ],
+      "expectAny": [
+        "statistical-power",
+        "experimental-design"
+      ]
+    },
+    {
+      "id": "C24",
+      "scope": "data-advanced",
+      "facet": "data",
+      "request": "30-day churn prediction model evaluated by AUC and precision/recall",
+      "terms": [
+        "machine learning model",
+        "classification",
+        "auc",
+        "precision recall",
+        "model evaluation"
+      ],
+      "expectAny": [
+        "mle-workflow",
+        "scikit-learn",
+        "mle-reviewer"
+      ]
+    },
+    {
+      "id": "C25",
+      "scope": "data-advanced",
+      "facet": "data",
+      "request": "Cluster 200k users into behavioural segments and describe them",
+      "terms": [
+        "clustering",
+        "segmentation",
+        "kmeans",
+        "dimensionality reduction",
+        "unsupervised"
+      ],
+      "expectAny": [
+        "scikit-learn",
+        "umap-learn"
+      ]
+    },
+    {
+      "id": "C26",
+      "scope": "data-advanced",
+      "facet": "data",
+      "request": "Root-cause a 12% revenue drop from the data, no guessing",
+      "terms": [
+        "root cause analysis",
+        "exploratory data analysis",
+        "decomposition",
+        "diagnostics",
+        "statistical analysis"
+      ],
+      "expectAny": [
+        "exploratory-data-analysis",
+        "statistical-analysis"
+      ]
+    },
+    {
+      "id": "C27",
+      "scope": "data-advanced",
+      "facet": "growth",
+      "request": "LTV by cohort via curve fitting, compare 3 acquisition channels",
+      "terms": [
+        "ltv",
+        "cohort curve",
+        "curve fitting",
+        "lifetime value",
+        "channel comparison"
+      ],
+      "expectAny": [
+        "unit-economics",
+        "ltv-cohort-modeling",
+        "statsmodels",
+        "finance-billing-ops"
+      ]
+    },
+    {
+      "id": "C28",
+      "scope": "data-advanced",
+      "facet": "growth",
+      "request": "Multi-touch attribution: last-click vs data-driven over 90 days",
+      "terms": [
+        "attribution modeling",
+        "multi touch",
+        "last click",
+        "marketing channels",
+        "conversion paths"
+      ],
+      "expectAny": [
+        "marketing-attribution",
+        "marketing-campaign"
+      ]
+    },
+    {
+      "id": "C29",
+      "scope": "data-advanced",
+      "facet": "data",
+      "request": "Causal impact of a TVC campaign via difference-in-differences",
+      "terms": [
+        "causal inference",
+        "difference in differences",
+        "quasi experiment",
+        "counterfactual",
+        "treatment effect"
+      ],
+      "expectAny": [
+        "causal-inference",
+        "experimental-design",
+        "statistical-analysis"
+      ]
+    },
+    {
+      "id": "C30",
+      "scope": "data-advanced",
+      "facet": "data",
+      "request": "Sentiment and topic analysis over 15k store reviews",
+      "terms": [
+        "sentiment analysis",
+        "topic modeling",
+        "nlp",
+        "text classification",
+        "reviews"
+      ],
+      "expectAny": [
+        "transformers",
+        "regex-vs-llm-structured-text"
+      ]
+    },
+    {
+      "id": "D31",
+      "scope": "viz",
+      "facet": "visualization",
+      "request": "Marketing KPI dashboard (spend, ROAS, CPI, retention) from CSV",
+      "terms": [
+        "dashboard",
+        "kpi",
+        "monitoring",
+        "metrics panel",
+        "visualization"
+      ],
+      "expectAny": [
+        "dashboard-builder"
+      ]
+    },
+    {
+      "id": "D32",
+      "scope": "viz",
+      "facet": "visualization",
+      "request": "Six charts for the quarterly report, right chart type per metric",
+      "terms": [
+        "chart type",
+        "data visualization",
+        "plot",
+        "palette",
+        "axis"
+      ],
+      "expectAny": [
+        "d3-viz",
+        "matplotlib",
+        "seaborn",
+        "dashboard-builder"
+      ]
+    },
+    {
+      "id": "D33",
+      "scope": "viz",
+      "facet": "visualization",
+      "request": "Interactive web chart for funnel conversion with hover detail",
+      "terms": [
+        "interactive chart",
+        "d3",
+        "web visualization",
+        "tooltip",
+        "svg"
+      ],
+      "expectAny": [
+        "d3-viz"
+      ]
+    },
+    {
+      "id": "D34",
+      "scope": "viz",
+      "facet": "document",
+      "request": "12-slide PowerPoint recap of July performance",
+      "terms": [
+        "powerpoint",
+        "pptx",
+        "slides",
+        "presentation",
+        "deck"
+      ],
+      "expectAny": [
+        "pptx",
+        "golden-pptx",
+        "frontend-slides"
+      ]
+    },
+    {
+      "id": "D35",
+      "scope": "viz",
+      "facet": "document",
+      "request": "Excel weekly KPI tracker with conditional formatting and sparklines",
+      "terms": [
+        "excel",
+        "xlsx",
+        "conditional formatting",
+        "spreadsheet",
+        "formulas"
+      ],
+      "expectAny": [
+        "xlsx"
+      ]
+    },
+    {
+      "id": "D36",
+      "scope": "viz",
+      "facet": "reporting",
+      "request": "One-page executive summary from 8 charts, insight first",
+      "terms": [
+        "executive summary",
+        "internal communication",
+        "report writing",
+        "insight",
+        "stakeholder"
+      ],
+      "expectAny": [
+        "internal-comms",
+        "article-writing"
+      ]
+    },
+    {
+      "id": "D37",
+      "scope": "viz",
+      "facet": "reporting",
+      "request": "Reusable weekly report template for the growth team",
+      "terms": [
+        "report template",
+        "document template",
+        "docx",
+        "reusable format",
+        "internal communication"
+      ],
+      "expectAny": [
+        "docx",
+        "internal-comms",
+        "theme-factory"
+      ]
+    },
+    {
+      "id": "D38",
+      "scope": "viz",
+      "facet": "visualization",
+      "request": "Infographic summarising a 1200-person survey",
+      "terms": [
+        "infographic",
+        "visual summary",
+        "poster",
+        "graphic design",
+        "data storytelling"
+      ],
+      "expectAny": [
+        "infographics"
+      ]
+    },
+    {
+      "id": "D39",
+      "scope": "viz",
+      "facet": "design",
+      "request": "Redesign an unreadable 12-colour chart for legibility and accessibility",
+      "terms": [
+        "chart accessibility",
+        "color contrast",
+        "legend",
+        "readability",
+        "design system"
+      ],
+      "expectAny": [
+        "accessibility",
+        "design-system",
+        "d3-viz"
+      ]
+    },
+    {
+      "id": "D40",
+      "scope": "viz",
+      "facet": "document",
+      "request": "Google Sheets campaign tracker auto-computing ROAS with CPI alerts",
+      "terms": [
+        "google sheets",
+        "spreadsheet",
+        "workspace",
+        "formulas",
+        "tracker"
+      ],
+      "expectAny": [
+        "google-workspace-ops",
+        "xlsx"
+      ]
+    },
+    {
+      "id": "E41",
+      "scope": "marketing-plan",
+      "facet": "marketing",
+      "request": "6-month marketing plan for a 4X mobile game in SEA, $500k",
+      "terms": [
+        "marketing plan",
+        "campaign planning",
+        "go to market",
+        "positioning",
+        "budget"
+      ],
+      "expectAny": [
+        "marketing-campaign",
+        "game-director"
+      ]
+    },
+    {
+      "id": "E42",
+      "scope": "marketing-plan",
+      "facet": "marketing",
+      "request": "Positioning statement and messaging house for a new product",
+      "terms": [
+        "positioning",
+        "messaging",
+        "brand narrative",
+        "value proposition",
+        "brand discovery"
+      ],
+      "expectAny": [
+        "brand-discovery",
+        "marketing-campaign"
+      ]
+    },
+    {
+      "id": "E43",
+      "scope": "marketing-plan",
+      "facet": "marketing",
+      "request": "GTM plan for soft launch in the Philippines: channels, timeline, KPI",
+      "terms": [
+        "go to market",
+        "launch plan",
+        "channel strategy",
+        "timeline",
+        "campaign"
+      ],
+      "expectAny": [
+        "marketing-campaign",
+        "project-manager"
+      ]
+    },
+    {
+      "id": "E44",
+      "scope": "marketing-plan",
+      "facet": "marketing",
+      "request": "90-day content calendar for Facebook, TikTok, YouTube",
+      "terms": [
+        "content calendar",
+        "social content",
+        "platform native",
+        "publishing schedule",
+        "repurposing"
+      ],
+      "expectAny": [
+        "content-engine",
+        "crosspost",
+        "social-publisher"
+      ]
+    },
+    {
+      "id": "E45",
+      "scope": "marketing-plan",
+      "facet": "marketing",
+      "request": "Brand voice guideline for the fanpage with do/don't examples",
+      "terms": [
+        "brand voice",
+        "tone of voice",
+        "writing style",
+        "voice guideline",
+        "copy consistency"
+      ],
+      "expectAny": [
+        "brand-voice",
+        "brand-discovery"
+      ]
+    },
+    {
+      "id": "E46",
+      "scope": "marketing-plan",
+      "facet": "growth",
+      "request": "Split marketing budget across UA, brand, influencer with numbers",
+      "terms": [
+        "budget allocation",
+        "media mix",
+        "spend split",
+        "marketing roi",
+        "channel investment"
+      ],
+      "expectAny": [
+        "media-planning",
+        "marketing-campaign"
+      ]
+    },
+    {
+      "id": "E47",
+      "scope": "marketing-plan",
+      "facet": "planning",
+      "request": "Cross-team launch checklist (marketing, product, CS, store)",
+      "terms": [
+        "launch checklist",
+        "cross team coordination",
+        "dependencies",
+        "release plan",
+        "project management"
+      ],
+      "expectAny": [
+        "project-manager",
+        "marketing-campaign"
+      ]
+    },
+    {
+      "id": "E48",
+      "scope": "marketing-plan",
+      "facet": "marketing",
+      "request": "Creative brief for an agency to produce a 30s TVC",
+      "terms": [
+        "creative brief",
+        "advertising creative",
+        "video concept",
+        "agency brief",
+        "campaign messaging"
+      ],
+      "expectAny": [
+        "creative-brief",
+        "marketing-campaign",
+        "content-engine"
+      ]
+    },
+    {
+      "id": "E49",
+      "scope": "marketing-plan",
+      "facet": "marketing",
+      "request": "Influencer strategy: tiers, volume, expected CPM, measurement",
+      "terms": [
+        "influencer marketing",
+        "creator tiers",
+        "cpm",
+        "partnership",
+        "measurement"
+      ],
+      "expectAny": [
+        "influencer-strategy",
+        "marketing-campaign"
+      ]
+    },
+    {
+      "id": "E50",
+      "scope": "marketing-plan",
+      "facet": "marketing",
+      "request": "Crisis communication plan for launch-day server downtime",
+      "terms": [
+        "crisis communication",
+        "incident messaging",
+        "public statement",
+        "internal communication",
+        "escalation"
+      ],
+      "expectAny": [
+        "internal-comms",
+        "crisis-communication"
+      ]
+    },
+    {
+      "id": "F51",
+      "scope": "performance-mkt",
+      "facet": "growth",
+      "request": "Meta Ads CPI up 40% in two weeks — diagnose and fix",
+      "terms": [
+        "paid media",
+        "cpi",
+        "campaign optimization",
+        "ad performance",
+        "meta ads"
+      ],
+      "expectAny": [
+        "performance-marketing",
+        "marketing-campaign"
+      ]
+    },
+    {
+      "id": "F52",
+      "scope": "performance-mkt",
+      "facet": "growth",
+      "request": "Q4 media plan splitting budget by CPI and scale ceiling",
+      "terms": [
+        "media plan",
+        "budget split",
+        "channel scale",
+        "paid acquisition",
+        "forecast spend"
+      ],
+      "expectAny": [
+        "media-planning",
+        "performance-marketing"
+      ]
+    },
+    {
+      "id": "F53",
+      "scope": "performance-mkt",
+      "facet": "growth",
+      "request": "Google App Campaign structure for 3 markets",
+      "terms": [
+        "campaign structure",
+        "google ads",
+        "app campaign",
+        "geo targeting",
+        "paid acquisition"
+      ],
+      "expectAny": [
+        "performance-marketing",
+        "marketing-campaign"
+      ]
+    },
+    {
+      "id": "F54",
+      "scope": "performance-mkt",
+      "facet": "marketing",
+      "request": "20 ad copy variants, one angle each, for an A/B test",
+      "terms": [
+        "ad copy",
+        "copywriting",
+        "variants",
+        "messaging angle",
+        "creative testing"
+      ],
+      "expectAny": [
+        "content-engine",
+        "marketing-campaign",
+        "article-writing"
+      ]
+    },
+    {
+      "id": "F55",
+      "scope": "performance-mkt",
+      "facet": "growth",
+      "request": "Creative performance analysis: which creatives fatigue, when to refresh",
+      "terms": [
+        "creative fatigue",
+        "ad creative performance",
+        "frequency",
+        "refresh cadence",
+        "paid media analytics"
+      ],
+      "expectAny": [
+        "performance-marketing",
+        "content-engine"
+      ]
+    },
+    {
+      "id": "F56",
+      "scope": "performance-mkt",
+      "facet": "growth",
+      "request": "tROAS bidding strategy for IAP campaigns with guardrails",
+      "terms": [
+        "roas",
+        "bidding strategy",
+        "target return",
+        "guardrail",
+        "paid acquisition"
+      ],
+      "expectAny": [
+        "performance-marketing",
+        "media-planning"
+      ]
+    },
+    {
+      "id": "F57",
+      "scope": "performance-mkt",
+      "facet": "growth",
+      "request": "Ads account audit: find wasted spend, audience overlap, weak placements",
+      "terms": [
+        "account audit",
+        "wasted spend",
+        "audience overlap",
+        "placement",
+        "paid media"
+      ],
+      "expectAny": [
+        "performance-marketing",
+        "marketing-campaign"
+      ]
+    },
+    {
+      "id": "F58",
+      "scope": "performance-mkt",
+      "facet": "growth",
+      "request": "Blended CAC and payback period by channel; which to scale",
+      "terms": [
+        "cac",
+        "payback period",
+        "unit economics",
+        "channel efficiency",
+        "ltv"
+      ],
+      "expectAny": [
+        "unit-economics",
+        "finance-billing-ops",
+        "performance-marketing"
+      ]
+    },
+    {
+      "id": "F59",
+      "scope": "performance-mkt",
+      "facet": "data",
+      "request": "Incrementality test for a brand campaign via geo holdout",
+      "terms": [
+        "incrementality",
+        "geo holdout",
+        "experiment design",
+        "control group",
+        "lift measurement"
+      ],
+      "expectAny": [
+        "experimental-design",
+        "statistical-power"
+      ]
+    },
+    {
+      "id": "F60",
+      "scope": "performance-mkt",
+      "facet": "growth",
+      "request": "Daily campaign optimization SOP for junior performance marketers",
+      "terms": [
+        "standard operating procedure",
+        "playbook",
+        "campaign optimization",
+        "daily checks",
+        "training doc"
+      ],
+      "expectAny": [
+        "performance-marketing",
+        "marketing-campaign"
+      ]
+    },
+    {
+      "id": "G61",
+      "scope": "market-research",
+      "facet": "research",
+      "request": "Market research on SEA 4X games: size, growth, top players, gaps",
+      "terms": [
+        "market research",
+        "market sizing",
+        "competitive landscape",
+        "growth",
+        "whitespace"
+      ],
+      "expectAny": [
+        "market-research",
+        "market-research-reports",
+        "competitive-platform-analysis"
+      ]
+    },
+    {
+      "id": "G62",
+      "scope": "market-research",
+      "facet": "research",
+      "request": "Benchmark 5 direct competitors on monetization, LiveOps, UA",
+      "terms": [
+        "competitor benchmark",
+        "scoring rubric",
+        "competitive analysis",
+        "comparison matrix",
+        "tiering"
+      ],
+      "expectAny": [
+        "benchmark-methodology",
+        "competitive-platform-analysis"
+      ]
+    },
+    {
+      "id": "G63",
+      "scope": "market-research",
+      "facet": "research",
+      "request": "Analyze the top 20 grossing games in Vietnam for monetization patterns",
+      "terms": [
+        "market research",
+        "monetization patterns",
+        "top grossing",
+        "competitive analysis",
+        "mobile games"
+      ],
+      "expectAny": [
+        "market-research",
+        "game-director",
+        "competitive-platform-analysis"
+      ]
+    },
+    {
+      "id": "G64",
+      "scope": "market-research",
+      "facet": "research",
+      "request": "Design a 15-question brand awareness survey without leading questions",
+      "terms": [
+        "survey design",
+        "questionnaire",
+        "response bias",
+        "measurement",
+        "research instrument"
+      ],
+      "expectAny": [
+        "survey-design",
+        "experimental-design",
+        "market-research"
+      ]
+    },
+    {
+      "id": "G65",
+      "scope": "market-research",
+      "facet": "data",
+      "request": "Analyze 1200 survey responses, cross-tab by age and spend",
+      "terms": [
+        "cross tabulation",
+        "survey analysis",
+        "segmentation",
+        "statistical analysis",
+        "significance"
+      ],
+      "expectAny": [
+        "statistical-analysis",
+        "interpreting-culture-index"
+      ]
+    },
+    {
+      "id": "G66",
+      "scope": "market-research",
+      "facet": "research",
+      "request": "Consulting-style market research report on idle games for the board",
+      "terms": [
+        "market research report",
+        "consulting report",
+        "executive report",
+        "landscape",
+        "recommendations"
+      ],
+      "expectAny": [
+        "market-research-reports",
+        "competitive-report-structure",
+        "market-research"
+      ]
+    },
+    {
+      "id": "G67",
+      "scope": "market-research",
+      "facet": "research",
+      "request": "Build user personas from quantitative data plus 12 interviews",
+      "terms": [
+        "user persona",
+        "interview synthesis",
+        "audience segments",
+        "qualitative research",
+        "brand discovery"
+      ],
+      "expectAny": [
+        "brand-discovery",
+        "interpreting-culture-index"
+      ]
+    },
+    {
+      "id": "G68",
+      "scope": "market-research",
+      "facet": "research",
+      "request": "Competitive teardown of 3 rivals' onboarding UX",
+      "terms": [
+        "competitive teardown",
+        "ux audit",
+        "onboarding flow",
+        "comparison",
+        "design review"
+      ],
+      "expectAny": [
+        "competitive-platform-analysis",
+        "design-system",
+        "accessibility"
+      ]
+    },
+    {
+      "id": "G69",
+      "scope": "market-research",
+      "facet": "research",
+      "request": "Pricing research: common pack price points in ID/TH/VN",
+      "terms": [
+        "pricing research",
+        "price points",
+        "bundle pricing",
+        "market comparison",
+        "willingness to pay"
+      ],
+      "expectAny": [
+        "benchmark-methodology",
+        "game-designer-balance"
+      ]
+    },
+    {
+      "id": "G70",
+      "scope": "market-research",
+      "facet": "research",
+      "request": "Assess a new market (Brazil): risks, costs, what-if scenarios",
+      "terms": [
+        "market entry",
+        "scenario analysis",
+        "what if",
+        "risk assessment",
+        "opportunity sizing"
+      ],
+      "expectAny": [
+        "what-if-oracle",
+        "market-research"
+      ]
+    },
+    {
+      "id": "H71",
+      "scope": "content-seo",
+      "facet": "marketing",
+      "request": "SEO audit of the game site: technical and on-page, by impact",
+      "terms": [
+        "seo audit",
+        "technical seo",
+        "on page",
+        "core web vitals",
+        "structured data"
+      ],
+      "expectAny": [
+        "seo"
+      ]
+    },
+    {
+      "id": "H72",
+      "scope": "content-seo",
+      "facet": "marketing",
+      "request": "Keyword research and content mapping for 20 blog posts",
+      "terms": [
+        "keyword research",
+        "content mapping",
+        "search intent",
+        "seo",
+        "editorial plan"
+      ],
+      "expectAny": [
+        "seo",
+        "content-engine"
+      ]
+    },
+    {
+      "id": "H73",
+      "scope": "content-seo",
+      "facet": "marketing",
+      "request": "Landing page copy for pre-registration, conversion optimized",
+      "terms": [
+        "landing page copy",
+        "conversion copywriting",
+        "call to action",
+        "campaign",
+        "value proposition"
+      ],
+      "expectAny": [
+        "marketing-campaign",
+        "content-engine"
+      ]
+    },
+    {
+      "id": "H74",
+      "scope": "content-seo",
+      "facet": "marketing",
+      "request": "Five-email onboarding sequence for new users",
+      "terms": [
+        "email sequence",
+        "lifecycle email",
+        "onboarding",
+        "campaign",
+        "nurture"
+      ],
+      "expectAny": [
+        "marketing-campaign",
+        "email-ops"
+      ]
+    },
+    {
+      "id": "H75",
+      "scope": "content-seo",
+      "facet": "marketing",
+      "request": "30 social posts in the existing brand voice, 3 formats",
+      "terms": [
+        "social posts",
+        "brand voice",
+        "platform native content",
+        "content engine",
+        "publishing"
+      ],
+      "expectAny": [
+        "content-engine",
+        "brand-voice",
+        "social-publisher"
+      ]
+    },
+    {
+      "id": "H76",
+      "scope": "content-seo",
+      "facet": "marketing",
+      "request": "Short video scripts 15s/30s/60s for TikTok",
+      "terms": [
+        "video script",
+        "short form video",
+        "tiktok",
+        "hook",
+        "content"
+      ],
+      "expectAny": [
+        "content-engine",
+        "remotion-video-creation"
+      ]
+    },
+    {
+      "id": "H77",
+      "scope": "content-seo",
+      "facet": "marketing",
+      "request": "Review and optimize app store listing copy for ASO",
+      "terms": [
+        "app store optimization",
+        "aso",
+        "store listing",
+        "keywords",
+        "conversion copy"
+      ],
+      "expectAny": [
+        "aso",
+        "seo",
+        "marketing-campaign"
+      ]
+    },
+    {
+      "id": "H78",
+      "scope": "content-seo",
+      "facet": "marketing",
+      "request": "Press release for the game launch, journalist-ready",
+      "terms": [
+        "press release",
+        "media announcement",
+        "article writing",
+        "public relations",
+        "launch"
+      ],
+      "expectAny": [
+        "article-writing",
+        "internal-comms"
+      ]
+    },
+    {
+      "id": "H79",
+      "scope": "content-seo",
+      "facet": "localization",
+      "request": "Localize marketing copy EN to VN/TH keeping tone",
+      "terms": [
+        "localization",
+        "translation",
+        "tone preservation",
+        "market adaptation",
+        "copy"
+      ],
+      "expectAny": [
+        "localization-copy",
+        "visa-doc-translate",
+        "brand-voice",
+        "localization"
+      ]
+    },
+    {
+      "id": "H80",
+      "scope": "content-seo",
+      "facet": "marketing",
+      "request": "Monthly newsletter for a 50k community",
+      "terms": [
+        "newsletter",
+        "long form content",
+        "article writing",
+        "audience engagement",
+        "editorial"
+      ],
+      "expectAny": [
+        "article-writing",
+        "content-engine"
+      ]
+    },
+    {
+      "id": "I81",
+      "scope": "product",
+      "facet": "product",
+      "request": "PRD for a battle pass feature with success metrics",
+      "terms": [
+        "prd",
+        "product requirements",
+        "success metrics",
+        "feature spec",
+        "product management"
+      ],
+      "expectAny": [
+        "product-manager",
+        "product-lens"
+      ]
+    },
+    {
+      "id": "I82",
+      "scope": "product",
+      "facet": "product",
+      "request": "Two-quarter roadmap prioritized with RICE and trade-offs",
+      "terms": [
+        "roadmap",
+        "prioritization",
+        "rice scoring",
+        "trade offs",
+        "product planning"
+      ],
+      "expectAny": [
+        "product-manager",
+        "product-lens",
+        "project-manager"
+      ]
+    },
+    {
+      "id": "I83",
+      "scope": "product",
+      "facet": "product",
+      "request": "Pricing and bundles for the in-game shop, F2P vs spender tiers",
+      "terms": [
+        "pricing",
+        "bundles",
+        "monetization tiers",
+        "virtual economy",
+        "spender segmentation"
+      ],
+      "expectAny": [
+        "game-designer-balance"
+      ]
+    },
+    {
+      "id": "I84",
+      "scope": "product",
+      "facet": "product",
+      "request": "Tune gacha drop rates and pity for sane EV without inflation",
+      "terms": [
+        "gacha rates",
+        "pity",
+        "expected value",
+        "drop rate",
+        "economy sinks"
+      ],
+      "expectAny": [
+        "game-designer-balance"
+      ]
+    },
+    {
+      "id": "I85",
+      "scope": "product",
+      "facet": "product",
+      "request": "Map game systems: dependencies and what breaks if X changes",
+      "terms": [
+        "system map",
+        "dependency graph",
+        "ripple analysis",
+        "coupling",
+        "systems design"
+      ],
+      "expectAny": [
+        "game-designer-systems"
+      ]
+    },
+    {
+      "id": "I86",
+      "scope": "product",
+      "facet": "planning",
+      "request": "Six-week sprint plan for 8 people with critical path and risks",
+      "terms": [
+        "sprint plan",
+        "critical path",
+        "capacity",
+        "risk register",
+        "project management"
+      ],
+      "expectAny": [
+        "project-manager"
+      ]
+    },
+    {
+      "id": "I87",
+      "scope": "product",
+      "facet": "finance",
+      "request": "Business case for $200k more UA budget, with downside scenario",
+      "terms": [
+        "business case",
+        "investment justification",
+        "scenario",
+        "roi",
+        "budget request"
+      ],
+      "expectAny": [
+        "unit-economics",
+        "investor-materials",
+        "finance-billing-ops",
+        "game-director"
+      ]
+    },
+    {
+      "id": "I88",
+      "scope": "product",
+      "facet": "product",
+      "request": "KPI tree for the growth team from north star down to ops metrics",
+      "terms": [
+        "kpi tree",
+        "north star metric",
+        "metric hierarchy",
+        "growth metrics",
+        "dashboard"
+      ],
+      "expectAny": [
+        "product-lens",
+        "dashboard-builder",
+        "growth-log"
+      ]
+    },
+    {
+      "id": "I89",
+      "scope": "product",
+      "facet": "product",
+      "request": "Quarterly OKRs for the marketing department, measurable",
+      "terms": [
+        "okr",
+        "objectives key results",
+        "goal setting",
+        "measurable targets",
+        "quarterly planning"
+      ],
+      "expectAny": [
+        "okr-planning",
+        "product-lens"
+      ]
+    },
+    {
+      "id": "I90",
+      "scope": "product",
+      "facet": "finance",
+      "request": "Unit economics: what CPI is still profitable at current LTV",
+      "terms": [
+        "unit economics",
+        "cpi",
+        "ltv",
+        "contribution margin",
+        "profitability"
+      ],
+      "expectAny": [
+        "unit-economics",
+        "game-designer-balance",
+        "finance-billing-ops"
+      ]
+    },
+    {
+      "id": "J91",
+      "scope": "cross",
+      "facet": "engineering+marketing",
+      "request": "React dashboard reading BigQuery, plus a launch post for the team",
+      "terms": [
+        "react dashboard",
+        "frontend",
+        "data visualization",
+        "launch announcement",
+        "internal communication"
+      ],
+      "expectAny": [
+        "dashboard-builder",
+        "react-patterns",
+        "internal-comms"
+      ]
+    },
+    {
+      "id": "J92",
+      "scope": "cross",
+      "facet": "engineering+data",
+      "request": "Python script pulling Meta Ads API, analysing ROAS, weekly report",
+      "terms": [
+        "python",
+        "api client",
+        "scheduled script",
+        "reporting automation",
+        "data pipeline"
+      ],
+      "expectAny": [
+        "exec-python",
+        "python-patterns",
+        "data-scraper-agent"
+      ]
+    },
+    {
+      "id": "J93",
+      "scope": "cross",
+      "facet": "design",
+      "request": "UI design for an analytics dashboard, readability and accessibility first",
+      "terms": [
+        "ui design",
+        "accessibility",
+        "design system",
+        "readability",
+        "dashboard layout"
+      ],
+      "expectAny": [
+        "accessibility",
+        "design-system",
+        "frontend-design-direction"
+      ]
+    },
+    {
+      "id": "J94",
+      "scope": "cross",
+      "facet": "finance",
+      "request": "15-slide investor pitch: market, traction, unit economics",
+      "terms": [
+        "investor pitch",
+        "pitch deck",
+        "fundraising materials",
+        "traction",
+        "slides"
+      ],
+      "expectAny": [
+        "investor-materials",
+        "pptx"
+      ]
+    },
+    {
+      "id": "J95",
+      "scope": "cross",
+      "facet": "engineering+reporting",
+      "request": "Fix the CPI calculation bug and write a stakeholder postmortem",
+      "terms": [
+        "debugging",
+        "root cause",
+        "postmortem",
+        "incident writeup",
+        "internal communication"
+      ],
+      "expectAny": [
+        "systematic-debugging",
+        "internal-comms"
+      ]
+    },
+    {
+      "id": "J96",
+      "scope": "cross",
+      "facet": "localization",
+      "request": "Translate internal finance docs to EN and verify the numbers match",
+      "terms": [
+        "document translation",
+        "financial documents",
+        "verification",
+        "localization",
+        "accuracy check"
+      ],
+      "expectAny": [
+        "localization-copy",
+        "visa-doc-translate",
+        "finance-billing-ops"
+      ]
+    },
+    {
+      "id": "J97",
+      "scope": "cross",
+      "facet": "reporting",
+      "request": "SOP and training doc for new data team members, naming rules included",
+      "terms": [
+        "onboarding documentation",
+        "standard operating procedure",
+        "training material",
+        "conventions",
+        "internal docs"
+      ],
+      "expectAny": [
+        "sop-authoring",
+        "codebase-onboarding",
+        "internal-comms",
+        "doc-coauthoring"
+      ]
+    },
+    {
+      "id": "J98",
+      "scope": "cross",
+      "facet": "research",
+      "request": "Build vs buy attribution (Adjust/AppsFlyer): cost/benefit",
+      "terms": [
+        "build vs buy",
+        "vendor evaluation",
+        "cost benefit",
+        "scenario analysis",
+        "decision"
+      ],
+      "expectAny": [
+        "what-if-oracle",
+        "council"
+      ]
+    },
+    {
+      "id": "J99",
+      "scope": "cross",
+      "facet": "data",
+      "request": "HR attrition by department, with PII to handle carefully",
+      "terms": [
+        "hr analytics",
+        "attrition",
+        "pii handling",
+        "sensitive data",
+        "statistical analysis"
+      ],
+      "expectAny": [
+        "statistical-analysis",
+        "security-review",
+        "hipaa-compliance"
+      ]
+    },
+    {
+      "id": "J100",
+      "scope": "cross",
+      "facet": "ambiguous",
+      "request": "Help me improve marketing effectiveness (deliberately vague)",
+      "terms": [],
+      "expectEmpty": true
+    }
+  ]
+}

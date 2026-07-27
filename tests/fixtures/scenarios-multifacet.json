@@ -1,0 +1,17 @@
+{
+  "note": "Multi-facet requests: `terms` carries [{name, terms}] facet groups so selectSkills gives each facet its own budget share. On a single combined term list the strong facet crowds the weak one out entirely — the limitation the 32-scenario eval documents as S31.",
+  "scenarios": [
+    { "id": "M01", "scope": "cross", "facet": "data+marketing", "request": "Build the KPI dashboard and write the launch post announcing it",
+      "terms": [{ "name": "visualization", "terms": ["dashboard", "kpi", "chart", "metrics panel"] }, { "name": "marketing", "terms": ["launch announcement", "campaign", "content engine", "copywriting"] }],
+      "expectAny": ["dashboard-builder"], "expectAll": ["dashboard-builder"] },
+    { "id": "M02", "scope": "cross", "facet": "engineering+reporting", "request": "Fix the CPI calculation bug and write the stakeholder postmortem",
+      "terms": [{ "name": "engineering", "terms": ["debugging", "root cause", "typescript", "regression test"] }, { "name": "reporting", "terms": ["postmortem", "internal communication", "stakeholder writeup"] }],
+      "expectAny": ["internal-comms", "systematic-debugging"] },
+    { "id": "M03", "scope": "cross", "facet": "research+design", "request": "Competitive teardown of rivals' onboarding UX with an accessibility read",
+      "terms": [{ "name": "research", "terms": ["competitive analysis", "benchmark", "teardown"] }, { "name": "design", "terms": ["accessibility", "design system", "onboarding ux"] }],
+      "expectAny": ["accessibility", "competitive-platform-analysis"] },
+    { "id": "M04", "scope": "cross", "facet": "data+product", "request": "Cohort retention analysis feeding a PRD for the retention feature",
+      "terms": [{ "name": "data", "terms": ["cohort retention", "statistical analysis", "segmentation"] }, { "name": "product", "terms": ["prd", "product requirements", "success metrics"] }],
+      "expectAny": ["product-manager", "statistical-analysis"] }
+  ]
+}

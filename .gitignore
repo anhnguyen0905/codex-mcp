@@ -43,3 +43,4 @@ fb-video-crawler/live_comments.csv
 id_rsa*
 **/auth.json
 credentials*.json
+**/.claude/worktrees/

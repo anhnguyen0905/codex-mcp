@@ -3,6 +3,7 @@
 //
 // Usage:
 //   node scripts/skill-eval.mjs [--index <file>] [--scenarios <file>] [--report <file>]
+//     [--negatives <file>]
 //
 // Defaults: index = ~/.claude/skill-library/INDEX.md,
 //           scenarios = tests/fixtures/skill-scenarios.json,
@@ -19,6 +20,54 @@ import { selectSkills, DEFAULT_TOKEN_BUDGET, DISTILL_TOKENS_CAP } from './skill-
 const here = path.dirname(fileURLToPath(import.meta.url))
 const defaultIndex = () => path.join(os.homedir(), '.claude', 'skill-library', 'INDEX.md')
 const defaultScenarios = () => path.join(here, '..', 'tests', 'fixtures', 'skill-scenarios.json')
+
+/** Parse `<term> | <forbidden-top-1-skill>` precision guard rules. */
+export function parseNegatives(content) {
+  if (typeof content !== 'string') {
+    throw new TypeError('negative rules content must be a string')
+  }
+
+  return content.split(/\r?\n/).flatMap((line, index) => {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) return []
+
+    const fields = trimmed.split('|').map((field) => field.trim())
+    if (fields.length !== 2 || fields.some((field) => !field)) {
+      throw new Error(`invalid negative rule on line ${index + 1}: expected "<term> | <skill>"`)
+    }
+    return [{ term: fields[0], forbiddenTop1: fields[1] }]
+  })
+}
+
+/** Return only rules whose forbidden skill is selected at rank 1. */
+export function checkNegatives(rules, entries, options = {}) {
+  if (!Array.isArray(rules)) throw new TypeError('negative rules must be an array')
+  if (!Array.isArray(entries)) throw new TypeError('skill entries must be an array')
+  const entryNames = new Set(entries.map((entry) => entry.name))
+
+  return rules.flatMap((rule, index) => {
+    const isValidRule = Boolean(
+      rule &&
+      typeof rule.term === 'string' &&
+      rule.term.trim() &&
+      typeof rule.forbiddenTop1 === 'string' &&
+      rule.forbiddenTop1.trim(),
+    )
+    if (!isValidRule) {
+      throw new TypeError(`negative rule ${index + 1} must have non-empty string fields`)
+    }
+    if (!entryNames.has(rule.forbiddenTop1)) {
+      throw new Error(
+        `negative rule ${index + 1} ("${rule.term}") names skill not present in catalog: "${rule.forbiddenTop1}"`,
+      )
+    }
+
+    const selected = selectSkills(entries, [rule.term], options)
+    const actualTop1 = selected[0]?.name
+    if (!actualTop1 || actualTop1 !== rule.forbiddenTop1) return []
+    return [{ term: rule.term, forbiddenTop1: rule.forbiddenTop1, actualTop1 }]
+  })
+}
 
 // Estimate a skill's context cost from its real SKILL.md (~4 chars/token); remote
 // URL entries (not yet local) fall back to the matcher's per-skill estimate.
@@ -44,6 +93,7 @@ export function evaluateScenario(scenario, entries, options = {}) {
   const selected = selectSkills(entries, scenario.terms, { tokenBudget, tokensOf: sizer })
   const names = selected.map((s) => s.name)
   const usedTokens = selected.reduce((sum, s) => sum + (s.tokens ?? 0), 0)
+  const precisionAt1 = scenario.expectAny ? scenario.expectAny.includes(names[0]) : null
   const checks = []
 
   if (scenario.expectEmpty) {
@@ -69,20 +119,41 @@ export function evaluateScenario(scenario, entries, options = {}) {
     scores: selected.map((s) => s.score),
     usedTokens,
     tokenBudget,
+    precisionAt1,
     pass: checks.every((c) => c.pass),
     checks,
   }
 }
 
-/** Run all scenarios; returns { results, passed, total }. */
+/** Run all scenarios and aggregate verdict, precision@1, and selection-size metrics. */
 export function runScenarios(scenarios, entries, options = {}) {
   const results = scenarios.map((s) => evaluateScenario(s, entries, options))
-  return { results, passed: results.filter((r) => r.pass).length, total: results.length }
+  const measuredPrecision = results.filter((result) => result.precisionAt1 !== null)
+  const precisionAt1 = measuredPrecision.length
+    ? measuredPrecision.filter((result) => result.precisionAt1).length / measuredPrecision.length
+    : null
+  const avgSelected = results.length
+    ? results.reduce((sum, result) => sum + result.selected.length, 0) / results.length
+    : 0
+  return {
+    results,
+    passed: results.filter((result) => result.pass).length,
+    total: results.length,
+    precisionAt1,
+    avgSelected,
+  }
 }
 
-function renderReport({ results, passed, total }, meta) {
-  const pct = ((passed / total) * 100).toFixed(1)
-  const lines = [
+function renderHeader({ results, passed, total, precisionAt1, avgSelected }, meta) {
+  const pct = total ? ((passed / total) * 100).toFixed(1) : '0.0'
+  const precisionPassed = results.filter((result) => result.precisionAt1 === true).length
+  const precisionTotal = results.filter((result) => result.precisionAt1 !== null).length
+  const precisionPct = precisionAt1 === null ? 'n/a' : `${(precisionAt1 * 100).toFixed(1)}%`
+  const precisionSummary = precisionTotal
+    ? `${precisionPassed}/${precisionTotal} (${precisionPct})`
+    : 'n/a (no expectAny scenarios)'
+
+  return [
     '# Skill Selection — Scope Scenario Eval Report',
     '',
     `- Generated: ${new Date().toISOString()}`,
@@ -90,7 +161,14 @@ function renderReport({ results, passed, total }, meta) {
     `- Scenarios: ${total}`,
     `- Context budget per scenario: ~${DEFAULT_TOKEN_BUDGET.toLocaleString()} tokens (≈3% of a 200k window)`,
     `- **Passed: ${passed}/${total} (${pct}%)**`,
+    `- **Precision@1: ${precisionSummary}**`,
+    `- **Average selection size: ${avgSelected.toFixed(2)}**`,
     '',
+  ]
+}
+
+function renderResults(results) {
+  const lines = [
     '## Results',
     '',
     '| # | Scope | Facet | Selected skills (relevance-ranked) | ~Tokens | Verdict |',
@@ -102,8 +180,11 @@ function renderReport({ results, passed, total }, meta) {
       `| ${r.id} | ${r.scope} | ${r.facet} | ${sel} | ${r.usedTokens.toLocaleString()} | ${r.pass ? '✅ PASS' : '❌ FAIL'} |`,
     )
   }
+  return lines
+}
 
-  lines.push(
+function renderMethod() {
+  return [
     '',
     '## Method & scope of this eval',
     '',
@@ -123,53 +204,100 @@ function renderReport({ results, passed, total }, meta) {
     '  surfaces from a combined list; the skill instructs the model to select per-facet instead).',
     '- **Step 5 vetting and distillation** of skill content into Codex prompt blocks.',
     '',
-  )
+  ]
+}
 
+function renderFailures(results) {
   const failures = results.filter((r) => !r.pass)
-  if (failures.length) {
-    lines.push('', '## Failure detail', '')
-    for (const f of failures) {
-      const bad = f.checks.filter((c) => !c.pass)
-      lines.push(`- **${f.id}** (${f.scope}) — request: "${f.request}"`)
-      lines.push(`  - selected: ${f.selected.join(', ') || '(none)'}`)
-      for (const c of bad) {
-        if (c.kind === 'any') lines.push(`  - expected any of: ${c.wanted.join(', ')}`)
-        if (c.kind === 'none') lines.push(`  - leaked (should be absent): ${c.leaked.join(', ')}`)
-        if (c.kind === 'empty') lines.push('  - expected empty selection (uncovered domain)')
-        if (c.kind === 'budget') lines.push(`  - context budget exceeded (${f.usedTokens} > ${f.tokenBudget})`)
+  if (!failures.length) return []
+
+  const lines = ['', '## Failure detail', '']
+  for (const failure of failures) {
+    const failedChecks = failure.checks.filter((check) => !check.pass)
+    lines.push(`- **${failure.id}** (${failure.scope}) — request: "${failure.request}"`)
+    lines.push(`  - selected: ${failure.selected.join(', ') || '(none)'}`)
+    for (const check of failedChecks) {
+      if (check.kind === 'any') lines.push(`  - expected any of: ${check.wanted.join(', ')}`)
+      if (check.kind === 'none') lines.push(`  - leaked (should be absent): ${check.leaked.join(', ')}`)
+      if (check.kind === 'empty') lines.push('  - expected empty selection (uncovered domain)')
+      if (check.kind === 'budget') {
+        lines.push(`  - context budget exceeded (${failure.usedTokens} > ${failure.tokenBudget})`)
       }
     }
   }
-  lines.push('')
-  return lines.join('\n')
+  return lines
+}
+
+function renderPrecisionGuard(violations) {
+  if (violations === null) return []
+  const lines = ['', '## Precision guard', '']
+  if (!violations.length) return [...lines, '✅ Precision regression net passed.']
+
+  return [
+    ...lines,
+    ...violations.map(
+      (violation) =>
+        `- ❌ \`${violation.term}\`: \`${violation.actualTop1}\` ranked top-1 (forbidden: \`${violation.forbiddenTop1}\`).`,
+    ),
+  ]
+}
+
+function renderReport(summary, meta, negativeViolations = null) {
+  return [
+    ...renderHeader(summary, meta),
+    ...renderResults(summary.results),
+    ...renderPrecisionGuard(negativeViolations),
+    ...renderMethod(),
+    ...renderFailures(summary.results),
+    '',
+  ].join('\n')
+}
+
+const CLI_FILE_FLAGS = new Map([
+  ['--index', 'indexFile'],
+  ['--scenarios', 'scenariosFile'],
+  ['--report', 'reportFile'],
+  ['--negatives', 'negativesFile'],
+])
+
+function parseCliArgs(argv) {
+  let parsed = { indexFile: null, scenariosFile: null, reportFile: null, negativesFile: null }
+  for (let index = 0; index < argv.length; index++) {
+    const flag = argv[index]
+    const key = CLI_FILE_FLAGS.get(flag)
+    if (!key) throw new Error(`unknown argument: ${flag}`)
+
+    const value = argv[index + 1]
+    if (!value || value.startsWith('--')) throw new Error(`${flag} requires a file`)
+    parsed = { ...parsed, [key]: value }
+    index++
+  }
+  return parsed
 }
 
 export async function runCli(argv) {
-  let indexFile = null
-  let scenariosFile = null
-  let reportFile = null
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]
-    if (a === '--index') indexFile = argv[++i]
-    else if (a === '--scenarios') scenariosFile = argv[++i]
-    else if (a === '--report') reportFile = argv[++i]
-    else throw new Error(`unknown argument: ${a}`)
-  }
-
+  const { indexFile, scenariosFile, reportFile, negativesFile } = parseCliArgs(argv)
   const idx = path.resolve(indexFile ?? defaultIndex())
   const scen = path.resolve(scenariosFile ?? defaultScenarios())
   const entries = parseCatalog(await fs.readFile(idx, 'utf8'))
   const { scenarios } = JSON.parse(await fs.readFile(scen, 'utf8'))
 
   const summary = runScenarios(scenarios, entries)
-  const report = renderReport(summary, { index: idx, indexCount: entries.length })
+  let negativeViolations = null
+  if (negativesFile) {
+    const negativesPath = path.resolve(negativesFile)
+    const negativeRules = parseNegatives(await fs.readFile(negativesPath, 'utf8'))
+    if (!negativeRules.length) throw new Error(`negatives file contains no rules: ${negativesPath}`)
+    negativeViolations = checkNegatives(negativeRules, entries)
+  }
+  const report = renderReport(summary, { index: idx, indexCount: entries.length }, negativeViolations)
 
   if (reportFile) {
     const out = path.resolve(reportFile)
     await fs.mkdir(path.dirname(out), { recursive: true })
     await fs.writeFile(out, report, 'utf8')
   }
-  return { ...summary, report, reportFile }
+  return { ...summary, negativeViolations, report, reportFile }
 }
 
 const isDirectRun =
@@ -177,13 +305,15 @@ const isDirectRun =
 
 if (isDirectRun) {
   runCli(process.argv.slice(2))
-    .then(({ report, passed, total, reportFile }) => {
+    .then(({ report, passed, total, negativeViolations, reportFile }) => {
       console.log(report)
       if (reportFile) console.error(`Report written → ${path.resolve(reportFile)}`)
-      process.exit(passed === total ? 0 : 1)
+      const hasNegativeViolations = (negativeViolations?.length ?? 0) > 0
+      process.exit(passed === total && !hasNegativeViolations ? 0 : 1)
     })
     .catch((error) => {
-      console.error(`skill-eval: ${error.message}`)
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`skill-eval: ${message}`)
       process.exit(2)
     })
 }

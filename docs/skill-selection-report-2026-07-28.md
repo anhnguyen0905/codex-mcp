@@ -69,8 +69,8 @@ Hệ quả cho lộ trình: hai việc tôi từng hạ ưu tiên nay là việc
 
 ```bash
 npm run skills:eval                                               # 32/32 phải giữ
-node scripts/skill-eval.mjs --scenarios .codex-flow/skill-selection-test/scenarios-100.json
-node scripts/skill-eval.mjs --scenarios .codex-flow/skill-selection-test/scenarios-multifacet.json
+node scripts/skill-eval.mjs --scenarios tests/fixtures/scenarios-100.json
+node scripts/skill-eval.mjs --scenarios tests/fixtures/scenarios-multifacet.json
 ```
 
 Việc tiếp theo, theo thứ tự: `triggers:`/`ALIASES.md` (7 case) → LLM reranker theo contract 3 nhánh (6 case) → `NEGATIVES.md`. Lộ trình đầy đủ: `docs/skill-selection-next-2026-07-27.md`.
