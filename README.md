@@ -100,14 +100,15 @@ node scripts/sync-awesome-skills.mjs --clone   # build a local library from awes
 node scripts/build-skills-index.mjs            # → ~/.claude/skill-library/INDEX.md
 ```
 
-Besides the phase skills, the plugin ships the domain skills authored through Step 7 —
-`performance-marketing`, `unit-economics`, `media-planning` — so they are indexed and selectable
-out of the box. Their numeric thresholds are labelled *derived, unverified*: replace them with your
+Besides the phase skills, the plugin ships 15 domain skills authored through Step 7 — paid media,
+unit economics, media planning, warehouse modeling, event taxonomy, attribution, causal inference,
+survey design, ASO, localisation, OKRs, creative briefs, influencer strategy, SOPs and data-quality
+checks — so they are indexed and selectable out of the box. Their numeric thresholds are labelled *derived, unverified*: replace them with your
 own account history before treating any of them as a target.
 
 Verified by a 32-scenario scope eval (`npm run skills:eval`) — latest **32/32** — plus a
 100-request non-engineering scope run (data analysis, marketing planning, performance marketing,
-market research, content, product): **70/100** covered by an existing skill, the rest queued for
+market research, content, product): **87/100** covered by an existing skill, the rest queued for
 Step 7 acquisition/authoring. Full procedure:
 [`skills/skill-selection/SKILL.md`](skills/skill-selection/SKILL.md).
 
