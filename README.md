@@ -42,15 +42,32 @@ codex login          # ChatGPT Plus/Pro/Team — or set OPENAI_API_KEY
 <summary>Alternative: install the MCP server standalone (no plugin)</summary>
 
 ```bash
-# from npm
-claude mcp add --scope user codex -- npx -y @anhnguyen0905/codex-mcp
-# or straight from this repo
+# straight from this repo (recommended — always the current release)
 claude mcp add --scope user codex -- npx -y github:anhnguyen0905/codex-mcp
+# from npm — note the registry lags behind GitHub releases
+claude mcp add --scope user codex -- npx -y @anhnguyen0905/codex-mcp
 ```
 
 `claude mcp list` should then show `codex … ✔ Connected`. Copy
 [`commands/codex-flow.md`](commands/codex-flow.md) to `~/.claude/commands/` for the workflow
 command, or just use the plugin install above which bundles both.
+</details>
+
+<details>
+<summary>Troubleshooting: <code>Failed to reconnect to Plugin:codex-flow:codex: -32000</code></summary>
+
+The plugin is distributed as a git clone and `dist/` is gitignored, so a freshly installed plugin
+has no build yet. Since v0.15.0 the bundled `.mcp.json` installs deps and builds on first start, so
+the first session after install takes a few extra seconds and then connects normally.
+
+If you are on an older install, patch it once:
+
+```bash
+cd ~/.claude/plugins/cache/codex-mcp/codex-flow/<version>
+npm install --no-audit --no-fund && npm run build
+```
+
+Then restart Claude Code and confirm with `claude mcp list` (or call `codex_health`).
 </details>
 
 ---
@@ -108,8 +125,8 @@ own account history before treating any of them as a target.
 
 Verified by a 32-scenario scope eval (`npm run skills:eval`) — latest **32/32** — plus a
 100-request non-engineering scope run (data analysis, marketing planning, performance marketing,
-market research, content, product): **87/100** covered by an existing skill, the rest queued for
-Step 7 acquisition/authoring. Full procedure:
+market research, content, product): **99/100** covered by an existing skill, at precision@1 84/99,
+with the remaining case queued for Step 7 acquisition/authoring. Full procedure:
 [`skills/skill-selection/SKILL.md`](skills/skill-selection/SKILL.md).
 
 ### Parallel execution for large backlogs

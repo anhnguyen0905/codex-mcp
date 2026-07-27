@@ -3,6 +3,35 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] - 2026-07-27
+
+### Added
+
+- **Constituent-word fallback in the matcher** — a multi-word term whose exact phrase misses now falls back to its component words at `PARTIAL_FACTOR` (0.6) instead of contributing zero. This was the defect behind most of the scope-suite misses: `"competitor benchmark"` scored exactly 0.0 against `benchmark-methodology`, so the expected skill was absent from the shortlist rather than mis-ranked. A one-axis sweep (`scripts/tune-sweep.mjs`, verdict recorded in `tests/fixtures/SWEEP.md`) confirms 0.6 sits inside a plateau, not on a spike; grid cells scoring 100/100 were deliberately not adopted because they win by rescuing a coverage gap at the cost of roughly one extra noisy skill per request.
+- **`formatShortlist` with a hard 4000-char ceiling** plus trust/provenance metadata, and `matchedTerms` on results — `selectSkills` is now explicitly a *shortlist producer*, not a final answer. Precision is restored downstream by a mechanical rank-1 guard and a prompt-level prune.
+- **Negative-rule guard in the eval harness** — `parseNegatives`/`checkNegatives` and a `--negatives` flag; `checkNegatives` throws when a rule names a skill absent from the catalog, so a typo cannot leave the guard green-but-decorative.
+- **precision@1 and average-selection-size reporting** next to the pass rate, so a recall win paid for with noise can no longer hide behind a single number.
+- **Tracked eval fixtures** — the 100-case and multifacet suites, `NEGATIVES.md` and `SWEEP.md` are now in git, making the measured numbers reproducible from a clean checkout.
+
+Measured on a ~656-entry index: scope suite 87/100 → **99/100**, precision@1 78/99 → **84/99**, average selection size 2.59 → 8.01, 32-scenario suite 32/32 (unchanged), multifacet 4/4 (unchanged), full test suite 671 → 700 tests.
+
+### Removed
+
+- **The IDF-aware relevance-floor clause** (`RARE_DESC_IDF`, `rareDescHit`) — a two-factor ablation run independently twice with matching results showed it contributed zero marginal passes over the phrase fallback alone, at +0.56 average selection size, including across the 17 scenarios whose term lists are entirely single-word (its only principled justification). Dropped as dominated.
+
+### Fixed
+
+- **Plugin install failed with `Failed to reconnect to Plugin:codex-flow:codex: -32000`** — the bundled `.mcp.json` launched `node dist/index.js`, but the plugin ships as a git clone and `dist/` is gitignored, so a freshly installed plugin had no build (and no `node_modules`) and the server exited immediately on every start. The launcher is now `sh -c` based: it `cd`s to `${CLAUDE_PLUGIN_ROOT}` (falling back to `$PWD` for dev sessions in this repo, where the token is not substituted), installs deps and builds if `dist/index.js` is missing, then execs the server. First start after install is slower; subsequent starts are unchanged. Verified by a stdio `initialize` handshake in both modes.
+
+### Changed
+
+- **`skills/skill-selection/SKILL.md`** now documents the shortlist → prune → `LOAD`/`VET`/`AUTHOR` contract, with the explicit rule that *a reranker cannot rescue an absent candidate* — an expected skill missing from the shortlist is a recall/coverage problem for Step 7 acquire-or-author, not a ranking problem.
+- README now leads the standalone install with the `github:` source and marks the npm registry as lagging behind GitHub releases, and documents the `-32000` symptom with a one-shot patch for installs older than 0.15.0.
+
+### Known gaps
+
+Tracked in `.codex-flow/IMPROVEMENTS.md`: the eval suites are not yet CI-gated (the harness reads a machine-specific index and the scope suite exits non-zero on the accepted A09 miss); `buildIndex` still overwrites the index with a partial scan when a skill root is unreadable; 11 duplicate skill names remain in the index, deflating IDF and wasting shortlist budget.
+
 ## [0.14.0] - 2026-07-28
 
 ### Added

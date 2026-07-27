@@ -1,9 +1,12 @@
 {
   "mcpServers": {
     "codex": {
-      "_note": "Runs the LOCAL build so dev sessions test the source being edited (run `npm run build` first). To test a published release instead, use command 'npx' with args ['-y', '@anhnguyen0905/codex-mcp@<pinned-version>'].",
-      "command": "node",
-      "args": ["dist/index.js"],
+      "_note": "Self-building launcher. As an installed plugin, ${CLAUDE_PLUGIN_ROOT} resolves to the plugin cache dir; in this repo it is left unset and the launcher falls back to the project root. dist/ is gitignored, so a freshly cloned plugin has no build — the launcher installs deps and builds on first start instead of exiting with -32000. Dev note: an existing dist/ is never rebuilt automatically; run `npm run build` after editing src/.",
+      "command": "sh",
+      "args": [
+        "-c",
+        "cd \"${CLAUDE_PLUGIN_ROOT}\" 2>/dev/null || cd \"$PWD\" || exit 1; [ -d node_modules ] || npm install --no-audit --no-fund 1>&2; [ -f dist/index.js ] || npm run build 1>&2; exec node dist/index.js"
+      ],
       "env": {
         "CODEX_MCP_TERMINAL": "1"
       }
