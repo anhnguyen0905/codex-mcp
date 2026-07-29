@@ -117,7 +117,8 @@
       "expectAny": [
         "clickhouse-io",
         "polars",
-        "exploratory-data-analysis"
+        "exploratory-data-analysis",
+        "cohort-retention-analysis"
       ]
     },
     {
@@ -148,9 +149,11 @@
         "flatten",
         "parse",
         "tabular",
-        "conversion"
+        "conversion",
+        "spreadsheet"
       ],
       "expectAny": [
+        "json-data-wrangling",
         "data-quality-checks",
         "polars",
         "liteparse",

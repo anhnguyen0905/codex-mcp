@@ -1,6 +1,6 @@
 ---
 name: design-fundamentals
-description: Reference for design (non-code) tasks — universal UI/UX design principles from bergside/typeui covering visual hierarchy, interaction laws, typography foundations, spacing, and WCAG accessibility. Consult for any design request as a reference (not the sole authority — supplement with own research/judgment when a better approach exists). Design-system-agnostic and applies to every surface.
+description: Reference for design (non-code) tasks — universal UI/UX design principles from bergside/typeui covering visual hierarchy, interaction laws, typography foundations (type scale, font pairing, line height, letter spacing, legibility), spacing, and WCAG accessibility. Consult for any design request as a reference (not the sole authority — supplement with own research/judgment when a better approach exists). Design-system-agnostic and applies to every surface.
 license: MIT
 metadata:
   author: typeui.sh

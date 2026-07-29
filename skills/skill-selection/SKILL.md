@@ -44,7 +44,16 @@ Requests are not always engineering. First identify 1–2 **role facets** the ta
 | Research | market sizing, competitor, benchmark, survey design, cross-tab, persona, interview, scenario / what-if |
 | Product / planning | prd, roadmap, backlog, prioritization, metrics, kpi tree, okr, pricing, unit economics |
 | Finance / BizOps | business case, budget allocation, forecast, margin, sensitivity, sop |
-| Design | ui, accessibility, motion, design system, typography |
+| Accounting / audit | bookkeeping, journal entry, reconciliation, chart of accounts, accrual, month-end close, P&L, balance sheet, VAT, invoice, trial balance, audit, materiality, sampling, internal controls, workpapers |
+| Personal finance | household budget, emergency fund, debt payoff, savings rate, compound interest, retirement, net worth, insurance |
+| SME / operations | small business, pricing, break-even, cash flow, runway, working capital, supplier terms, inventory, sop, production scheduling, capacity, quality |
+| Sales / support / CRM | pipeline, lead qualification, quota, forecast, win/loss, crm, ticket triage, sla, csat, nps, escalation, knowledge base |
+| HR / people | recruiting, job description, structured interview, onboarding, compensation, performance review, engagement survey, attrition, headcount |
+| Legal / compliance | contract review, nda, clause, termination, liability, indemnification, redline, compliance, data privacy, customs |
+| Design / UX | ui, ux research, persona, usability testing, user flow, wireframe, information architecture, accessibility, motion, design system, typography |
+| Education / training | learning objectives, curriculum, syllabus, lesson plan, assessment, rubric, e-learning, workshop, skill gap |
+| Real estate | rental yield, cap rate, noi, cash-on-cash, mortgage, amortization, buy vs rent, occupancy, vacancy |
+| Logistics / supply chain | carrier, freight, customs, hs code, incoterms, shipment exception, returns, reverse logistics, demand planning, safety stock, warehouse |
 | Localization | translation, locale, tone preservation, market adaptation |
 
 Then derive 3–8 search terms **per facet**. A request can span facets (e.g. "build a dashboard
