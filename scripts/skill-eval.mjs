@@ -9,6 +9,7 @@
 //           scenarios = tests/fixtures/skill-scenarios.json,
 //           report = printed to stdout (also --report <file> to write markdown).
 
+import { createHash } from 'node:crypto'
 import { promises as fs, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -94,6 +95,10 @@ export function evaluateScenario(scenario, entries, options = {}) {
   const names = selected.map((s) => s.name)
   const usedTokens = selected.reduce((sum, s) => sum + (s.tokens ?? 0), 0)
   const precisionAt1 = scenario.expectAny ? scenario.expectAny.includes(names[0]) : null
+  const firstHit = scenario.expectAny
+    ? names.findIndex((name) => scenario.expectAny.includes(name))
+    : -1
+  const reciprocalRank = scenario.expectAny ? (firstHit >= 0 ? 1 / (firstHit + 1) : 0) : null
   const checks = []
 
   if (scenario.expectEmpty) {
@@ -103,8 +108,10 @@ export function evaluateScenario(scenario, entries, options = {}) {
     const hit = scenario.expectAny.some((n) => names.includes(n))
     checks.push({ kind: 'any', pass: hit, wanted: scenario.expectAny })
   }
+  let fpViolated = null
   if (scenario.expectNone) {
     const leaked = scenario.expectNone.filter((n) => names.includes(n))
+    fpViolated = leaked.length > 0
     checks.push({ kind: 'none', pass: leaked.length === 0, leaked })
   }
   // Context-budget invariant always holds.
@@ -120,6 +127,8 @@ export function evaluateScenario(scenario, entries, options = {}) {
     usedTokens,
     tokenBudget,
     precisionAt1,
+    reciprocalRank,
+    fpViolated,
     pass: checks.every((c) => c.pass),
     checks,
   }
@@ -135,16 +144,40 @@ export function runScenarios(scenarios, entries, options = {}) {
   const avgSelected = results.length
     ? results.reduce((sum, result) => sum + result.selected.length, 0) / results.length
     : 0
+  // MRR over expectAny scenarios: reciprocal rank of the first expected skill
+  // in the selection (0 on a miss) — exposes ranking quality that pass counts hide.
+  const ranked = results.filter((result) => result.reciprocalRank !== null)
+  const mrr = ranked.length
+    ? ranked.reduce((sum, result) => sum + result.reciprocalRank, 0) / ranked.length
+    : null
+  // Per-scope recall: pass counts grouped by scenario scope, so a weak domain
+  // cannot hide inside a strong aggregate.
+  const perScope = results.reduce((acc, result) => {
+    const scope = result.scope ?? 'unscoped'
+    const bucket = acc[scope] ?? { passed: 0, total: 0 }
+    return {
+      ...acc,
+      [scope]: { passed: bucket.passed + (result.pass ? 1 : 0), total: bucket.total + 1 },
+    }
+  }, {})
+  // False-positive rate over expectNone scenarios (null when none carry one).
+  const guarded = results.filter((result) => result.fpViolated !== null)
+  const fpRate = guarded.length
+    ? guarded.filter((result) => result.fpViolated).length / guarded.length
+    : null
   return {
     results,
     passed: results.filter((result) => result.pass).length,
     total: results.length,
     precisionAt1,
     avgSelected,
+    mrr,
+    perScope,
+    fpRate,
   }
 }
 
-function renderHeader({ results, passed, total, precisionAt1, avgSelected }, meta) {
+function renderHeader({ results, passed, total, precisionAt1, avgSelected, mrr, fpRate }, meta) {
   const pct = total ? ((passed / total) * 100).toFixed(1) : '0.0'
   const precisionPassed = results.filter((result) => result.precisionAt1 === true).length
   const precisionTotal = results.filter((result) => result.precisionAt1 !== null).length
@@ -153,18 +186,37 @@ function renderHeader({ results, passed, total, precisionAt1, avgSelected }, met
     ? `${precisionPassed}/${precisionTotal} (${precisionPct})`
     : 'n/a (no expectAny scenarios)'
 
+  const guardedTotal = results.filter((result) => result.fpViolated !== null).length
+  const fpSummary = fpRate === null
+    ? 'n/a (no expectNone scenarios)'
+    : `${Math.round(fpRate * guardedTotal)}/${guardedTotal} (${(fpRate * 100).toFixed(1)}%)`
+
   return [
     '# Skill Selection — Scope Scenario Eval Report',
     '',
     `- Generated: ${new Date().toISOString()}`,
     `- Index: \`${meta.index}\` (${meta.indexCount} skills)`,
+    ...(meta.indexSha256 ? [`- Index sha256: \`${meta.indexSha256}\``] : []),
     `- Scenarios: ${total}`,
     `- Context budget per scenario: ~${DEFAULT_TOKEN_BUDGET.toLocaleString()} tokens (≈3% of a 200k window)`,
     `- **Passed: ${passed}/${total} (${pct}%)**`,
-    `- **Precision@1: ${precisionSummary}**`,
+    `- **Precision@1 (Hit@1): ${precisionSummary}**`,
+    `- **MRR: ${mrr === null ? 'n/a' : mrr.toFixed(3)}**`,
+    `- **expectNone FP rate: ${fpSummary}**`,
     `- **Average selection size: ${avgSelected.toFixed(2)}**`,
     '',
   ]
+}
+
+function renderPerScope(perScope) {
+  const scopes = Object.keys(perScope ?? {})
+  if (scopes.length < 2) return []
+  const lines = ['## Per-scope recall', '', '| Scope | Passed | Recall |', '|---|---|---|']
+  for (const scope of scopes.sort()) {
+    const { passed, total } = perScope[scope]
+    lines.push(`| ${scope} | ${passed}/${total} | ${((passed / total) * 100).toFixed(1)}% |`)
+  }
+  return [...lines, '']
 }
 
 function renderResults(results) {
@@ -245,6 +297,7 @@ function renderPrecisionGuard(violations) {
 function renderReport(summary, meta, negativeViolations = null) {
   return [
     ...renderHeader(summary, meta),
+    ...renderPerScope(summary.perScope),
     ...renderResults(summary.results),
     ...renderPrecisionGuard(negativeViolations),
     ...renderMethod(),
@@ -279,7 +332,11 @@ export async function runCli(argv) {
   const { indexFile, scenariosFile, reportFile, negativesFile } = parseCliArgs(argv)
   const idx = path.resolve(indexFile ?? defaultIndex())
   const scen = path.resolve(scenariosFile ?? defaultScenarios())
-  const entries = parseCatalog(await fs.readFile(idx, 'utf8'))
+  const indexContent = await fs.readFile(idx, 'utf8')
+  const entries = parseCatalog(indexContent)
+  // Pin the exact index the numbers were measured against (dual-review IMP-D):
+  // the file is mutable, so a report without its hash is not reproducible.
+  const indexSha256 = createHash('sha256').update(indexContent).digest('hex')
   const { scenarios } = JSON.parse(await fs.readFile(scen, 'utf8'))
 
   const summary = runScenarios(scenarios, entries)
@@ -290,7 +347,11 @@ export async function runCli(argv) {
     if (!negativeRules.length) throw new Error(`negatives file contains no rules: ${negativesPath}`)
     negativeViolations = checkNegatives(negativeRules, entries)
   }
-  const report = renderReport(summary, { index: idx, indexCount: entries.length }, negativeViolations)
+  const report = renderReport(
+    summary,
+    { index: idx, indexCount: entries.length, indexSha256 },
+    negativeViolations,
+  )
 
   if (reportFile) {
     const out = path.resolve(reportFile)

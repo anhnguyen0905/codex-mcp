@@ -521,6 +521,15 @@ export async function buildIndex(roots) {
   }
 
   entries.sort((a, b) => a.name.localeCompare(b.name))
+  // Duplicate names distort selection and averages (the same skill can be taken
+  // twice); selection keeps the strongest entry, but the roots should be cleaned.
+  const nameCounts = new Map()
+  for (const entry of entries) nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1)
+  for (const [name, count] of nameCounts) {
+    if (count > 1) {
+      warnings.push(`duplicate skill name "${name}" (${count} entries) — consider deduplicating the scanned roots`)
+    }
+  }
   return { entries, warnings }
 }
 

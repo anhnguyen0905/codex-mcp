@@ -200,8 +200,9 @@ describe('selectSkills', () => {
     expect(selected).toEqual([])
   })
 
-  test('does not qualify a skill on one description hit', () => {
-    // Arrange
+  test('does not qualify a skill on one low-signal description hit', () => {
+    // Arrange — in a 1-entry corpus every term is low-IDF, so a single
+    // description hit stays below the relevance floor.
     const entries = [
       {
         name: 'lift-study',
@@ -215,6 +216,77 @@ describe('selectSkills', () => {
 
     // Assert
     expect(selected).toEqual([])
+  })
+
+  test('qualifies a skill on one description hit when the term is rare in the corpus', () => {
+    // Arrange — "incoterms" appears in exactly one description of a large
+    // corpus: a single hit on such a diagnostic term must clear the floor
+    // (the X06 case: "Incoterms" alone should surface trade compliance).
+    // IDF scales with corpus size, so the filler matches the real index's order
+    // of magnitude (~660 entries) — a df=1 term only crosses DIAGNOSTIC_IDF there.
+    const filler = Array.from({ length: 600 }, (_, i) => ({
+      name: `python-tool-${i}`,
+      description: 'Python data analysis helper for tabular workflows.',
+      file: `/f${i}/SKILL.md`,
+    }))
+    const entries = [
+      ...filler,
+      {
+        name: 'trade-compliance',
+        description: 'Customs documentation, Incoterms application, tariff classification.',
+        file: '/a/trade/SKILL.md',
+      },
+    ]
+
+    // Act
+    const selected = selectSkills(entries, ['incoterms', 'fob', 'ddp'])
+
+    // Assert
+    expect(selected.map((s: { name: string }) => s.name)).toContain('trade-compliance')
+  })
+
+  test('index growth alone must not relax the single-hit floor (df cap)', () => {
+    // Codex review finding 3: with a raw IDF threshold, adding unrelated entries
+    // lets progressively more common words qualify (df≤7 at 2,000 entries).
+    // A word present in 5 descriptions of a 2,005-entry corpus clears IDF 2.2
+    // but must stay blocked by the scale-invariant df cap.
+    const filler = Array.from({ length: 2000 }, (_, i) => ({
+      name: `python-tool-${i}`,
+      description: 'Python data analysis helper for tabular workflows.',
+      file: `/f${i}/SKILL.md`,
+    }))
+    const carriers = Array.from({ length: 5 }, (_, i) => ({
+      name: `ops-guide-${i}`,
+      description: 'Operational playbook mentioning incoterms once.',
+      file: `/c${i}/SKILL.md`,
+    }))
+
+    const selected = selectSkills([...filler, ...carriers], ['incoterms'])
+
+    expect(selected).toEqual([])
+  })
+
+  test('still blocks a single description hit on a corpus-common term', () => {
+    // Arrange — "python" appears in half the corpus: one hit on it is noise.
+    const filler = Array.from({ length: 40 }, (_, i) => ({
+      name: `helper-${i}`,
+      description: i % 2 === 0 ? 'Python utilities.' : 'Spreadsheet utilities.',
+      file: `/f${i}/SKILL.md`,
+    }))
+    const entries = [
+      ...filler,
+      {
+        name: 'orchestrator',
+        description: 'Coordinates agents; includes a python bridge.',
+        file: '/a/orch/SKILL.md',
+      },
+    ]
+
+    // Act
+    const selected = selectSkills(entries, ['python'])
+
+    // Assert
+    expect(selected.map((s: { name: string }) => s.name)).not.toContain('orchestrator')
   })
 
   test('honours the tuning override for partial credit', () => {
@@ -236,6 +308,111 @@ describe('selectSkills', () => {
     expect(withoutPartialCredit).toEqual([])
   })
 
+  test('does not stack name credit for the same word across several terms', () => {
+    // Arrange — four query terms share the word "review"; a skill whose only
+    // signal is "review" in its NAME must not outrank the skill whose
+    // description matches the actual phrase (the Q08 case: performance review
+    // cycle buried under ten *-review code skills).
+    const entries = [
+      { name: 'peer-review', description: 'Structured critique of code changes.', file: '/a/pr/SKILL.md' },
+      {
+        name: 'hr-recruiting',
+        description: 'Hiring pipelines, compensation banding, performance review cycles.',
+        file: '/a/hr/SKILL.md',
+      },
+    ]
+    const terms = ['performance review cycle', 'review process', 'manager review', 'self-assessment']
+
+    // Act
+    const ranked = rankCandidates(entries, terms)
+
+    // Assert
+    expect(ranked[0].name).toBe('hr-recruiting')
+  })
+
+  test('one shared word across two phrase terms is single evidence, not floor-clearing double', () => {
+    // Arrange — the noise skill's only overlap is the word "review", reached by
+    // two different phrase terms; that must count as ONE description hit, so it
+    // stays below the ≥2-hit floor while the true phrase match qualifies.
+    const filler = Array.from({ length: 600 }, (_, i) => ({
+      name: `python-tool-${i}`,
+      description: 'Python data analysis helper for tabular workflows.',
+      file: `/f${i}/SKILL.md`,
+    }))
+    const entries = [
+      ...filler,
+      { name: 'c-review', description: 'Deep review of C code for memory safety.', file: '/a/c/SKILL.md' },
+      {
+        name: 'hr-recruiting',
+        description: 'Hiring pipelines, compensation banding, performance review cycles.',
+        file: '/a/hr/SKILL.md',
+      },
+    ]
+    const terms = ['performance review cycle', 'review process', 'manager calibration', 'self-assessment']
+
+    // Act
+    const selected = selectSkills(entries, terms)
+    const names = selected.map((s: { name: string }) => s.name)
+
+    // Assert
+    expect(names).toContain('hr-recruiting')
+    expect(names).not.toContain('c-review')
+  })
+
+  test('an exact multi-word phrase outranks scattered word overlaps even when its words are common', () => {
+    // Arrange — every word of "performance review cycle" is corpus-common, so raw
+    // IDF deflates the exact match; compositional evidence must still win over
+    // two scattered single-word overlaps.
+    const filler = Array.from({ length: 200 }, (_, i) => ({
+      name: `helper-${i}`,
+      description: 'Covers performance topics, review workflow and cycle hygiene for tools.',
+      file: `/f${i}/SKILL.md`,
+    }))
+    const entries = [
+      ...filler,
+      {
+        name: 'code-checklist',
+        description: 'Code review checklist covering performance, accessibility and security.',
+        file: '/a/cc/SKILL.md',
+      },
+      {
+        name: 'people-ops',
+        description: 'Hiring pipelines, compensation banding, performance review cycles.',
+        file: '/a/po/SKILL.md',
+      },
+    ]
+    const terms = ['performance review cycle', 'manager calibration', 'self-assessment']
+
+    // Act
+    const ranked = rankCandidates(entries, terms)
+
+    // Assert
+    expect(ranked[0].name).toBe('people-ops')
+  })
+
+  test('scoring and floor attribution are independent of term order', () => {
+    // Codex review finding 2: a partial-phrase credit must not permanently
+    // block the full single-word name credit that a later term would earn.
+    const entry = { name: 'peer-review', description: 'Structured critique of changes.', file: '/x/SKILL.md' }
+    const forward = matchDetail(entry, ['performance review', 'review'])
+    const reversed = matchDetail(entry, ['review', 'performance review'])
+
+    expect(forward.score).toBe(reversed.score)
+    expect(forward.nameHits).toBe(reversed.nameHits)
+  })
+
+  test('duplicate index entries with the same name are selected only once', () => {
+    // Codex review finding 7: the live index carries duplicate names (xlsx, pptx…);
+    // selection must keep the strongest entry per name, not both.
+    const twins = [
+      { name: 'xlsx', description: 'Read and write Excel spreadsheets.', file: '/a/xlsx/SKILL.md' },
+      { name: 'xlsx', description: 'Excel spreadsheet toolkit for tabular data.', file: '/b/xlsx/SKILL.md' },
+    ]
+    const selected = selectSkills(twins, ['excel', 'spreadsheet'])
+
+    expect(selected.filter((s: { name: string }) => s.name === 'xlsx').length).toBe(1)
+  })
+
   test('matches a hyphenated skill name against a spaced phrase term', () => {
     const tdd = [
       { name: 'test-driven-development', description: 'Write tests first, then implement.', file: '/a/tdd/SKILL.md' },
@@ -249,6 +426,20 @@ describe('selectSkills', () => {
 })
 
 describe('stem', () => {
+  test('folds e-final plurals to the same stem as their singular', () => {
+    // "cycles" must meet "cycle" (Q08: 'performance review cycles' vs the term
+    // 'performance review cycle'); naive es-stripping produced "cycl" ≠ "cycle".
+    expect(stem('cycles')).toBe(stem('cycle'))
+    expect(stem('pipelines')).toBe(stem('pipeline'))
+    expect(stem('invoices')).toBe(stem('invoice'))
+    expect(stem('processes')).toBe(stem('process'))
+    expect(stem('boxes')).toBe('box')
+    expect(stem('branches')).toBe('branch')
+    // -oes plurals (Codex review finding 1): heroes must meet hero.
+    expect(stem('heroes')).toBe(stem('hero'))
+    expect(stem('potatoes')).toBe(stem('potato'))
+  })
+
   test('folds the morphological variants that cost real matches', () => {
     // Arrange / Act / Assert — "project management" must reach "project-manager"
     expect(stem('management')).toBe(stem('manager'))

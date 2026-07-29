@@ -199,6 +199,48 @@ describe('runScenarios', () => {
     expect(summary.avgSelected).toBeCloseTo(2 / 3)
     expect(summary.passed).toBe(2)
   })
+
+  test('reports MRR, per-scope recall, and expectNone false-positive rate', () => {
+    // dual-review IMP-C: one aggregate pass count hides ranking quality and
+    // per-domain gaps — the summary must expose MRR, per-scope recall, FP rate.
+    const miniIndex = [
+      { name: 'excel-helper', description: 'Excel spreadsheet processing toolkit.', file: '/x/SKILL.md' },
+      { name: 'sql-guide', description: 'SQL query and excel export patterns.', file: '/s/SKILL.md' },
+    ]
+    const metricScenarios = [
+      // hit at rank 1 → reciprocal rank 1
+      { id: 'A', scope: 'data', terms: ['excel', 'spreadsheet'], expectAny: ['excel-helper'] },
+      // hit at rank 2 → reciprocal rank 0.5 (sql-guide outranks on the sql term)
+      { id: 'B', scope: 'data', terms: ['sql', 'excel'], expectAny: ['excel-helper'] },
+      // miss → reciprocal rank 0, and scope "ops" recall 0/1
+      { id: 'C', scope: 'ops', terms: ['cobol mainframe'], expectAny: ['excel-helper'] },
+      // expectNone violated → counts into fpRate
+      { id: 'D', scope: 'ops', terms: ['excel', 'spreadsheet'], expectNone: ['excel-helper'] },
+      // expectNone respected
+      { id: 'E', scope: 'ops', terms: ['excel', 'spreadsheet'], expectNone: ['sql-guide'] },
+    ]
+
+    const summary = runScenarios(metricScenarios, miniIndex)
+
+    expect(summary.mrr).toBeCloseTo((1 + 0.5 + 0) / 3)
+    expect(summary.perScope).toEqual({
+      data: { passed: 2, total: 2 },
+      ops: { passed: 1, total: 3 },
+    })
+    expect(summary.fpRate).toBeCloseTo(1 / 2)
+  })
+
+  test('fpRate is null when no scenario carries expectNone', () => {
+    const miniIndex = [
+      { name: 'excel-helper', description: 'Excel spreadsheet processing toolkit.', file: '/x/SKILL.md' },
+    ]
+    const summary = runScenarios(
+      [{ id: 'A', scope: 'data', terms: ['excel', 'spreadsheet'], expectAny: ['excel-helper'] }],
+      miniIndex,
+    )
+
+    expect(summary.fpRate).toBeNull()
+  })
 })
 
 // Runs the full 30+ scope suite against the real built index. Skipped when the

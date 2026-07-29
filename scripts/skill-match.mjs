@@ -56,7 +56,10 @@ export function stem(token) {
 
 function depluralize(token) {
   if (token.length > 4 && token.endsWith('ies')) return `${token.slice(0, -3)}y`
-  if (token.length > 4 && token.endsWith('es') && !token.endsWith('ses')) return token.slice(0, -2)
+  // Strip 'es' only after sibilants and -o (boxes→box, branches→branch, processes→process,
+  // heroes→hero); e-final nouns keep their 'e' via the plain 's' rule (cycles→cycle,
+  // invoices→invoice) — stripping 'es' there produced stems ("cycl") the singular never reaches.
+  if (token.length > 4 && /(sses|ches|shes|xes|zes|oes)$/.test(token)) return token.slice(0, -2)
   if (token.length > 4 && token.endsWith('s') && !token.endsWith('ss')) return token.slice(0, -1)
   return token
 }
@@ -96,34 +99,51 @@ export function idfWeight(term, stats) {
 const phraseWeight = (phrase, stats) =>
   stats ? Math.max(...phrase.split(' ').map((word) => idfWeight(word, stats))) : 1
 
-function scorePartialPhrase(phrase, nameWords, descWords, stats, partialFactor) {
+// The same word reached by several terms ("performance review" + "review process")
+// is ONE piece of evidence, not two: word-level credit and hit attribution are
+// deduplicated per entry via `credited` ({ name: Set, desc: Set } of stemmed words).
+// Exact phrase matches are a different evidence class and are never deduplicated.
+function scorePartialPhrase(phrase, nameWords, descWords, stats, partialFactor, credited) {
   let score = 0
   let nameWordHits = 0
   let totalHits = 0
+  let maxMatchedWeight = 0
+  let minMatchedDescDf = Infinity
 
   for (const word of phrase.split(' ')) {
     if (word.length < MIN_TERM_LEN) continue
     const weight = idfWeight(word, stats)
     if (nameWords.has(word)) {
+      if (credited.name.has(word)) continue
+      credited.name.add(word)
       score += NAME_WORD * weight * partialFactor
       nameWordHits++
       totalHits++
+      maxMatchedWeight = Math.max(maxMatchedWeight, weight)
     } else if (descWords.has(word)) {
+      if (credited.desc.has(word)) continue
+      credited.desc.add(word)
       score += DESC_WORD * weight * partialFactor
       totalHits++
+      maxMatchedWeight = Math.max(maxMatchedWeight, weight)
+      minMatchedDescDf = Math.min(minMatchedDescDf, stats?.df.get(word) ?? Infinity)
     }
   }
 
-  return { score, nameWordHits, totalHits }
+  return { score, nameWordHits, totalHits, maxMatchedWeight, minMatchedDescDf }
 }
 
-function scoreWordTerm(term, stemmed, nameWords, descWords, descText, stats) {
+function scoreWordTerm(term, stemmed, nameWords, descWords, descText, stats, credited) {
   const weight = idfWeight(term, stats)
   if (nameWords.has(stemmed)) {
+    if (credited.name.has(stemmed)) return { score: 0, nameHits: 0, descHits: 0 }
+    credited.name.add(stemmed)
     return { score: NAME_WORD * weight, nameHits: 1, descHits: 0 }
   }
   if (descWords.has(stemmed)) {
-    return { score: DESC_WORD * weight, nameHits: 0, descHits: 1 }
+    if (credited.desc.has(stemmed)) return { score: 0, nameHits: 0, descHits: 0 }
+    credited.desc.add(stemmed)
+    return { score: DESC_WORD * weight, nameHits: 0, descHits: 1, descDf: stats?.df.get(stemmed) ?? Infinity }
   }
   const score = term.length >= MIN_TERM_LEN && descText.includes(term) ? SUBSTRING * weight : 0
   return { score, nameHits: 0, descHits: 0 }
@@ -146,13 +166,36 @@ export function matchDetail(entry, terms, stats = null, tuning = {}) {
   let nameHits = 0
   let phraseHits = 0
   let descHits = 0
+  let maxTermWeight = 0
+  let minDescDf = Infinity
   const matchedTerms = []
+  const credited = { name: new Set(), desc: new Set() }
 
+  // Order-independent evidence: drop duplicate terms, then score single words
+  // before phrases so a partial-phrase credit (×PARTIAL_FACTOR) can never block
+  // the full credit a single-word term earns for the same word.
+  const seen = new Set()
+  const orderedTerms = []
   for (const rawTerm of terms) {
+    const normalized = rawTerm.toLowerCase().trim()
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    orderedTerms.push(rawTerm)
+  }
+  orderedTerms.sort(
+    (a, b) => Number(/[-_/\s]/.test(a.trim())) - Number(/[-_/\s]/.test(b.trim())),
+  )
+
+  for (const rawTerm of orderedTerms) {
     const term = rawTerm.toLowerCase().trim()
     if (!term) continue
     const stemmed = stem(term)
     const scoreBeforeTerm = score
+
+    // Diagnostic weight of THIS term's match: for whole-phrase hits the phrase's
+    // rarest word, for partial/word hits only words that actually matched —
+    // an unmatched rare neighbor must not vouch for a generic matched word.
+    let termWeight = 0
 
     if (/[-_/\s]/.test(term)) {
       const phrase = stemPhrase(term)
@@ -162,26 +205,35 @@ export function matchDetail(entry, terms, stats = null, tuning = {}) {
       if (nameNorm.includes(phrase)) {
         score += (NAME_PHRASE + (phraseWords - 1) * DESC_PHRASE) * weight
         nameHits++
+        termWeight = weight
       } else if (descNorm.includes(phrase)) {
         score += (DESC_PHRASE + (phraseWords - 1) * DESC_WORD) * weight
         phraseHits++
+        termWeight = weight
       } else {
-        const partial = scorePartialPhrase(phrase, nameWords, descWords, stats, partialFactor)
+        const partial = scorePartialPhrase(phrase, nameWords, descWords, stats, partialFactor, credited)
         score += partial.score
         if (partial.nameWordHits >= 2) nameHits++
         else if (partial.totalHits >= 2) phraseHits++
         else if (partial.totalHits === 1) descHits++
+        termWeight = partial.maxMatchedWeight
+        minDescDf = Math.min(minDescDf, partial.minMatchedDescDf)
       }
     } else {
-      const wordMatch = scoreWordTerm(term, stemmed, nameWords, descWords, descText, stats)
+      const wordMatch = scoreWordTerm(term, stemmed, nameWords, descWords, descText, stats, credited)
       score += wordMatch.score
       nameHits += wordMatch.nameHits
       descHits += wordMatch.descHits
+      if (wordMatch.score > 0) termWeight = idfWeight(term, stats)
+      if (wordMatch.descDf !== undefined) minDescDf = Math.min(minDescDf, wordMatch.descDf)
     }
 
-    if (score > scoreBeforeTerm) matchedTerms.push(rawTerm)
+    if (score > scoreBeforeTerm) {
+      matchedTerms.push(rawTerm)
+      maxTermWeight = Math.max(maxTermWeight, termWeight)
+    }
   }
-  return { score, nameHits, phraseHits, descHits, matchedTerms }
+  return { score, nameHits, phraseHits, descHits, maxTermWeight, minDescDf, matchedTerms, corpusTotal: stats?.total ?? 0 }
 }
 
 /** Score one index entry against derived terms (higher = more relevant; 0 = no match). */
@@ -189,8 +241,26 @@ export function scoreEntry(entry, terms, stats = null, tuning = {}) {
   return matchDetail(entry, terms, stats, tuning).score
 }
 
-// A skill clears the relevance floor only with a name hit, phrase hit, or ≥2 description terms.
-const clearsFloor = (d) => d.nameHits > 0 || d.phraseHits > 0 || d.descHits >= 2
+// A single description hit qualifies only when the matched term is this diagnostic
+// (rare in the index). Calibrated on the 661-entry index: aov/nps/incoterms ≈ 2.32,
+// while generic-but-index-rare words (things=2.16, issue=2.04) stay below.
+export const DIAGNOSTIC_IDF = 2.2
+// IDF alone loosens as the index grows (at 2,000 entries df≤7 clears 2.2), so the
+// diagnostic relaxation ALSO requires absolute rarity: matched-word document
+// frequency within ~0.2% of the index (672 entries → df 1, 2,000 → df ≤ 4).
+export const DIAGNOSTIC_DF_RATIO = 0.002
+export const diagnosticDfCap = (total) => Math.max(1, Math.floor((total ?? 0) * DIAGNOSTIC_DF_RATIO))
+
+// A skill clears the relevance floor with a name hit, a phrase hit, ≥2 description
+// terms, or a single description hit on a highly diagnostic term — rare both
+// relatively (IDF) and absolutely (df cap), so index growth alone cannot relax it.
+const clearsFloor = (d) =>
+  d.nameHits > 0 ||
+  d.phraseHits > 0 ||
+  d.descHits >= 2 ||
+  (d.descHits >= 1 &&
+    d.maxTermWeight >= DIAGNOSTIC_IDF &&
+    d.minDescDf <= diagnosticDfCap(d.corpusTotal))
 
 // Selection is bounded by CONTEXT budget, not a fixed skill count: load every
 // relevant skill that fits within ~3% of a 200k-token window.
@@ -242,11 +312,16 @@ export function selectSkills(
 ) {
   const facets = normalizeFacets(termsOrFacets)
   const stats = buildDocFrequency(entries)
-  const rankFor = (terms) =>
-    entries
+  const rankFor = (terms) => {
+    const ranked = entries
       .map((entry) => ({ ...entry, ...matchDetail(entry, terms, stats, tuning) }))
       .filter((entry) => entry.score > 0 && clearsFloor(entry))
       .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    // The index can carry the same skill name from several roots (user copy +
+    // library copy): keep only the strongest entry per name.
+    const seenNames = new Set()
+    return ranked.filter((entry) => !seenNames.has(entry.name) && seenNames.add(entry.name))
+  }
 
   // Each facet gets its own share of the budget: on a combined term list a strong
   // facet crowds the weak one out of the ranking entirely (the "build a dashboard
