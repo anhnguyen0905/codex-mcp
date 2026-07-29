@@ -45,7 +45,10 @@ const readMarker = async (logPath: string): Promise<Record<string, unknown>> => 
   }
 }
 
-describe('createLiveView macOS command wrapper', () => {
+// These tests mock process.platform to 'darwin' but exercise real POSIX fs
+// behavior (0o755 permissions, shell metacharacters in temp-dir names) that
+// Windows cannot host — they run on the macOS and Linux CI jobs.
+describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrapper', () => {
   test('writes the tty export before the escaped exec command with executable permissions', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-command-'))

@@ -77,7 +77,9 @@ const runWatcher = (
 }
 
 describe('tail-progress watcher auto-exit', () => {
-  test('records a Darwin close command and exits 0 for a completed marker', async () => {
+  // Exercises the Darwin close path against real fs/process behavior Windows
+  // cannot host; covered by the macOS and Linux CI jobs.
+  test.skipIf(process.platform === 'win32')('records a Darwin close command and exits 0 for a completed marker', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-tail-'))
     tempDirs.push(dir)
     const logPath = join(dir, 'run.jsonl')
