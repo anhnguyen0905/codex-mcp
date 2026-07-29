@@ -5,9 +5,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-30
+
 ### Added
 
+- **15 new domain skills** shipped with the plugin (`skills/`): accounting-bookkeeping, financial-audit, personal-finance, sme-operations, hr-recruiting, sales-pipeline-crm, customer-support-ops, ecommerce-operations, legal-contract-basics, training-curriculum-design, real-estate-analysis, ux-research-wireframing, manufacturing-ops-planning, warehouse-operations, json-data-wrangling. Measured by ablation on the new 500-case scope suite: removing them drops the pass rate from 500/500 to 274/500 — these domains previously had zero retrievable coverage.
+- **500-case scope suite** (`tests/fixtures/scenarios-500.json`, `npm run skills:eval:scope`) extending the original 100 cases with 16 groups across SME ops, personal finance, accounting, financial audit, project management, UI/UX, HR, sales/CRM, customer support, e-commerce, legal, education, real estate, logistics, manufacturing, and cross-domain requests (~30% Vietnamese). Ambiguous-request cases encode the Step-2 contract (`terms: []` — classifier routes to ask-back instead of deriving terms).
+- **Frozen independent holdout** (`tests/fixtures/scenarios-holdout.json`, 100 cases authored by a separate agent that never saw the tuned suite; assertions are frozen). First measurement: 100/100, Hit@1 99.0%, MRR 0.995.
+- **Honest eval metrics** (dual-review IMP-3/IMP-4): reports now include MRR, per-scope recall, expectNone false-positive rate, and the sha256 of the exact index measured; `build-skills-index` warns about duplicate skill names across roots.
+- Step-2 facet table in `skills/skill-selection/SKILL.md` gains 9 facets (accounting/audit, personal finance, SME/ops, sales/support/CRM, HR, legal/compliance, education, real estate, logistics) so the runtime classifier has vocabulary for non-engineering requests.
 - **`.github/workflows/publish.yml`** — pushing a `v*` tag now publishes to npm automatically. Since 0.15.1 pins `.mcp.json` to a published version, a tagged release that was never published would point every plugin install at a package that does not exist, so publishing can no longer be a manual step someone forgets. The job re-checks that the tag matches `package.json`, runs the release-consistency gate against the tag tree, builds and tests, then publishes with `--provenance`. Auth is OIDC trusted publishing — no token is stored in the repo or in CI; a `NPM_TOKEN` secret is read only as a fallback if trusted publishing is not configured.
+
+### Fixed
+
+- **Six real matcher defects in `scripts/skill-match.mjs`**, each with a unit test — three found while building the suite, three found by an independent Codex review round: (1) `depluralize` over-stripped e-final plurals (`cycles→cycl` never met `cycle`; now sibilant-only 'es' stripping incl. `-oes`); (2) the same generic word in a skill NAME earned stacked credit across several query terms, letting ten `*-review` code skills bury `hr-recruiting` — word credit is now deduplicated per (field, word) and order-independent; (3) the ≥2-hit relevance floor blocked single hits on ultra-diagnostic terms (`Incoterms`, `AOV`, `NPS`) — a single description hit now qualifies when the matched word is rare both by IDF (≥2.2) and by document frequency (≤0.2% of the index, so index growth alone cannot relax the floor); (4) duplicate index names could be selected twice (`xlsx, xlsx`) — selection keeps the strongest entry per name; (5) a semantically wrong precision-guard rule was removed; (6) `financial-audit`'s control-deviation rule was softened to standard practice.
+- Suite results after the dual-review fixes: 500-case suite 500/500 with Hit@1 91.6%, MRR 0.946, expectNone FP 0/26; original 100-case suite 100/100 (regression-clean); full test suite 717 passing. Full reconciled evaluation: `.codex-flow/skill-selection-test/EVALUATION-FINAL.md` (local, untracked).
 
 ## [0.15.1] - 2026-07-27
 
