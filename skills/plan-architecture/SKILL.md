@@ -60,7 +60,31 @@ Use the full structure the flow executes against (all sections — the reviewer 
 ## Known-red baseline   — pre-existing test failures recorded in Phase 0 (so review blames only new ones)
 ## Out of scope        — things Codex must NOT do or touch
 ## Acceptance criteria — verifiable checks for the whole feature
-## Decision log        — empty, append-only; one line per passed task during execution
+## Decision log        — empty, append-only; after each task passes, append one block:
+### T<n> — <title>
+- Decision: <what was decided or deviated from the plan>
+- Why: <reason tied to a requirement/finding>
+- Constraint for later tasks: <what future tasks must respect> | —
+- Contracts touched: <signatures/shapes changed or confirmed> | —
+```
+
+After each task passes, append exactly one block using this schema. The log must let a FRESH Claude
+session resume from disk without the original conversation. Decisions without their constraints
+are not a handoff.
+
+The ONLY per-task writer is the post-review step: Phase 4 step 6 in sequential mode, or the
+coordinator after the wave merge in parallel mode. Review steps and worktree subagents provide
+their outcomes to that writer and never append a second task block.
+
+For wave integrations, the final review, and declined improvements, append one non-task event block
+using the same four fields with `T<n>` replaced by the event name:
+
+```markdown
+### <event> — <label>
+- Decision: <what was decided or what happened>
+- Why: <reason tied to a requirement/finding>
+- Constraint for later tasks: <what future tasks must respect> | —
+- Contracts touched: <signatures/shapes changed or confirmed> | —
 ```
 
 ## Design principles

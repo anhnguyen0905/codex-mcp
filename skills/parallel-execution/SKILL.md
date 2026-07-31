@@ -51,11 +51,13 @@ For each task in the wave (width > 1):
    synced filesystems such as OneDrive can fail concurrent creation with `mmap failed`. Use the
    `Agent` tool with `isolation: "worktree"`
    (or `EnterWorktree`). Each worktree is a distinct `cwd`. Branch point depends on the wave:
-   - **Wave 1**: branch from the Phase 0 baseline ref.
+   - **Wave 1**: branch from the CURRENT integration branch HEAD, which includes the Phase-2
+     `docs(agents)` commit.
    - **Wave N (N>1)**: branch from the CURRENT integration branch HEAD — i.e. only after wave
      N−1 has been merged and its wave integration review/tests passed (Step 3). Branching later
      waves off the baseline would run them on stale code missing earlier waves' merged output.
-   The Phase 0 baseline ref is kept for audit/rollback only — never as a branch point after wave 1.
+   The Phase 0 baseline ref is kept for audit, rollback, and the final-review diff only — never as
+   a worktree branch point.
 2. After creating each worktree, the coordinator MUST copy the untracked control files into it:
 
    ```bash
@@ -90,9 +92,12 @@ Because each `cwd` differs, the per-workspace concurrency guard allows all of th
 5. After merging the whole wave, run a **wave integration review**: full test suite on the merged
    result + a quick end-to-end probe. Branches never saw each other, so a green-in-isolation task
    can still break in combination — this pass is mandatory, not optional.
-6. Append merged outcomes to PLAN.md's Decision log, then compute the next wave (dependencies of
-   later tasks are now satisfied). The next wave's worktrees branch from the integration branch
-   HEAD as it stands now — post-merge, post-review — so they build on this wave's output.
+6. The coordinator is the only per-task Decision-log writer in parallel mode. For each passed task,
+   append one schema block (see `plan-architecture`), then append one wave-integration event block
+   using that skill's event schema. Follow `context-discipline` to declare the safe wave-boundary
+   compaction point, then compute the next wave (dependencies of later tasks are now satisfied).
+   The next wave's worktrees branch from the integration branch HEAD as it stands now — post-merge,
+   post-review — so they build on this wave's output.
 
 ## Step 4 — Final integration
 

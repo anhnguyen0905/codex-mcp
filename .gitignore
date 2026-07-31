@@ -8,11 +8,8 @@ dist/
 coverage/
 .vitest/
 
-# Codex Flow live progress logs
-**/.codex-flow/live/
-**/.codex-flow/reports/
-**/.codex-flow/*.log
-**/.codex-flow/session.txt
+# Codex Flow local control artifacts
+**/.codex-flow/
 
 # Example project (fb-video-crawler) artifacts
 fb-video-crawler/.venv/

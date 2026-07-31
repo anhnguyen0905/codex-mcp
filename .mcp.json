@@ -1,3 +1,12 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "codex": {
+      "_note": "Runs the published npm tarball, which ships a prebuilt dist/ — no clone-time build, so a fresh plugin install connects immediately. The version is pinned deliberately: @latest would let a plugin release drift onto a server build it was never tested against. scripts/check-release-consistency.mjs enforces that this pin matches package.json. Dev note: to test local source instead, override with `claude mcp add-json -s local codex '{\"command\":\"node\",\"args\":[\"dist/index.js\"]}'` after `npm run build`.",
+      "command": "npx",
+      "args": ["-y", "@anhnguyen0905/codex-mcp@0.17.0"],
+      "env": {
+        "CODEX_MCP_TERMINAL": "1"
+      }
+    }
+  }
 }

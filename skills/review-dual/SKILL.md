@@ -33,7 +33,8 @@ Tag non-blocking suggestions IMP-1, IMP-2, ...: worthwhile refactors, better nam
 - Verify EVERY finding with evidence: read the code and run the relevant test. Let the evidence determine the verdict, not the reviewer.
 - Feed verified findings into the normal `mcp__codex__codex_continue` round per review-feedback severity rules (CRITICAL/HIGH always; MEDIUM/LOW piggyback only).
 - Use AskUserQuestion ONLY when a CRITICAL/HIGH finding cannot be verified either way, or two mutually exclusive valid fixes exist.
-- Record the outcome as one line in `.codex-flow/PLAN.md`'s Decision log: counts for each bucket plus the resolution.
+- Give the verified outcome, including counts for each bucket and the resolution, to the single
+  post-review Decision-log writer defined in `plan-architecture`; do not append from this review step.
 - If `mcp__codex__codex_review` fails, times out, or returns status `partial`, proceed with Claude-only review, tell the user, and do not auto-retry because of quota.
 
 ## Improvements ledger
@@ -50,4 +51,5 @@ The ledger NEVER blocks marking a task done and NEVER spends an `mcp__codex__cod
 - After the final whole-feature review, compile those entries into a summary and proposed execution plan, grouped and effort-estimated, then present it via AskUserQuestion.
 - Slice approved items into new tasks and append them to `.codex-flow/TASKS.md`. Mark each approved ledger line `(approved: T<n>)` when its task is created, then check it off when the task passes review.
 - Run approved tasks through the normal Phase 4 → Phase 5 loop. Improvement tasks spawned by the gate do NOT re-trigger the decision gate themselves.
-- Record declined items in `.codex-flow/PLAN.md`'s Decision log and check off each ledger line with `(declined)`.
+- Have the orchestrator record declined items once using `plan-architecture`'s non-task event-block
+  schema, then check off each ledger line with `(declined)`.

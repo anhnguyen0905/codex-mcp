@@ -60,10 +60,10 @@ or ambiguous feature warrants the full elicitation. When in doubt, ask.
 
 ## Phase 2 — Plan & Architecture (Claude)
 
-**Load skills first**: `codex-flow:plan-research-first` (search existing solutions before designing), `codex-flow:plan-architecture` (convention discovery, option trade-off analysis, PLAN.md structure), and `codex-flow:skill-selection` (pick domain skills from the local skill index).
+**Load skills first**: `codex-flow:plan-research-first` (search existing solutions before designing), `codex-flow:plan-architecture` (convention discovery, option trade-off analysis, PLAN.md structure), `codex-flow:skill-selection` (pick domain skills from the local skill index), and `codex-flow:context-discipline` (Explore subagents, boundary compaction, tiered AGENTS.md).
 Also load `codex-flow:session-report` (report templates and PIC rules).
 
-1. Explore the codebase to understand relevant architecture and conventions.
+1. Explore the codebase through Explore subagents per `codex-flow:context-discipline` to return conclusions with paths and line anchors.
 2. **Select domain skills from the local index** per `codex-flow:skill-selection`: derive search
    terms from the confirmed requirements + acceptance criteria + stack, grep the index, load every relevant skill that fits a
    ~3%-of-context budget (≈6000 tokens; no fixed count) and concretely changes the plan or the
@@ -104,7 +104,12 @@ Also load `codex-flow:session-report` (report templates and PIC rules).
    - **Session report**: path of the report dir and exact session-start ISO 8601 value
    - **Decision log**: empty, append-only — filled during execution
 4. Show the plan to the user and get approval before continuing.
-5. After approval, write `planning.md` to the report dir per `codex-flow:session-report`. Under a
+5. After approval, generate/update tiered AGENTS.md per `codex-flow:context-discipline`: root plus
+   each package in the approved PLAN.md **Component → files** map whose conventions differ from
+   root; make additive-only changes. Before Phase 3, commit all AGENTS.md creations/updates as
+   `docs(agents): update AGENTS.md guidance` so sequential runs and parallel worktrees branch from
+   HEAD with the guidance and a clean tracked baseline.
+6. After approval, write `planning.md` to the report dir per `codex-flow:session-report`. Under a
    `## Session report` heading in PLAN.md, record `- Report dir: <report dir>` and
    `- Session start: <ISO 8601>`.
 
@@ -157,9 +162,9 @@ After backlog approval, write `allocation.md` (task → PIC table) to the report
 
 ## Phase 4 — Execution (Codex)
 
-**Load skills first (code tasks)**: `codex-flow:exec-coding-standards` and `codex-flow:exec-self-testing` (blocks to embed into every Codex prompt), plus the language skill matching the project: `codex-flow:exec-typescript`, `codex-flow:exec-python`, `codex-flow:exec-go`, `codex-flow:exec-jvm` (Java/Kotlin), `codex-flow:exec-rust`, `codex-flow:exec-csharp`, `codex-flow:exec-php`, `codex-flow:exec-ruby`, `codex-flow:exec-swift`, or `codex-flow:exec-cpp` (C/C++). If the project's language has no exec skill, use `codex-flow:exec-coding-standards` alone plus any language guidance from the skill index. Codex cannot see Claude's skills — the prompt is the only channel, so these standards blocks MUST be embedded in the prompt text.
+**Load skills first (code tasks)**: `codex-flow:exec-coding-standards` and `codex-flow:exec-self-testing` (blocks to embed into every Codex prompt), `codex-flow:context-discipline` (no-raw-read, task-boundary compaction), plus the language skill matching the project: `codex-flow:exec-typescript`, `codex-flow:exec-python`, `codex-flow:exec-go`, `codex-flow:exec-jvm` (Java/Kotlin), `codex-flow:exec-rust`, `codex-flow:exec-csharp`, `codex-flow:exec-php`, `codex-flow:exec-ruby`, `codex-flow:exec-swift`, or `codex-flow:exec-cpp` (C/C++). If the project's language has no exec skill, use `codex-flow:exec-coding-standards` alone plus any language guidance from the skill index. Codex cannot see Claude's skills — the prompt is the only channel, so these standards blocks MUST be embedded in the prompt text.
 
-**Non-code tasks**: when a task produces content instead of code (data analysis, marketing copy, docs, research, a plan), load `codex-flow:exec-deliverable` INSTEAD of `exec-coding-standards` + `exec-self-testing` + the language skill, and embed its deliverable + verification blocks. A mixed backlog picks per task: code tasks get the coding blocks, content tasks get the deliverable block. The selected domain skills (from Phase 2) are embedded either way.
+**Non-code tasks**: when a task produces content instead of code (data analysis, marketing copy, docs, research, a plan), load `codex-flow:exec-deliverable` INSTEAD of `exec-coding-standards` + `exec-self-testing` + the language skill, and embed its deliverable + verification blocks. A mixed backlog picks per task: code tasks get the coding blocks, content tasks get the deliverable block. The selected domain skills (from Phase 2) are embedded either way. `codex-flow:context-discipline` still applies either way.
 
 **Sequential vs parallel**: always run
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/task-waves.mjs" .codex-flow/TASKS.md` to compute execution
@@ -194,18 +199,18 @@ For each task in dependency order (sequential mode):
 3. **Save the returned `sessionId`** — reviews in Phase 5 go back into this session. Reuse one session (`codex_continue`) while consecutive tasks build on each other in the SAME domain; start a fresh `codex_execute` when a task is independent OR shifts domain (e.g. backend → data pipeline → marketing copy) — a fresh session gets the new task's distilled skill blocks instead of inheriting stale context from the previous domain.
 4. Update the task's Status in TASKS.md and TaskUpdate after each run.
 5. Run Phase 5 review for the task BEFORE starting the next one.
-6. When the task passes review: append one line to PLAN.md's **Decision log** (deviations from the
+6. When the task passes review, act as the only per-task writer in sequential mode: append one schema block (see plan-architecture / PLAN.md Contracts) to PLAN.md's **Decision log** (deviations from the
    plan, decisions made, surprises) so later tasks and fresh Codex sessions inherit the context —
    and, if the user opted in at Phase 3, make the checkpoint commit
    (`wip(codex-flow): T<n> <title>`).
 
 ## Phase 5 — Review (Claude, per task + final)
 
-**Load skills first**: `codex-flow:review-conformance` (requirement/plan/structure conformance — check FIRST), `codex-flow:review-quality` (correctness hazards, silent failures, test quality), `codex-flow:review-security` (mandatory when the diff touches auth, input, queries, files, or secrets), `codex-flow:review-feedback` (severity levels + codex_continue format), and `codex-flow:review-dual` (dual Codex+Claude review, comparison protocol, improvements ledger + decision gate).
+**Load skills first**: `codex-flow:review-conformance` (requirement/plan/structure conformance — check FIRST), `codex-flow:review-quality` (correctness hazards, silent failures, test quality), `codex-flow:review-security` (mandatory when the diff touches auth, input, queries, files, or secrets), `codex-flow:review-feedback` (severity levels + codex_continue format), `codex-flow:review-dual` (dual Codex+Claude review, comparison protocol, improvements ledger + decision gate), and `codex-flow:context-discipline` (no-raw-read, task-boundary compaction).
 Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews.md`, `cost.md`, and `SUMMARY.md`).
 
 0. Re-read `.codex-flow/PLAN.md` and this task's entry in `.codex-flow/TASKS.md` before reviewing — treat the files on disk as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline, not session memory (which may have been compacted across a long backlog).
-1. Inspect what Codex did: use the `diff` field returned by the tool (git status + patch), and read changed files where the patch is not enough.
+1. Inspect what Codex did: use the `diff` field returned by the tool (git status + patch), and read changed files where the patch is not enough. For diffs over 400 lines, follow `codex-flow:context-discipline` no-raw-read rules: get a subagent summary, then read only targeted critical hunks.
 2. Review in order: conformance → quality → security, per the loaded skills.
 3. Run the project's tests/build yourself to verify — Codex's claim is input, not evidence. Compare
    failures against the **known-red baseline** in PLAN.md: only new failures count against the task.
@@ -227,12 +232,21 @@ Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews
 6. **Plan drift**: if a finding traces to the PLAN being wrong (wrong architecture, missed
    requirement) rather than Codex mis-implementing it, do NOT burn review rounds — go back to
    Phase 2, amend PLAN.md with user approval, re-slice the affected tasks, then resume.
-7. **If clean**: mark the task done, move to the next task.
+7. **If clean**: mark the task done.
    Also append this task's section to the report dir's `tasks.md` per
    `codex-flow:session-report`; when a task is dropped or abandoned, record it with
    `Result: dropped` at the moment of that decision.
    For a passed task, at the same time append its dual-review record to the report dir's
    `reviews.md` per `codex-flow:session-report`.
+   **Sequential mode**: return to Phase 4 step 6 to append one schema block (see plan-architecture /
+   PLAN.md Contracts) to the Decision log and, if enabled, make the checkpoint commit. Once the
+   Decision log block and any enabled checkpoint commit are on disk, verify the durable state,
+   tell the user this is a safe compaction point, and suggest running `/compact`; with state on
+   disk, an auto-compaction landing at or after the boundary is lossless. Then move to the next task.
+   **Parallel mode**: follow `codex-flow:parallel-execution`'s wave workflow: always commit each
+   passed worktree task; after the wave merge and passing integration review, the coordinator
+   appends the schema blocks, verifies durable state, tells the user this is a safe compaction
+   point, and suggests running `/compact`. An auto-compaction at or after that boundary is lossless.
 8. **After the last task**: do a whole-feature dual review — Claude's pass PLUS a required
    `mcp__codex__codex_review`, passing the Phase-0 `baselineRef` so the review covers
    `baseline..HEAD`, including checkpoint/merge commits, plus current uncommitted changes. If
@@ -247,7 +261,8 @@ Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews
    per-task checkpoint commits were made, offer to squash the `wip(codex-flow)` commits into one
    clean commit (or keep them — user's call). Do not commit or squash unless the user asks.
    After the whole-feature dual review resolves, record its final comparison in the report dir's
-   `reviews.md` per `codex-flow:session-report`.
+   `reviews.md` per `codex-flow:session-report`, and record it once in the Decision log using the
+   non-task event-block schema from `codex-flow:plan-architecture`.
 9. **Improvement decision gate**: consider only unchecked entries without an
    `(approved: T<n>)` marker in `.codex-flow/IMPROVEMENTS.md` as pending. If the ledger is missing
    or has no unchecked pending entries, skip AskUserQuestion and note "no improvements" in the
@@ -256,8 +271,9 @@ Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews
    Slice approved items into new tasks appended to `.codex-flow/TASKS.md`; when each task is
    created, mark its ledger line `(approved: T<n>)`, and check it off when the task passes review.
    Execute those tasks through the normal Phase 4 → Phase 5 loop, but do not re-trigger this
-   decision gate for improvement tasks spawned by the gate. Record declined items in
-   `.codex-flow/PLAN.md`'s Decision log and check off their ledger lines with `(declined)`.
+   decision gate for improvement tasks spawned by the gate. Record declined items once in
+   `.codex-flow/PLAN.md`'s Decision log using the non-task event-block schema from
+   `codex-flow:plan-architecture`, and check off their ledger lines with `(declined)`.
    After the improvement decision gate has fully resolved — all approved improvement tasks have
    been executed and reviewed, or no improvements are pending — and just before delivering the
    final summary, generate `cost.md` from the project root. Read `<session-start ISO>` from PLAN.md's

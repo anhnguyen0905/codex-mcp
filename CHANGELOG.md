@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-31
+
+### Added
+
+- **New `context-discipline` skill** — enforces orchestrator no-raw-read thresholds, phase-boundary compaction, and tiered additive-only `AGENTS.md` generation.
+- **Handoff-grade Decision log schema** — replaces one-line entries with four required fields: Decision, Why, Constraint for later tasks, and Contracts touched.
+- **Command integration across Phases 2, 4, and 5** — loads context discipline throughout planning, execution, and review, including explicit sequential-vs-parallel boundary rules.
+- **`tests/flowDocs.test.ts` structure guard** — validates the command and skill documentation contracts and keeps the command mirror byte-identical.
+
 ## [0.16.0] - 2026-07-30
 
 ### Added
