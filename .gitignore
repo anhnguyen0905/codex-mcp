@@ -41,3 +41,5 @@ id_rsa*
 **/auth.json
 credentials*.json
 **/.claude/worktrees/
+
+.codex-flow/live/
