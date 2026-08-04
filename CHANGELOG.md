@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-04
+
+### Added
+
+- **New `exec-visualization` skill** — routes chart/graph tasks to [microsoft/flint-chart](https://github.com/microsoft/flint-chart) (rendering PNG/SVG) via a capability ladder (flint-chart MCP tools → `npx flint-chart` CLI → Python matplotlib as a last resort), instead of ad-hoc Python plotting. The token is wired into Phase 4 of the command (with a byte-identical `.claude` mirror) so chart-producing tasks load it, and the README documents optional `flint-chart-mcp` setup for the Codex CLI and Claude.
+
 ## [0.17.0] - 2026-07-31
 
 ### Added
