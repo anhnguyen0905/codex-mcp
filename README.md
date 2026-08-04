@@ -53,6 +53,29 @@ claude mcp add --scope user codex -- npx -y github:anhnguyen0905/codex-mcp
 command, or just use the plugin install above which bundles both.
 </details>
 
+### Optional: flint-chart-mcp
+
+codex-flow routes chart and graph tasks to flint-chart (Microsoft Research) via the
+`codex-flow:exec-visualization` skill, rendering polished PNG/SVG charts instead of using ad-hoc
+Python plotting.
+
+Register the server with the Codex CLI in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.flint-chart]
+command = "npx"
+args = ["-y", "flint-chart-mcp"]
+```
+
+Register it with Claude:
+
+```bash
+claude mcp add flint-chart -- npx -y flint-chart-mcp
+```
+
+This setup is optional; when the server is not present, the `exec-visualization` skill degrades to
+a fallback.
+
 <details>
 <summary>Troubleshooting: <code>Failed to reconnect to Plugin:codex-flow:codex: -32000</code></summary>
 
@@ -124,7 +147,7 @@ node scripts/sync-awesome-skills.mjs --clone   # build a local library from awes
 node scripts/build-skills-index.mjs            # → ~/.claude/skill-library/INDEX.md
 ```
 
-Besides the phase skills, the plugin ships 15 domain skills authored through Step 7 — paid media,
+Besides the phase skills, the plugin ships 16 domain skills authored through Step 7 — paid media,
 unit economics, media planning, warehouse modeling, event taxonomy, attribution, causal inference,
 survey design, ASO, localisation, OKRs, creative briefs, influencer strategy, SOPs and data-quality
 checks — so they are indexed and selectable out of the box. Their numeric thresholds are labelled *derived, unverified*: replace them with your
