@@ -3,6 +3,31 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.19.1] - 2026-08-07
+
+### Added
+
+- **Context-grounded skill authoring** — when local skills cannot serve a plan facet (missing OR
+  loaded-but-insufficient), the flow now authors a skill grounded in the run's own context instead
+  of a generic one:
+  - **Sufficiency verdict** — a facet whose loaded skills do not cover its requirements records a
+    machine-checkable `INSUFFICIENT → AUTHOR (gap: R<n>.<m>, …)` (or `→ VET`) qualifier in PLAN.md's
+    Skills plan (skill-selection Step 5 sufficiency check; command Phases 2 and 3) and escalates to
+    Step 7 for the missing part only.
+  - **`scripts/skill-brief.mjs`** — generates `.codex-flow/SKILL-BRIEF-<facet>.md` from
+    REQUIREMENTS.md + PLAN.md (`--facet`/`--rids` carry the verdict's gap R-IDs; 2000-token budget
+    with whole-item drops and a restorable pointer; degraded inputs warn at exit 0; symlink-rejecting
+    atomic writes).
+  - **Brief-first Step 7d with a fixed order** — brief → author (staged in
+    `<library>/quarantine/authored/`, never indexed) → lint → one batched AskUserQuestion approval →
+    promote → index/load. Rejected skills stay quarantined and are never loaded.
+  - **`scripts/skill-lint.mjs`** — mechanical gate for authored skills: frontmatter (single-line
+    literal description, no YAML block scalars), a `Serves: <facet> — R<n>.<m>` line, required
+    sections (Core method / Failure modes / Reviewer checklist / Provenance), per-section provenance
+    labels (`Source:` or `derived, unverified`), fence-aware parsing (``` and ~~~).
+  - Both scripts ship in `files[]`; `tests/flowDocs.test.ts` guards the new contract wording with
+    section-scoped full-literal assertions. Suite grows 884 → 939 tests.
+
 ## [0.19.0] - 2026-08-07
 
 ### Added

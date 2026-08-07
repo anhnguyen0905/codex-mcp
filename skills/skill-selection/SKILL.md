@@ -163,6 +163,7 @@ user before Phase 4. Exactly three verdicts exist:
   This is a Step 5 job, never a gap; the verdict is not final until it becomes `LOAD` or the
   candidate fails its vet.
 - **`AUTHOR`** — no adoptable skill exists: name the skill to be written and hand off to Step 7c/7d.
+  Apply it to missing scope — including a partial gap recorded by the sufficiency check below.
 
 Rules:
 
@@ -175,6 +176,20 @@ Rules:
   example). A wrong-domain skill is worse than none, because its rules get embedded into a Codex
   prompt. Demote it to `AUTHOR` rather than claim coverage.
 - **Record the verdict in PLAN.md under Skills plan**, per facet, so review can check it.
+
+### Step 5 sufficiency check — loaded is not the same as covered
+
+After resolving `LOAD`, compare the loaded skills' stated coverage with the facet's requirements
+and acceptance criteria. A loaded-but-insufficient facet is never a silent pass:
+
+- Record `INSUFFICIENT → AUTHOR (gap: R<n>.<m>, …)` in PLAN.md's **Skills plan** when no
+  adoptable skill covers the missing part. Name every uncovered R-ID or facet aspect so the new
+  skill's scope is pinned before writing.
+- Record `INSUFFICIENT → VET (gap: R<n>.<m>, …)` when an unvetted candidate covers the missing
+  part. Vet that candidate through Step 5.
+- Treat `INSUFFICIENT` as a qualifier, not a fourth verdict. Keep the final verdict as exactly one
+  of `LOAD`, `VET`, or `AUTHOR`; retain loaded skills for what they cover and escalate only the
+  missing part to Step 7.
 
 ## Step 6 — Embed for Codex (per task, stateless)
 
@@ -192,6 +207,8 @@ Codex has no skill system — it sees only the prompt and files on disk. Per tas
 A facet the plan depends on must not reach Phase 4 empty. "0 matches" is a normal outcome of
 *matching*; it is never an acceptable outcome of *selection*. When a facet has no loadable skill
 after Steps 4–5, work down this ladder and stop at the first success:
+A facet may also arrive here loaded-but-insufficient — the sufficiency check's recorded gap
+defines what is missing, and 7d authors ONLY that gap.
 
 **7a — Look again locally before concluding anything is missing.**
 The index can be stale or the terms wrong. Rebuild it (Step 1), then re-grep with the facet's
@@ -211,8 +228,21 @@ Found a skill → vet + promote out of quarantine (Step 5), rebuild the index, l
 
 **7d — Nothing to adopt? Author the skill NOW, before execution.**
 Do not defer to the retro and do not hand Codex a bare prompt. Write
+the first draft to `<library>/quarantine/authored/<skill-name>/SKILL.md`; quarantine is never
+indexed, so the skill cannot enter selection before approval. Do not write it into the trusted
+library until promotion. The promoted file must be a
 `<library>/<skill-name>/SKILL.md` containing what a competent practitioner of that domain would
 insist on, grounded in what 7c actually turned up:
+
+Before writing the skill, first generate the authoring brief:
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-brief.mjs" --facet <facet> --rids <gap R-IDs>`
+Multiword `--facet` values must be quoted; the output filename uses the facet slug (lowercase,
+spaces→`-`, other characters stripped).
+Pass the R-IDs recorded in the verdict (`AUTHOR (gap: …)` / `INSUFFICIENT → AUTHOR (gap: …)`)
+as `--rids`; omit `--rids` only when no gap IDs were recorded.
+Write the skill against `.codex-flow/SKILL-BRIEF-<facet>.md` and use the project's terminology
+from that brief. The authored skill must cite the R-IDs it serves with a
+`Serves: <facet> — R<n>.<m>, …` line.
 
 - frontmatter `name` + one-line `description` (so the index can match it next time)
 - the domain's core method/steps, the metrics or formulas that matter, and their definitions
@@ -222,8 +252,24 @@ insist on, grounded in what 7c actually turned up:
 - **provenance**: cite the sources 7c produced; mark anything you reasoned out yourself as
   "derived, unverified" so the reviewer knows what to check
 
-Then rebuild the index and load it like any other trusted local skill. It now exists for every
-later flow — this is how the library grows toward the work actually being done.
+Apply provenance per rule: a rule grounded in a 7c source cites it with `Source:`; a rule reasoned
+out without a source is labeled `derived, unverified`.
+
+Before indexing, loading, or embedding the authored skill, run
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-lint.mjs" <SKILL.md path>` and require it to pass. Present
+all skills authored in the run for user approval in one batched AskUserQuestion, and obtain that
+approval before Codex builds on them.
+The order is fixed: brief → author → lint → one batched approval → only then rebuild the index and
+load/embed — indexing or loading an authored skill before its approval is a defect.
+
+On approval, move `<library>/quarantine/authored/<skill-name>/SKILL.md` to
+`<library>/<skill-name>/SKILL.md`, then rebuild the index and load it. On rejection, leave the skill
+in quarantine, where it is never indexed, and check off its ledger line as `(declined)`.
+
+Once promoted, rebuild the index and load it like any other trusted local skill. It now exists for
+every later flow — this is how the library grows toward the work actually being done. If rejected,
+return the facet to Step 7c/7e — search again, or proceed with the honest gap disclosed to the user;
+never load a rejected skill.
 
 **7e — Bound the effort, and be honest about what you produced.**
 Cap 7c at 2 search rounds and 7d at one authored skill per facet. If the domain is genuinely

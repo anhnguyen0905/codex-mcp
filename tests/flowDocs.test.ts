@@ -10,6 +10,7 @@ const PLAN_ARCHITECTURE_PATH = path.join(REPO_ROOT, 'skills', 'plan-architecture
 const PLAN_BACKLOG_PATH = path.join(REPO_ROOT, 'skills', 'plan-backlog', 'SKILL.md')
 const REVIEW_DUAL_PATH = path.join(REPO_ROOT, 'skills', 'review-dual', 'SKILL.md')
 const PREFLIGHT_PATH = path.join(REPO_ROOT, 'skills', 'preflight', 'SKILL.md')
+const SKILL_SELECTION_PATH = path.join(REPO_ROOT, 'skills', 'skill-selection', 'SKILL.md')
 const INTERVIEW_ELICITATION_PATH = path.join(
   REPO_ROOT,
   'skills',
@@ -106,10 +107,21 @@ function extractPhaseSection(command: string, phaseNumber: number): string {
   }
 
   const remainingCommand = command.slice(bodyStart + 1)
-  const nextHeadingOffset = remainingCommand.search(/^## /m)
+  const nextHeadingOffset = findUnfencedH2Offset(remainingCommand)
   const phaseEnd = nextHeadingOffset === -1 ? command.length : bodyStart + 1 + nextHeadingOffset
 
   return command.slice(phaseStart, phaseEnd)
+}
+
+function findUnfencedH2Offset(markdown: string): number {
+  let insideFence = false
+  let offset = 0
+  for (const line of markdown.split('\n')) {
+    if (/^\s*```/.test(line)) insideFence = !insideFence
+    else if (!insideFence && /^## /.test(line)) return offset
+    offset += line.length + 1
+  }
+  return -1
 }
 
 function extractLoadSkillsText(phaseSection: string, phaseNumber: number): string {
@@ -584,6 +596,69 @@ describe('parallel-execution worktree branch points', () => {
     expect(skill).toContain(
       'The security review is mandatory when the expansion touches auth, input, queries, files, or secrets.',
     )
+  })
+})
+
+describe('sufficiency check and brief-grounded authoring contract', () => {
+  test('requires loaded-skill sufficiency checks and brief-grounded skill authoring', () => {
+    const skill = readText(SKILL_SELECTION_PATH)
+    const step7dStart = skill.indexOf('**7d — Nothing to adopt? Author the skill NOW, before execution.**')
+    const step7eStart = skill.indexOf('**7e — Bound the effort, and be honest about what you produced.**')
+    const step8Start = skill.indexOf('## Step 8 — Register back (retro, after final review)')
+    const step7d = skill.slice(step7dStart, step7eStart)
+    const step7dToStep8 = skill.slice(step7dStart, step8Start).replace(/\s+/g, ' ')
+    const normalizedStep7d = step7d.replace(/\s+/g, ' ')
+
+    expect(skill).toMatch(/^### Step 5 sufficiency check — loaded is not the same as covered$/m)
+    expect(skill).toContain('INSUFFICIENT → AUTHOR')
+    expect(step7dStart).toBeGreaterThanOrEqual(0)
+    expect(step7eStart).toBeGreaterThan(step7dStart)
+    expect(step8Start).toBeGreaterThan(step7eStart)
+    expect(step7d).toContain('scripts/skill-brief.mjs')
+    expect(normalizedStep7d).toContain(
+      'node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-brief.mjs" --facet <facet> --rids <gap R-IDs>',
+    )
+    expect(step7d).toContain('SKILL-BRIEF-')
+    expect(normalizedStep7d).toContain('must cite the R-IDs it serves')
+    expect(step7dToStep8).toContain('scripts/skill-lint.mjs')
+    expect(step7dToStep8).toContain('one batched AskUserQuestion')
+    expect(normalizedStep7d).toContain('brief → author → lint → one batched approval')
+    expect(normalizedStep7d).toContain('quarantine/authored')
+  })
+
+  test('wires loaded-but-insufficient authoring into Phase 2 step 2', () => {
+    const phaseSection = extractPhaseSection(readText(COMMAND_PATH), 2)
+    const step = extractNumberedStep(phaseSection, 2).replace(/\s+/g, ' ')
+
+    expect(step).toContain('INSUFFICIENT → AUTHOR (gap: R<n>.<m>, …)')
+    expect(step).toContain('skill-brief.mjs')
+    expect(step).toContain(
+      'node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-brief.mjs" --facet <facet> --rids <gap R-IDs>',
+    )
+    expect(step).toContain('skill-lint.mjs')
+    expect(step).toContain('one batched AskUserQuestion')
+    expect(step).toContain('loaded-but-insufficient is never a silent pass')
+    expect(step).toContain('brief → author → lint → one batched approval')
+    expect(step).toContain('quarantine/authored')
+  })
+
+  test('requires brief-first authoring before Phase 3 execution', () => {
+    const command = readText(COMMAND_PATH)
+    const phaseStart = command.indexOf('## Phase 3 — Backlog (Claude)')
+    const phaseEnd = command.indexOf('## Phase 4 — Execution (Codex)')
+    const phaseSection = extractPhaseSection(command, 3).replace(/\s+/g, ' ')
+
+    expect(phaseStart).toBeGreaterThanOrEqual(0)
+    expect(phaseEnd).toBeGreaterThan(phaseStart)
+    expect(phaseSection).toContain('Creation is brief-first')
+    expect(phaseSection).toContain('skill-brief.mjs')
+    expect(phaseSection).toContain(
+      'node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-brief.mjs" --facet <facet> --rids <gap R-IDs>',
+    )
+    expect(phaseSection).toContain('skill-lint.mjs')
+    expect(phaseSection).toContain('one batched AskUserQuestion')
+    expect(phaseSection).toContain('brief → author → lint → one batched approval')
+    expect(phaseSection).toContain('quarantine/authored')
   })
 })
 

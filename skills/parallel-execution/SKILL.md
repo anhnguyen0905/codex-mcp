@@ -116,6 +116,9 @@ Because each `cwd` differs, the per-workspace concurrency guard allows all of th
    `wip(codex-flow): T<n> <title>`, regardless of the Phase-3 checkpoint-commit choice. This commit
    is required to transport the work back and can be squashed at delivery; exclude the copied
    `.codex-flow` control files. Only then does the subagent report the branch ready to merge.
+   - Task commits MUST stage explicit paths (never `git add -A`) because coordinator-owned
+     worktree artifacts — the `node_modules` symlink and copied `.codex-flow` control files — can
+     escape gitignore rules. A symlink named `node_modules` is not matched by `node_modules/`.
 4. Before merging each worktree, the coordinator diffs the worktree's actual changed files against
    the task's declared `Files:`. Any expansion — a changed file outside that declaration, excluding
    generated lockfiles explicitly listed as shared — stops the wave. As the FIRST step of this

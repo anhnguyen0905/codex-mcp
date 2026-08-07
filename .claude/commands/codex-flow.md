@@ -121,6 +121,26 @@ Also load `codex-flow:session-report` (report templates and PIC rules).
    indexed candidates being vetted now), or `AUTHOR` (named skill to write via Step 7c/7d) — stated
    in PLAN.md *Skills plan* and to the user. Prose like "no relevant skills found" is not a verdict,
    and a `LOAD` verdict may not name a skill whose stated purpose does not match the facet.
+   A facet whose loaded skills do not cover its requirements and acceptance criteria must record
+   `INSUFFICIENT → AUTHOR (gap: R<n>.<m>, …)` (or `INSUFFICIENT → VET (gap: R<n>.<m>, …)`) in
+   PLAN.md *Skills plan*; loaded-but-insufficient is never a silent pass. Retain the covered parts
+   and escalate to Step 7 for the missing part only. Authoring is brief-first: generate
+   `.codex-flow/SKILL-BRIEF-<facet>.md` via
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-brief.mjs" --facet <facet> --rids <gap R-IDs>`
+   Multiword `--facet` values must be quoted; the output filename uses the facet slug (lowercase,
+   spaces→`-`, other characters stripped).
+   First write the authored skill to `<library>/quarantine/authored/<skill-name>/SKILL.md`;
+   quarantine is never indexed.
+   Pass the R-IDs recorded in the verdict (`AUTHOR (gap: …)` / `INSUFFICIENT → AUTHOR (gap: …)`)
+   as `--rids`; omit `--rids` only when no gap IDs were recorded. Author the skill against the
+   brief, then require
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-lint.mjs" <SKILL.md path>` to pass. The run's authored
+   skills must get `one batched AskUserQuestion` approval before they are indexed, loaded, or
+   embedded.
+   The order is fixed: brief → author → lint → one batched approval → only then rebuild the index
+   and load/embed — indexing or loading an authored skill before its approval is a defect.
+   Promotion into the trusted library at `<library>/<skill-name>/SKILL.md` happens only after the
+   lint pass and that batched approval.
 3. Write `.codex-flow/PLAN.md` in the project root containing:
    - **Context**: what the project is, conventions Codex must follow
    - **Objective**: the confirmed goal from Phase 1
@@ -205,6 +225,25 @@ Rules for slicing (see `codex-flow:plan-backlog` for the full sizing guidance):
   user-reviewable set per task instead of re-guessing. Before Phase 4, create every
   before-execution skill by writing its `SKILL.md` and rebuilding the index per
   `codex-flow:skill-selection` Steps 7–8, then list it in each relevant task's `Skills:` field.
+  A facet discovered at backlog time whose loaded skills do not cover the task's requirements
+  records the same `INSUFFICIENT → AUTHOR (gap: R<n>.<m>, …)` (or `→ VET`) qualifier in PLAN.md
+  *Skills plan* before the task may enter Phase 4.
+  Creation is brief-first: generate `.codex-flow/SKILL-BRIEF-<facet>.md` via
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-brief.mjs" --facet <facet> --rids <gap R-IDs>`
+  Multiword `--facet` values must be quoted; the output filename uses the facet slug (lowercase,
+  spaces→`-`, other characters stripped).
+  First write the authored skill to `<library>/quarantine/authored/<skill-name>/SKILL.md`;
+  quarantine is never indexed.
+  Pass the R-IDs recorded in the verdict (`AUTHOR (gap: …)` / `INSUFFICIENT → AUTHOR (gap: …)`)
+  as `--rids`; omit `--rids` only when no gap IDs were recorded. Author the skill against the
+  brief, and require
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-lint.mjs" <SKILL.md path>` to pass. The run's authored
+  skills must get `one batched AskUserQuestion` approval before they are indexed, loaded, or
+  embedded.
+  The order is fixed: brief → author → lint → one batched approval → only then rebuild the index
+  and load/embed — indexing or loading an authored skill before its approval is a defect.
+  Promotion into the trusted library at `<library>/<skill-name>/SKILL.md` happens only after the
+  lint pass and that batched approval.
   Keep retro-timed entries as PLAN.md rule blocks and embed those rules directly in the relevant
   task prompt.
 - Also mirror the tasks with TaskCreate so the user sees live progress.
