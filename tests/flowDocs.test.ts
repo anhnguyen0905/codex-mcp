@@ -32,7 +32,8 @@ function readText(filePath: string): string {
     throw new Error(`Required flow document does not exist: ${filePath}`)
   }
 
-  return readFileSync(filePath, 'utf8')
+  // Windows checkouts may materialize CRLF via git autocrlf; guards assert LF-relative offsets.
+  return readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n')
 }
 
 function extractFrontmatter(markdown: string): string {
