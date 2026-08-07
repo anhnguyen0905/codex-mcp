@@ -66,7 +66,13 @@ Use the full structure the flow executes against (all sections — the reviewer 
 - Why: <reason tied to a requirement/finding>
 - Constraint for later tasks: <what future tasks must respect> | —
 - Contracts touched: <signatures/shapes changed or confirmed> | —
+- Anchor: <git HEAD sha at append time>
+- Applies to: <task IDs, files, or contract labels — 'all' for run-wide constraints>
 ```
+
+Keep `## Context` to one paragraph followed by a bullet list of conventions. Duplicate those
+conventions into the nearest applicable AGENTS.md (their durable per-package home) instead of
+growing Context with more prose.
 
 After each task passes, append exactly one block using this schema. The log must let a FRESH Claude
 session resume from disk without the original conversation. Decisions without their constraints
@@ -76,8 +82,14 @@ The ONLY per-task writer is the post-review step: Phase 4 step 6 in sequential m
 coordinator after the wave merge in parallel mode. Review steps and worktree subagents provide
 their outcomes to that writer and never append a second task block.
 
+When appending either schema, have that single writer run `git rev-parse HEAD` and record the
+result in `Anchor`. Reference code only as `path:line` plus the enclosing symbol; never paste code
+snippets into a Decision-log block.
+
+Writers SHOULD fill `Applies to`; run-wide constraints use `all`.
+
 For wave integrations, the final review, and declined improvements, append one non-task event block
-using the same four fields with `T<n>` replaced by the event name:
+using the same six fields with `T<n>` replaced by the event name:
 
 ```markdown
 ### <event> — <label>
@@ -85,6 +97,8 @@ using the same four fields with `T<n>` replaced by the event name:
 - Why: <reason tied to a requirement/finding>
 - Constraint for later tasks: <what future tasks must respect> | —
 - Contracts touched: <signatures/shapes changed or confirmed> | —
+- Anchor: <git HEAD sha at append time>
+- Applies to: <task IDs, files, or contract labels — 'all' for run-wide constraints>
 ```
 
 ## Design principles

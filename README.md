@@ -147,17 +147,52 @@ node scripts/sync-awesome-skills.mjs --clone   # build a local library from awes
 node scripts/build-skills-index.mjs            # → ~/.claude/skill-library/INDEX.md
 ```
 
-Besides the phase skills, the plugin ships 16 domain skills authored through Step 7 — paid media,
+Besides the phase skills, the plugin ships 17 domain skills authored through Step 7 — paid media,
 unit economics, media planning, warehouse modeling, event taxonomy, attribution, causal inference,
 survey design, ASO, localisation, OKRs, creative briefs, influencer strategy, SOPs and data-quality
-checks — so they are indexed and selectable out of the box. Their numeric thresholds are labelled *derived, unverified*: replace them with your
-own account history before treating any of them as a target.
+checks, and agent context persistence — so they are indexed and selectable out of the box. Their
+numeric thresholds are labelled *derived, unverified*: replace them with your own account history
+before treating any of them as a target.
 
 Verified by a 32-scenario scope eval (`npm run skills:eval`) — latest **32/32** — plus a
 100-request non-engineering scope run (data analysis, marketing planning, performance marketing,
 market research, content, product): **99/100** covered by an existing skill, at precision@1 84/99,
 with the remaining case queued for Step 7 acquisition/authoring. Full procedure:
 [`skills/skill-selection/SKILL.md`](skills/skill-selection/SKILL.md).
+
+### Context persistence on large projects
+
+`scripts/context-slice.mjs` generates budgeted derived slices from `.codex-flow/PLAN.md` and
+`.codex-flow/TASKS.md`: per-task `.codex-flow/CONTEXT-T<n>.md` files (≤ **4000 estimated tokens**
+using the chars/4 heuristic) and `.codex-flow/RESUME.md` on resume (≤ **8000 estimated tokens**
+using the chars/4 heuristic). Decision-log blocks carry a git-SHA `Anchor:`, and slices stamp each
+block `[fresh]` or `[verify]`; anything unverifiable — including a missing or invalid anchor or a
+git failure — degrades to `[verify]`.
+
+Mandatory task text and task statuses are never dropped. Lower-priority content is dropped whole
+when necessary, with a restorable
+`(+N lower-priority items omitted — read .codex-flow/PLAN.md …)` pointer. Full
+`.codex-flow/PLAN.md` remains the on-disk source of truth. Standalone installs without the helper
+fall back to reading PLAN.md directly.
+
+### Run-state & requirements fidelity
+
+- `.codex-flow/REQUIREMENTS.md` records confirmed acceptance criteria verbatim with atomic
+  `R<n>.<m>` IDs. Mid-run changes append confirmed `ADDED`/`MODIFIED`/`REMOVED` Deltas instead of
+  rewriting history, and reset affected downstream approvals.
+- `.codex-flow/STATE.md` is the resume authority instead of file existence. Its 10-key run state
+  tracks the phase, three approvals, immutable `runBaselineRef` / known-red / dirty-baseline values,
+  checkpoint choice, execution mode, and a separate `resumeHead`.
+- `scripts/requirements-coverage.mjs` rejects uncited or unknown criterion IDs at the Phase 3 gate;
+  final review then walks every ID and records met/not-met with evidence.
+- TASKS.md records session lineage and an append-only status-transition log. Resume reconciles
+  orphaned in-progress work, while wave scheduling seeds dependencies from done tasks, waits on
+  in-progress tasks, and blocks dependents of failed or unknown states.
+- In parallel mode, one coordinator writes `.codex-flow/*`; workers return structured handoffs with
+  touched files, checks, findings, decision-log proposals, and session IDs.
+- Context slices always carry a stamped contracts index, compact known-red failures, and rank
+  decision blocks by explicit `Applies to:` scope before recency; the execution prompt carries the
+  run-position recitation header.
 
 ### Parallel execution for large backlogs
 

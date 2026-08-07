@@ -13,11 +13,17 @@ Decompose the approved plan into `.codex-flow/TASKS.md`. Each task is one Codex 
 ## T1: <imperative title>
 - Depends on: — | T<n>
 - Files: <create/modify list>
+- Requirements: <R-IDs covered>
 - Steps: <concrete, file-level steps>
 - Skills: <relevant skills from PLAN.md "Skills plan" (*Skills to use* + before-execution created skills), or — >
 - Acceptance: <verifiable criteria for THIS task alone>
+- Session: —
 - Status: pending
 ```
+
+`Session` and the transition log beneath `Status` are execution-time fields that the orchestrator
+fills in Phase 4. The backlog always writes `- Session: —` and `- Status: pending`; do not add
+transition lines while planning.
 
 The `Files:` and `Depends on:` fields are also what `scripts/task-waves.mjs` reads to compute
 parallel execution waves — keep them accurate and file-level, not vague.
@@ -34,6 +40,9 @@ A task is the unit Codex builds in one run and Claude verifies in one pass — s
   truncating what the reviewer sees. Too big → split.
 - **~5–30 min of Codex work** as a secondary check: a task you can't describe in a few file-level
   steps is too big; a one-line tweak is usually too small to be its own review cycle — fold it in.
+- **Mandatory slice overflow**: if `context-slice.mjs` reports
+  `mandatory slice content exceeds tokenBudget`, split the oversized task in the backlog; never
+  raise the slice budget.
 - **Self-sufficient**: each task must be doable by a *fresh* Codex session from PLAN.md + the task
   text alone (a domain shift starts a new session with no prior memory). Put the context it needs in
   `Steps` and name the files to read — don't rely on "as we did in T2".
@@ -63,7 +72,13 @@ A task is the unit Codex builds in one run and Claude verifies in one pass — s
 
 ## Sanity checks before showing the user
 
+Re-run every check below after a plan change updates affected tasks or the improvement gate appends
+tasks; do not schedule the changed backlog until all checks pass.
+
 - Union of all task acceptance criteria covers every plan acceptance criterion (no orphan requirements).
+- Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`. Every effective R<n>.<m> must be cited
+  by at least one task and no task may cite an unknown ID; fix the backlog before presenting it for
+  approval.
 - No tasks that could run concurrently (in the same wave) touch the same file; dependency-ordered
   tasks may share files because they serialize (avoids Codex-vs-Codex merge conflicts).
 - First task is small — it validates the plan's assumptions cheaply before the expensive middle.

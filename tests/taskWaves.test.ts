@@ -29,8 +29,20 @@ describe('parseTasks', () => {
     const tasks = parseTasks(TASKS)
 
     expect(tasks.map((t: { id: string }) => t.id)).toEqual(['T1', 'T2', 'T3'])
-    expect(tasks[0]).toMatchObject({ id: 'T1', dependsOn: [], files: ['src/config.ts'] })
+    expect(tasks[0]).toMatchObject({ id: 'T1', dependsOn: [], files: ['src/config.ts'], status: 'pending' })
     expect(tasks[2]).toMatchObject({ id: 'T3', dependsOn: ['T1'], files: ['src/server.ts', 'src/config.ts'] })
+  })
+
+  test('parses a comma-separated Requirements field and defaults it when absent', () => {
+    const tasks = parseTasks(`## T1: covered
+- Requirements: R1.1, R2.3 , R4.2
+
+## T2: uncovered
+- Files: b.ts
+`)
+
+    expect(tasks[0].requirements).toEqual(['R1.1', 'R2.3', 'R4.2'])
+    expect(tasks[1].requirements).toEqual([])
   })
 
   test('treats an em-dash / "none" dependency as no dependency', () => {
@@ -156,10 +168,145 @@ describe('computeWaves', () => {
     expect(() => computeWaves(tasks)).toThrow(/cycle/i)
   })
 
+  test('throws on a dependency cycle involving a done task', () => {
+    const tasks = parseTasks(`## T1: incorrectly done
+- Depends on: T2
+- Files: a.ts
+- Status: done
+
+## T2: pending participant
+- Depends on: T1
+- Files: b.ts
+- Status: pending
+`)
+
+    expect(() => computeWaves(tasks)).toThrow(/dependency cycle among: T1, T2/i)
+  })
+
+  test('throws when every task in a dependency cycle is done', () => {
+    const tasks = parseTasks(`## T1: done participant
+- Depends on: T2
+- Files: a.ts
+- Status: done
+
+## T2: also done participant
+- Depends on: T1
+- Files: b.ts
+- Status: done
+`)
+
+    expect(() => computeWaves(tasks)).toThrow(/dependency cycle among: T1, T2/i)
+  })
+
   test('throws on an unknown dependency', () => {
     const tasks = [{ id: 'T1', dependsOn: ['T9'], files: ['a.ts'] }]
 
     expect(() => computeWaves(tasks)).toThrow(/unknown dependency/i)
+  })
+
+  test('excludes a done task while treating it as a satisfied dependency', () => {
+    const tasks = parseTasks(`## T1: finished
+- Depends on: —
+- Files: a.ts
+- Status: done
+
+## T2: next
+- Depends on: T1
+- Files: b.ts
+- Status: pending
+`)
+
+    const result = computeWaves(tasks)
+
+    expect(result.waves).toEqual([['T2']])
+    expect(result.blocked).toEqual([])
+    expect(result.inProgress).toEqual([])
+  })
+
+  test('blocks transitive dependents of a failed task with the failed ancestor in the reason', () => {
+    const tasks = parseTasks(`## T1: failed root
+- Files: a.ts
+- Status: failed
+
+## T2: direct dependent
+- Depends on: T1
+- Files: b.ts
+- Status: pending
+
+## T3: transitive dependent
+- Depends on: T2
+- Files: c.ts
+- Status: pending
+
+## T4: independent
+- Files: d.ts
+- Status: pending
+`)
+
+    const result = computeWaves(tasks)
+
+    expect(result.waves).toEqual([['T4']])
+    expect(result.blocked).toEqual([
+      { id: 'T1', reason: 'status failed' },
+      { id: 'T2', reason: 'depends on failed T1' },
+      { id: 'T3', reason: 'depends on failed T1' },
+    ])
+  })
+
+  test('parses an explicit unrecognized status as unknown and blocks its dependents', () => {
+    const tasks = parseTasks(`## T1: malformed
+- Files: a.ts
+- Status: almost-done
+
+## T2: dependent
+- Depends on: T1
+- Files: b.ts
+- Status: pending
+`)
+
+    const result = computeWaves(tasks)
+
+    expect(tasks[0].status).toBe('unknown')
+    expect(result.waves).toEqual([])
+    expect(result.blocked).toEqual([
+      { id: 'T1', reason: 'status unknown' },
+      { id: 'T2', reason: 'depends on unknown T1' },
+    ])
+  })
+
+  test('lists in-progress tasks separately and blocks their transitive dependents as waiting', () => {
+    const tasks = parseTasks(`## T1: active
+- Files: a.ts
+- Status: in-progress
+
+## T2: direct dependent
+- Depends on: T1
+- Files: b.ts
+- Status: pending
+
+## T3: transitive dependent
+- Depends on: T2
+- Files: c.ts
+- Status: pending
+`)
+
+    const result = computeWaves(tasks)
+
+    expect(result.waves).toEqual([])
+    expect(result.inProgress).toEqual(['T1'])
+    expect(result.blocked).toEqual([
+      { id: 'T2', reason: 'waits on in-progress T1' },
+      { id: 'T3', reason: 'waits on in-progress T1' },
+    ])
+  })
+
+  test('schedules a parsed task with no Status line as pending for backwards compatibility', () => {
+    const tasks = parseTasks('## T1: legacy\n- Depends on: —\n- Files: a.ts\n')
+
+    const result = computeWaves(tasks)
+
+    expect(tasks[0].status).toBe('pending')
+    expect(result.waves).toEqual([['T1']])
   })
 })
 
@@ -170,6 +317,38 @@ describe('renderWaves', () => {
     expect(out).toContain('Wave 1')
     expect(out).toMatch(/T1.*T2/) // T1 and T2 batch in wave 1
     expect(out).toContain('T3')
+    expect(out).toContain('Blocked: none')
+    expect(out).toContain('In progress: none')
+  })
+
+  test('prints blocked and in-progress scheduling state', () => {
+    const result = computeWaves(parseTasks(`## T1: active
+- Files: a.ts
+- Status: in-progress
+
+## T2: waiting
+- Depends on: T1
+- Files: b.ts
+- Status: pending
+`))
+
+    const out = renderWaves(result)
+
+    expect(out).toContain('- T2: waits on in-progress T1')
+    expect(out).toContain('In progress: T1')
+  })
+
+  test('prints a failed root task under Blocked even when it has no dependents', () => {
+    const result = computeWaves(parseTasks(`## T1: failed root
+- Files: a.ts
+- Status: failed
+`))
+
+    const out = renderWaves(result)
+
+    expect(result.waves).toEqual([])
+    expect(result.blocked).toEqual([{ id: 'T1', reason: 'status failed' }])
+    expect(out).toContain('Blocked:\n- T1: status failed')
   })
 })
 

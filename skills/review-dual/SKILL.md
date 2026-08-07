@@ -18,7 +18,9 @@ Acceptance criteria: <paste the task's acceptance criteria>
 Files: <paste the task's Files: list>
 Review only the task's Files: list; report no findings outside it.
 Review in this exact order:
-1. Conformance to .codex-flow/PLAN.md and the task's acceptance criteria.
+1. Conformance to the task's .codex-flow/CONTEXT-T<n>.md slice and acceptance criteria.
+Treat [verify]-stamped context as hypotheses to re-confirm against the current code before relying on it.
+Read full .codex-flow/PLAN.md only as escalation when a finding disputes plan intent.
 2. Quality: correctness hazards, silent failures, edge cases, and test quality.
 3. Security: secrets, injection, validation, and unsafe patterns.
 Output numbered findings tagged CRITICAL, HIGH, MEDIUM, or LOW.

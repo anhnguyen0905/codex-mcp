@@ -3,7 +3,36 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.19.0] - 2026-08-07
+
+### Added
+
+- **Budgeted context-persistence slices** — `scripts/context-slice.mjs` derives per-task
+  `.codex-flow/CONTEXT-T<n>.md` (≤ 4000 tokens) and resume `.codex-flow/RESUME.md` (≤ 8000 tokens)
+  views from PLAN.md and TASKS.md, preserves mandatory task text and statuses, and drops only whole
+  lower-priority items with restorable PLAN.md pointers.
+- **Git-anchored decision read-back** — Decision-log blocks record `Anchor:` SHAs, and derived
+  slices stamp them `[fresh]` or `[verify]`; missing or invalid anchors and git failures degrade to
+  `[verify]` while full PLAN.md remains authoritative and standalone installs retain a direct-read
+  fallback.
+- **Durable requirements with criterion-level coverage** — `.codex-flow/REQUIREMENTS.md` records
+  confirmed criteria verbatim as atomic `R<n>.<m>` IDs; append-only confirmed Deltas preserve
+  mid-run changes and reset affected downstream approvals. `scripts/requirements-coverage.mjs`
+  rejects uncited and unknown IDs at the Phase 3 gate, and final review reports every ID met/not-met
+  with evidence.
+- **Authoritative 10-key run state** — `.codex-flow/STATE.md` replaces file-existence inference with
+  the current phase, three approval records, immutable `runBaselineRef` / known-red / dirty-baseline
+  values, checkpoint choice, execution mode, and a separate `resumeHead`.
+- **Session lineage and status-aware recovery** — TASKS.md gains session metadata plus an append-only
+  transition log; resume reconciles orphaned in-progress work. Wave scheduling uses done tasks to
+  satisfy dependencies, waits on in-progress tasks, and blocks dependents of failed or unknown
+  states.
+- **Single-writer parallel coordination** — one coordinator owns every `.codex-flow/*` write while
+  workers return structured handoffs covering touched files, checks, findings, proposed decision-log
+  data, and session IDs.
+- **Stronger context slices** — task slices always include a stamped contracts index, compact the
+  known-red baseline, and rank decision blocks by explicit `Applies to:` scope before recency; the
+  execution prompt carries the run-position recitation header.
 
 ## [0.18.0] - 2026-08-04
 

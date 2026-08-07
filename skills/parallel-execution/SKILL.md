@@ -9,6 +9,14 @@ codex-mcp serializes runs per `cwd` (to prevent file/git races) but runs differe
 parallel. So real parallelism = **one git worktree per concurrent task**, each driven by its own
 Claude subagent calling `codex_execute` into that worktree.
 
+## Control-file ownership
+
+The coordinator is the SOLE writer for every `.codex-flow/*` file, including TASKS.md, PLAN.md,
+STATE.md, REQUIREMENTS.md, report directories, IMPROVEMENTS.md, and notes. Worktree subagents treat
+those durable control-file copies as read-only inputs. They may regenerate derived context slices
+inside their own worktree copies only; every durable update flows through the structured handoff
+to the coordinator.
+
 ## Default-on policy
 
 - Always run the wave tool below during Phase 4. When it reports width > 1, use parallel mode by
@@ -61,40 +69,80 @@ For each task in the wave (width > 1):
 2. After creating each worktree, the coordinator MUST copy the untracked control files into it:
 
    ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --task T<n>
    mkdir -p "<worktree>/.codex-flow"
-   cp .codex-flow/PLAN.md .codex-flow/TASKS.md "<worktree>/.codex-flow/"
+   cp .codex-flow/PLAN.md .codex-flow/TASKS.md .codex-flow/CONTEXT-T<n>.md "<worktree>/.codex-flow/"
+   if [ -f .codex-flow/SKILLS-T<n>.md ]; then
+     cp .codex-flow/SKILLS-T<n>.md "<worktree>/.codex-flow/"
+   fi
    ```
 
+   Generate the task's `.codex-flow/CONTEXT-T<n>.md` immediately before copying it alongside
+   PLAN.md and TASKS.md. When the task's `.codex-flow/SKILLS-T<n>.md` sidecar exists, copy it into
+   the worktree alongside the context slice.
+   If the helper is present but exits non-zero, surface the error to the user and STOP; never
+   silently copy a stale slice.
+   If generation reports `mandatory slice content exceeds tokenBudget`, split the oversized task
+   in the backlog and recompute the waves before continuing; never raise the slice budget.
    Treat these copies as coordinator-owned context: subagents read them but do not include them in
    task commits; the coordinator updates the integration copies in Step 3.
-3. In each subagent, run the **normal Phase 4 execution** for its ONE task: embed the standards +
+3. In each subagent, run the **Phase 4 execution mechanics** for its ONE task: embed the standards +
    the task's `Skills:` blocks, call `codex_execute` with that worktree as `cwd`, pick `model` by
-   task complexity, save the `sessionId`.
-4. After the serial worktree setup and control-file copies finish, launch the subagents
-   concurrently in a single batch.
+   task complexity, and save the `sessionId`. Skip every control-file write prescribed by Phase 4:
+   no TASKS.md, STATE.md, report, ledger, or Decision-log writes.
+4. At dispatch time, before launching the batch, the coordinator marks every wave task
+   `in-progress`, appends its pending-to-in-progress transition, and writes
+   `- Session: launching (base: <short sha>, worktree: <path>, branch: <name>)` using that
+   worktree's branch-point base sha, path, and branch.
+5. After the serial worktree setup, control-file copies, and coordinator dispatch records finish,
+   launch the subagents concurrently in a single batch.
 
 Because each `cwd` differs, the per-workspace concurrency guard allows all of them at once.
 
 ## Step 3 — Per wave: review, then merge
 
-1. Each subagent runs its own **Phase 5 review** (conformance → quality → security) inside its
-   worktree; a task that does not pass escalates as a blocker.
-2. After review passes, each subagent MUST commit its task changes on the worktree branch as
+1. Each subagent runs the **Phase 5 review mechanics** (conformance → quality → security) inside its
+   worktree; a task that does not pass escalates as a blocker. Skip every control-file write that
+   Phase 5 prescribes: no TASKS.md, STATE.md, report, ledger, or Decision-log writes. A subagent may
+   regenerate derived slices inside its worktree copy only.
+2. After review, each subagent returns a structured handoff containing: task id; sessionId; actual
+   files changed; checks run with results; review findings and resolutions; a proposed Decision-log
+   block; and proposed improvement entries. The handoff proposes control-file content but never
+   edits the durable worktree copies; all durable updates flow through this handoff to the
+   coordinator. IMMEDIATELY when each handoff arrives, before any merge or wave integration review,
+   the coordinator replaces that task's `launching` Session line with its real sessionId while
+   preserving the base, worktree path, and branch. Do not wait for the rest of the wave.
+3. After review passes, each subagent MUST commit its task changes on the worktree branch as
    `wip(codex-flow): T<n> <title>`, regardless of the Phase-3 checkpoint-commit choice. This commit
    is required to transport the work back and can be squashed at delivery; exclude the copied
    `.codex-flow` control files. Only then does the subagent report the branch ready to merge.
-3. Before merging, the coordinator verifies the task branch is ahead of its branch-point base
+4. Before merging each worktree, the coordinator diffs the worktree's actual changed files against
+   the task's declared `Files:`. Any expansion — a changed file outside that declaration, excluding
+   generated lockfiles explicitly listed as shared — stops the wave. As the FIRST step of this
+   backlog-mutating transaction, durably set `backlogApproved: no (files expansion <ISO date>)` and
+   `phase: backlog` in STATE.md. Only then update the task's `Files:` in TASKS.md, re-run
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`
+   plus the `plan-backlog` backlog sanity checks, and get user re-approval. Only after re-approval,
+   restore `backlogApproved: yes (<ISO 8601 timestamp>)` and return `phase` to `review`. Then RE-RUN
+   the task's conformance → quality → security review over the EXPANDED `Files:` scope, using a
+   fresh `codex_review` or a Claude pass, before the branch may merge. The security review is
+   mandatory when the expansion touches auth, input, queries, files, or secrets.
+5. Before merging, the coordinator verifies the task branch is ahead of its branch-point base
    (`git rev-list --count <base>..<branch>` must be greater than zero). A zero-commit branch is a
    failed task, not a branch to merge.
-4. The coordinator merges each passed, verified worktree branch back into the integration branch
+6. The coordinator merges each passed, verified worktree branch back into the integration branch
    **in task order**. Resolve conflicts here — they should be rare because the wave is
    file-disjoint, but dependency-driven edits to shared files across waves can still collide.
-5. After merging the whole wave, run a **wave integration review**: full test suite on the merged
+7. After merging the whole wave, run a **wave integration review**: full test suite on the merged
    result + a quick end-to-end probe. Branches never saw each other, so a green-in-isolation task
    can still break in combination — this pass is mandatory, not optional.
-6. The coordinator is the only per-task Decision-log writer in parallel mode. For each passed task,
-   append one schema block (see `plan-architecture`), then append one wave-integration event block
-   using that skill's event schema. Follow `context-discipline` to declare the safe wave-boundary
+8. After each wave, the coordinator serially applies the remaining structured handoffs:
+   Decision-log appends, report entries, and IMP-id allocation in IMPROVEMENTS.md. Serial IMP-id
+   allocation prevents duplicate ids. For each passed task, append one schema block (see
+   `plan-architecture`) and write its report entries. Append one wave-integration event block using
+   that skill's event schema. Only after every required handoff and event write succeeds, make each
+   task's `Status: done` transition as the last durable task write. Follow `context-discipline` to
+   declare the safe wave-boundary
    compaction point, then compute the next wave (dependencies of later tasks are now satisfied).
    The next wave's worktrees branch from the integration branch HEAD as it stands now — post-merge,
    post-review — so they build on this wave's output.

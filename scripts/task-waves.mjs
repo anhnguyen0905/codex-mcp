@@ -18,10 +18,21 @@ import { pathToFileURL } from 'node:url'
 // across consecutive waves so we never spawn more than this many in parallel.
 export const DEFAULT_MAX_CONCURRENCY = 10
 
+const TASK_STATUSES = new Set(['pending', 'in-progress', 'done', 'failed'])
+const DEFAULT_TASK_STATUS = 'pending'
+const UNKNOWN_TASK_STATUS = 'unknown'
+const FAILED_LIKE_STATUSES = new Set(['failed', UNKNOWN_TASK_STATUS])
+
 const taskNum = (id) => parseInt(id.slice(1), 10)
 const isPlaceholder = (token) => token.includes('<') || token.includes('>')
+const compareTaskIds = (a, b) => taskNum(a) - taskNum(b)
+const statusOf = (status) => {
+  if (status === undefined) return DEFAULT_TASK_STATUS
+  const normalized = String(status).trim().toLowerCase()
+  return TASK_STATUSES.has(normalized) ? normalized : UNKNOWN_TASK_STATUS
+}
 
-/** Parse a TASKS.md into [{ id, title, dependsOn, files }]. */
+/** Parse a TASKS.md into [{ id, title, dependsOn, files, requirements, status }]. */
 export function parseTasks(markdown) {
   const tasks = []
   let current = null
@@ -33,7 +44,16 @@ export function parseTasks(markdown) {
     const anyHeader = raw.match(/^##\s+/)
     const taskHeader = raw.match(/^##\s+(T\d+):\s*(.*)$/i)
     if (taskHeader) {
-      current = { id: taskHeader[1].toUpperCase(), title: taskHeader[2].trim(), dependsOn: [], files: [] }
+      current = {
+        id: taskHeader[1].toUpperCase(),
+        title: taskHeader[2].trim(),
+        dependsOn: [],
+        files: [],
+        requirements: [],
+        // Legacy TASKS.md files and fixtures predate Status. Missing means pending so they retain
+        // the original scheduling behavior; only an explicit unrecognized Status becomes unknown.
+        status: DEFAULT_TASK_STATUS,
+      }
       tasks.push(current)
       continue
     }
@@ -63,12 +83,25 @@ export function parseTasks(markdown) {
             .filter(Boolean)
       continue
     }
+    const requirements = raw.match(/^\s*-\s*Requirements:\s*(.*)$/i)
+    if (requirements) {
+      current.requirements = requirements[1]
+        .split(',')
+        .map((requirement) => requirement.trim())
+        .filter(Boolean)
+      continue
+    }
+    const status = raw.match(/^\s*-\s*Status:\s*(.*)$/i)
+    if (status) {
+      current.status = statusOf(status[1])
+      continue
+    }
   }
   return tasks
 }
 
 /**
- * Compute execution waves. Returns { waves: [[id]], maxWidth, parallelizable }.
+ * Compute execution waves. Returns { waves: [[id]], maxWidth, parallelizable, blocked, inProgress }.
  * Throws on unknown dependencies or dependency cycles.
  */
 export function computeWaves(tasks, { maxConcurrency = DEFAULT_MAX_CONCURRENCY } = {}) {
@@ -87,14 +120,91 @@ export function computeWaves(tasks, { maxConcurrency = DEFAULT_MAX_CONCURRENCY }
     }
   }
 
-  const completed = new Set()
-  const remaining = new Set(tasks.map((t) => t.id))
+  // Validate the full graph before statuses remove completed tasks from scheduling. A cycle is
+  // invalid even when one or every participant is already marked done: otherwise corrupt lineage
+  // can make a pending participant appear schedulable.
+  const fullGraphDependents = new Map(tasks.map((task) => [task.id, []]))
+  const fullGraphIndegree = new Map(tasks.map((task) => [task.id, task.dependsOn.length]))
+  for (const task of tasks) {
+    for (const dependency of task.dependsOn) fullGraphDependents.get(dependency).push(task.id)
+  }
+  const fullGraphReady = tasks
+    .filter((task) => fullGraphIndegree.get(task.id) === 0)
+    .map((task) => task.id)
+    .sort(compareTaskIds)
+  const visited = new Set()
+  while (fullGraphReady.length) {
+    const id = fullGraphReady.shift()
+    visited.add(id)
+    for (const dependent of fullGraphDependents.get(id)) {
+      const nextIndegree = fullGraphIndegree.get(dependent) - 1
+      fullGraphIndegree.set(dependent, nextIndegree)
+      if (nextIndegree === 0) {
+        fullGraphReady.push(dependent)
+        fullGraphReady.sort(compareTaskIds)
+      }
+    }
+  }
+  if (visited.size !== tasks.length) {
+    const cyclic = tasks
+      .map((task) => task.id)
+      .filter((id) => !visited.has(id))
+      .sort(compareTaskIds)
+    throw new Error(`dependency cycle among: ${cyclic.join(', ')}`)
+  }
+
+  const statuses = new Map(tasks.map((task) => [task.id, statusOf(task.status)]))
+  const dependentsById = new Map(tasks.map((task) => [task.id, []]))
+  for (const task of tasks) {
+    for (const dependency of task.dependsOn) dependentsById.get(dependency).push(task.id)
+  }
+
+  const blockedById = new Map()
+  const blockPendingDependents = (ancestorId, reason) => {
+    const visited = new Set([ancestorId])
+    const queue = [...dependentsById.get(ancestorId)].sort(compareTaskIds)
+    while (queue.length) {
+      const id = queue.shift()
+      if (visited.has(id)) continue
+      visited.add(id)
+
+      const status = statuses.get(id)
+      // A completed task satisfies its own dependents, so blocker propagation stops here.
+      if (status === 'done') continue
+      if (status === DEFAULT_TASK_STATUS && !blockedById.has(id)) blockedById.set(id, reason)
+      queue.push(...[...dependentsById.get(id)].sort(compareTaskIds))
+    }
+  }
+
+  const failedLike = tasks
+    .filter((task) => FAILED_LIKE_STATUSES.has(statuses.get(task.id)))
+    .sort((a, b) => compareTaskIds(a.id, b.id))
+  for (const task of failedLike) {
+    const status = statuses.get(task.id)
+    blockedById.set(task.id, `status ${status}`)
+    blockPendingDependents(task.id, `depends on ${status} ${task.id}`)
+  }
+
+  const inProgress = tasks
+    .filter((task) => statuses.get(task.id) === 'in-progress')
+    .map((task) => task.id)
+    .sort(compareTaskIds)
+  for (const id of inProgress) blockPendingDependents(id, `waits on in-progress ${id}`)
+
+  const completed = new Set(
+    tasks.filter((task) => statuses.get(task.id) === 'done').map((task) => task.id),
+  )
+  const remaining = new Set(
+    tasks
+      .filter((task) => statuses.get(task.id) === DEFAULT_TASK_STATUS && !blockedById.has(task.id))
+      .map((task) => task.id),
+  )
   const waves = []
 
   while (remaining.size) {
     const ready = [...remaining]
       .filter((id) => byId.get(id).dependsOn.every((d) => completed.has(d)))
-      .sort((a, b) => taskNum(a) - taskNum(b))
+      .sort(compareTaskIds)
 
     if (ready.length === 0) {
       throw new Error(`dependency cycle among: ${[...remaining].sort().join(', ')}`)
@@ -129,11 +239,14 @@ export function computeWaves(tasks, { maxConcurrency = DEFAULT_MAX_CONCURRENCY }
   }
 
   const maxWidth = waves.reduce((m, w) => Math.max(m, w.length), 0)
-  return { waves, maxWidth, parallelizable: maxWidth > 1 }
+  const blocked = [...blockedById]
+    .sort(([a], [b]) => compareTaskIds(a, b))
+    .map(([id, reason]) => ({ id, reason }))
+  return { waves, maxWidth, parallelizable: maxWidth > 1, blocked, inProgress }
 }
 
 /** Human-readable wave summary for the CLI / plan review. */
-export function renderWaves({ waves, maxWidth, parallelizable }) {
+export function renderWaves({ waves, maxWidth, parallelizable, blocked = [], inProgress = [] }) {
   const lines = [
     `Execution plan: ${waves.length} wave(s), max width ${maxWidth} — ${parallelizable ? 'parallelizable' : 'fully sequential'}`,
     '',
@@ -142,6 +255,9 @@ export function renderWaves({ waves, maxWidth, parallelizable }) {
     const tag = wave.length > 1 ? `${wave.length} in parallel` : 'sequential'
     lines.push(`Wave ${i + 1} (${tag}): ${wave.join(', ')}`)
   })
+  lines.push('', blocked.length ? 'Blocked:' : 'Blocked: none')
+  blocked.forEach(({ id, reason }) => lines.push(`- ${id}: ${reason}`))
+  lines.push('', `In progress: ${inProgress.length ? inProgress.join(', ') : 'none'}`)
   return lines.join('\n')
 }
 

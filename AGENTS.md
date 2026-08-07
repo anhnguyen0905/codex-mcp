@@ -28,6 +28,11 @@ behavior is defined in **markdown instruction files**, not runtime code.
   `package-lock.json` (2 spots), `server.json` (2 spots), `.claude-plugin/plugin.json`, the
   `.mcp.json` npx pin, and a `## [<version>]` heading in `CHANGELOG.md`.
 
+- **Runtime scripts**: a new `scripts/*.mjs` helper the plugin invokes at runtime follows the
+  `scripts/task-waves.mjs` idiom — Node stdlib only, pure named exports, CLI behind a
+  `pathToFileURL` direct-run guard — and MUST be added to `package.json` `files[]` to reach the
+  plugin cache. Tests import its exports with `// @ts-expect-error — plain .mjs script`.
+
 ## Style
 
 - Instruction prose: English, imperative, concise. Match the section style of neighboring skills

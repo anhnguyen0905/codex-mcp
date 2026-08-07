@@ -12,6 +12,12 @@ Repeated exploration, large diffs, and verbose logs crowd out current-task evide
 Keep bulk evidence outside the orchestrator and bring back only anchored conclusions.
 Write durable state to disk so a fresh session can resume without hidden context.
 
+## Recitation
+
+At every phase boundary and immediately before each `codex_execute`, re-state all three in one
+concise line: the current phase, the current task ID + title, and the next pending gate. Recite the
+run position from current durable state; do not re-read control files solely for this recitation.
+
 ## No-raw-read rules (orchestrator)
 
 - For a diff over 400 lines, delegate a conformance summary to a subagent, then directly read only
@@ -20,6 +26,18 @@ Write durable state to disk so a fresh session can resume without hidden context
   full-log analysis to a subagent.
 - During Phase 2 exploration, use Explore subagents. Require conclusions with paths and line anchors;
   never bulk-dump files into the orchestrator.
+
+## Tiered read-back
+
+- Have the orchestrator and Codex read budgeted derived slices instead of whole control files:
+  `.codex-flow/CONTEXT-T<n>.md` (≤ 4000 estimated tokens using the chars/4 heuristic) for each task
+  and `.codex-flow/RESUME.md` (≤ 8000 estimated tokens using the chars/4 heuristic) on resume.
+- Keep full `.codex-flow/PLAN.md` as the durable source of truth on disk. Read it in full only to
+  resolve a disputed finding, follow a slice's omitted-pointer line to a needed section, or as the
+  standalone fallback when the slice helper is unavailable.
+- Treat derived slice files as generated views. Regenerate them; never hand-edit them.
+- Check the generation anchor recorded in each slice header. Re-check every `[verify]`-stamped
+  block against the current code before relying on it.
 
 ## Safe compaction points
 
@@ -33,7 +51,8 @@ Write durable state to disk so a fresh session can resume without hidden context
   safe compaction point and suggest running `/compact`; the orchestrator cannot run that client
   command. With state on disk, an auto-compaction landing at or after the boundary is lossless.
 - NEVER compact mid-task.
-- Phase 5 step 0 re-reads PLAN.md and TASKS.md from disk after compaction.
+- Phase 5 step 0 re-reads the task's generated context slice and TASKS.md entry from disk after
+  compaction; read full PLAN.md only under the Tiered read-back rules.
 
 | Boundary | Safe compaction point? |
 |---|---|

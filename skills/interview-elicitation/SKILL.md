@@ -38,3 +38,37 @@ Stop interviewing when every acceptance criterion is **verifiable** (testable pa
 - Acceptance criteria: 1. … 2. … (each testable)
 - Assumed: …
 ```
+
+Before requesting confirmation, format each requirement and its acceptance criteria as:
+
+```markdown
+## R<n>: <title>
+- R<n>.<m>: <clause>
+```
+
+Write one atomic, verifiable acceptance criterion per `R<n>.<m>` bullet. Express one testable
+WHEN/THEN-style behavior per ID, and split compound clauses into separate IDs.
+
+The moment the user confirms the Requirements Summary, write it VERBATIM to
+`.codex-flow/REQUIREMENTS.md`. Do not start planning until the write completes.
+
+## Changing requirements mid-run
+
+Never edit the original requirement sections in place. For a legitimate change, get user
+confirmation and append a timestamped delta under `## Deltas` using this format:
+
+```markdown
+### <ISO date> <ADDED|MODIFIED|REMOVED> R<n>[.<m>]
+<new or changed clause text>
+```
+
+Treat the original requirement sections plus all deltas as the effective requirement set in every
+downstream phase. The user's delta confirmation refreshes `requirementsApproved` in
+`.codex-flow/STATE.md` to `yes (delta <ISO date>)`. At the same time, reset `planApproved` and
+`backlogApproved` to `no (delta <ISO date>)` and set `phase` to `plan`; no earlier plan or backlog
+approval survives a requirement change.
+
+Before execution resumes, re-run Phase 2 impact analysis against the effective set and obtain plan
+approval, rebuild the affected tasks, run
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`,
+and obtain backlog re-approval. Stop on any coverage violation.

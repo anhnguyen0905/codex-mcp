@@ -25,18 +25,39 @@ Call `mcp__codex__codex_health` before anything else:
   until a re-check shows `loggedIn: true`.
 - **`loggedIn: true`** → report the Codex version and continue.
 
-**Resume check** — if `.codex-flow/PLAN.md` and `.codex-flow/TASKS.md` already exist from a prior
-run, do NOT clobber them. Show the user the task Statuses and ask: **resume** (continue from the
-first task not marked done — skip Phases 1–3, jump to Phase 4 for the remaining tasks) or **restart**
-(archive the old files to `.codex-flow/archive/<timestamp>/` and begin fresh). Only interview/plan
-from scratch on restart or when no plan exists.
+**Resume check** — if `.codex-flow/STATE.md` exists, treat it as an interrupted run and offer
+**resume** or **restart**, even when PLAN.md or TASKS.md has not been created yet. STATE.md is the
+resume authority: skip only phases whose approvals STATE.md records, and enter the first unapproved
+phase. Then route from STATE.md's recorded `phase`: for `phase: execution`, enter Phase 4 at the
+first task not marked done; for `phase: review`, resume Phase 5 completion work. When all tasks are
+done but `phase` is not `complete`, resume Phase 5 for the final dual review, requirement ID-walk,
+improvement gate, cost/report delivery gates, and completion write instead of concluding there is
+nothing to do.
+
+When both `.codex-flow/PLAN.md` and `.codex-flow/TASKS.md` exist, run
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --resume` and read
+`.codex-flow/RESUME.md` (statuses, next task, and staleness-stamped state within a fixed budget)
+instead of raw PLAN.md + TASKS.md. If the slice helper is unavailable in a standalone install, fall
+back to reading `.codex-flow/PLAN.md` and `.codex-flow/TASKS.md` directly. If the helper is present
+but exits non-zero, surface the error to the user and STOP; never use the standalone fallback for a
+failing helper. When either file is missing, read only the control files that exist; do not require
+a missing TASKS.md to resume an earlier phase. When TASKS.md exists, show the user its task
+Statuses. On resume, write the current `git rev-parse HEAD` to `resumeHead` and update `phase` to the
+phase being entered; change no other state field as part of the resume operation. On restart,
+archive the old control files that exist to `.codex-flow/archive/<timestamp>/` and begin fresh.
+
+If STATE.md does not exist, do not offer resume. Treat any PLAN.md or TASKS.md as orphaned control
+files and offer to archive them before beginning a fresh run.
 
 Then baseline the workspace (in the project root):
 
 1. `git status --porcelain` — if the tree is dirty, ask the user: commit/stash first
    (recommended, gives clean per-task diffs and a rollback point) or proceed with the dirty
-   baseline noted in PLAN.md. Record the baseline ref (`git rev-parse HEAD`). If the cwd is not a
-   git repo, tell the user diffs/checkpoints/rollback are unavailable and confirm before continuing.
+   baseline noted in PLAN.md. If the user proceeds dirty, save `git diff HEAD` to
+   `.codex-flow/baseline-dirty.patch`, then append a `# Untracked at run start` comment header with
+   every untracked path from `git status --porcelain`. Record the baseline ref
+   (`git rev-parse HEAD`). If the cwd is not a git repo, tell the user
+   diffs/checkpoints/rollback are unavailable and confirm before continuing.
 2. Ensure `.codex-flow/live/` is in the project's `.gitignore` (append it if missing) so raw
    live-progress JSONL logs never land in checkpoint or final commits.
 3. Detect the project's test command and run it once. Record any pre-existing failures as the
@@ -47,12 +68,33 @@ Then baseline the workspace (in the project root):
    local-time timestamp. On resume, reuse the report dir recorded under `## Session report` in the
    existing PLAN.md, creating it only if missing. This is the single session report dir that later
    phases write into per `codex-flow:session-report`.
+5. After baselining a fresh run, write `.codex-flow/STATE.md` per `codex-flow:preflight`, with
+   `phase: interview`, all approvals `no`, `runBaselineRef` set to the run-start git HEAD,
+   `resumeHead` empty, the compact original `knownRed` list, `checkpointCommits` empty, and
+   `executionMode: undecided`. Set `dirtyBaseline` to `baseline-dirty.patch` when the user proceeded
+   dirty, otherwise `none`. The orchestrator is the only writer. Never modify `runBaselineRef`,
+   `knownRed`, or `dirtyBaseline` on resume.
 
 ## Phase 1 — Interview (Claude)
 
-**Load skills first**: `codex-flow:interview-elicitation` (six question domains, stop condition) and `codex-flow:interview-ask-back` (5 Whys, example probing, hidden assumptions).
+**Load skills first**: (if not already loaded this session) `codex-flow:interview-elicitation` (six question domains, stop condition) and `codex-flow:interview-ask-back` (5 Whys, example probing, hidden assumptions).
 
 Interview the user with AskUserQuestion following those skills. Keep asking until every acceptance criterion is verifiable, then write the Requirements Summary and get confirmation.
+
+Immediately after confirmation, write the confirmed Requirements Summary VERBATIM to
+`.codex-flow/REQUIREMENTS.md` using the `codex-flow:interview-elicitation` format. Do not start
+Phase 2 until the write completes.
+Immediately when the user grants requirements approval, set `requirementsApproved` in
+`.codex-flow/STATE.md` to `yes (<ISO 8601 timestamp>)` and set `phase` to `plan` before entering
+Phase 2.
+
+For a confirmed mid-run requirement delta, append the delta per
+`codex-flow:interview-elicitation`, refresh `requirementsApproved` to
+`yes (delta <ISO date>)`, reset `planApproved` and `backlogApproved` to
+`no (delta <ISO date>)`, and set `phase` to `plan`. Before execution resumes, re-run Phase 2 impact
+analysis and plan approval, rebuild the affected backlog, run
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`,
+and obtain backlog re-approval. A prior approval never survives a requirement delta.
 
 Scale interview depth to task complexity: a small, unambiguous change needs only a short
 Requirements Summary and a quick confirmation — don't force the full six-domain interview. A large
@@ -60,7 +102,7 @@ or ambiguous feature warrants the full elicitation. When in doubt, ask.
 
 ## Phase 2 — Plan & Architecture (Claude)
 
-**Load skills first**: `codex-flow:plan-research-first` (search existing solutions before designing), `codex-flow:plan-architecture` (convention discovery, option trade-off analysis, PLAN.md structure), `codex-flow:skill-selection` (pick domain skills from the local skill index), and `codex-flow:context-discipline` (Explore subagents, boundary compaction, tiered AGENTS.md).
+**Load skills first**: (if not already loaded this session) `codex-flow:plan-research-first` (search existing solutions before designing), `codex-flow:plan-architecture` (convention discovery, option trade-off analysis, PLAN.md structure), `codex-flow:skill-selection` (pick domain skills from the local skill index), and `codex-flow:context-discipline` (Explore subagents, boundary compaction, tiered AGENTS.md).
 Also load `codex-flow:session-report` (report templates and PIC rules).
 
 1. Explore the codebase through Explore subagents per `codex-flow:context-discipline` to return conclusions with paths and line anchors.
@@ -101,9 +143,12 @@ Also load `codex-flow:session-report` (report templates and PIC rules).
    - **Known-red baseline**: pre-existing test failures from Phase 0
    - **Out of scope**: things Codex must NOT do
    - **Acceptance criteria**: how the result will be verified (tests to pass, behaviors to check)
+     Every entry must cite the R-IDs it covers, for example
+     `- A3 (covers R2.1, R2.2): ...`.
    - **Session report**: path of the report dir and exact session-start ISO 8601 value
    - **Decision log**: empty, append-only — filled during execution
 4. Show the plan to the user and get approval before continuing.
+   Record the grant timestamp, but do not update STATE.md yet.
 5. After approval, generate/update tiered AGENTS.md per `codex-flow:context-discipline`: root plus
    each package in the approved PLAN.md **Component → files** map whose conventions differ from
    root; make additive-only changes. Before Phase 3, commit all AGENTS.md creations/updates as
@@ -112,10 +157,18 @@ Also load `codex-flow:session-report` (report templates and PIC rules).
 6. After approval, write `planning.md` to the report dir per `codex-flow:session-report`. Under a
    `## Session report` heading in PLAN.md, record `- Report dir: <report dir>` and
    `- Session start: <ISO 8601>`.
+7. Only after steps 5 and 6 complete, set `planApproved` in `.codex-flow/STATE.md` to
+   `yes (<ISO 8601 timestamp>)` using the user's grant time, then set `phase` to `backlog` before
+   entering Phase 3. Never persist Phase 2 approval before its post-approval artifacts are durable.
 
 ## Phase 3 — Backlog (Claude)
 
 **Load skill first**: `codex-flow:plan-backlog` (slicing rules, dependency ordering, sanity checks).
+
+At the approval boundary after preparing the backlog below, immediately when the user grants
+backlog approval, set `backlogApproved` in `.codex-flow/STATE.md` to
+`yes (<ISO 8601 timestamp>)`, record the checkpoint choice in `checkpointCommits`, record the
+selected mode in `executionMode`, and set `phase` to `execution` before entering Phase 4.
 
 Decompose the approved plan into tasks and write `.codex-flow/TASKS.md`:
 
@@ -123,9 +176,11 @@ Decompose the approved plan into tasks and write `.codex-flow/TASKS.md`:
 ## T1: <imperative title>
 - Depends on: — | T<n>
 - Files: <files to create/modify>
+- Requirements: <R-IDs covered>
 - Steps: <concrete, file-level steps>
 - Skills: <Phase 2 domain skills relevant to THIS task, or — >
 - Acceptance: <verifiable criteria for THIS task — tests to pass, behaviors>
+- Session: —
 - Status: pending
 ```
 
@@ -154,6 +209,13 @@ Rules for slicing (see `codex-flow:plan-backlog` for the full sizing guidance):
   task prompt.
 - Also mirror the tasks with TaskCreate so the user sees live progress.
 
+Before asking for backlog approval, run
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`.
+Every effective R<n>.<m> must be cited by at least one task and no task may cite an unknown ID; fix
+the backlog before presenting it for approval. If the helper is unavailable in a standalone
+install, verify those two conditions manually. If the helper is present but exits non-zero,
+surface the error to the user and STOP; never continue to backlog approval with a failing helper.
+
 Show the backlog to the user and get approval before executing. At the same time ask once:
 **checkpoint commits after each passed task — yes/no?** (recommended yes on multi-task backlogs;
 gives per-task rollback points).
@@ -162,7 +224,7 @@ After backlog approval, write `allocation.md` (task → PIC table) to the report
 
 ## Phase 4 — Execution (Codex)
 
-**Load skills first (code tasks)**: `codex-flow:exec-coding-standards` and `codex-flow:exec-self-testing` (blocks to embed into every Codex prompt), `codex-flow:context-discipline` (no-raw-read, task-boundary compaction), plus the language skill matching the project: `codex-flow:exec-typescript`, `codex-flow:exec-python`, `codex-flow:exec-go`, `codex-flow:exec-jvm` (Java/Kotlin), `codex-flow:exec-rust`, `codex-flow:exec-csharp`, `codex-flow:exec-php`, `codex-flow:exec-ruby`, `codex-flow:exec-swift`, or `codex-flow:exec-cpp` (C/C++). If the project's language has no exec skill, use `codex-flow:exec-coding-standards` alone plus any language guidance from the skill index. Codex cannot see Claude's skills — the prompt is the only channel, so these standards blocks MUST be embedded in the prompt text. When a task must illustrate a chart/graph (code OR deliverable), also load `codex-flow:exec-visualization` so Codex routes the chart to flint-chart (PNG/SVG) instead of ad-hoc Python.
+**Load skills first (code tasks)**: (if not already loaded this session) `codex-flow:exec-coding-standards` and `codex-flow:exec-self-testing` (blocks to embed into every Codex prompt), `codex-flow:context-discipline` (no-raw-read, task-boundary compaction), plus the language skill matching the project: `codex-flow:exec-typescript`, `codex-flow:exec-python`, `codex-flow:exec-go`, `codex-flow:exec-jvm` (Java/Kotlin), `codex-flow:exec-rust`, `codex-flow:exec-csharp`, `codex-flow:exec-php`, `codex-flow:exec-ruby`, `codex-flow:exec-swift`, or `codex-flow:exec-cpp` (C/C++). If the project's language has no exec skill, use `codex-flow:exec-coding-standards` alone plus any language guidance from the skill index. Codex cannot see Claude's skills — the prompt is the only channel, so these standards blocks MUST be embedded in the prompt text. When a task must illustrate a chart/graph (code OR deliverable), also load `codex-flow:exec-visualization` so Codex routes the chart to flint-chart (PNG/SVG) instead of ad-hoc Python.
 
 **Non-code tasks**: when a task produces content instead of code (data analysis, marketing copy, docs, research, a plan), load `codex-flow:exec-deliverable` INSTEAD of `exec-coding-standards` + `exec-self-testing` + the language skill, and embed its deliverable + verification blocks. A mixed backlog picks per task: code tasks get the coding blocks, content tasks get the deliverable block. The selected domain skills (from Phase 2) are embedded either way. `codex-flow:context-discipline` still applies either way.
 
@@ -179,8 +241,17 @@ the project is not a git repo, or the tracked baseline cannot be made clean.
 
 For each task in dependency order (sequential mode):
 
-1. Call `mcp__codex__codex_execute` with:
-   - `prompt`: "Read .codex-flow/PLAN.md for context. Implement task T<n> exactly as specified below, and only this task. Run its acceptance checks before finishing." + the full task text + the standards, testing, and language blocks from the loaded skills (or the `exec-deliverable` blocks for a non-code task) + a distilled ≤ 30-line rules block for each skill listed in the task's `Skills:` field (see `codex-flow:skill-selection` Step 6 — never paste a whole SKILL.md)
+1. Before each `mcp__codex__codex_execute`, run
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --task T<n>`. If the helper is present
+   but exits non-zero, surface the error to the user and STOP; never use the standalone fallback for
+   a failing helper. If it reports `mandatory slice content exceeds tokenBudget`, split the
+   oversized task in the backlog before continuing; never raise the slice budget. Immediately
+   before the call, record `git rev-parse --short HEAD` as the task's base sha. In the same durable
+   update, set the task's `- Status:` line to `in-progress`, append
+   `  - <ISO 8601 ts> pending -> in-progress` beneath it, and write
+   `- Session: launching (base: <short sha>)`. Complete all three writes before calling
+   `mcp__codex__codex_execute` with:
+   - `prompt`: start the assembled prompt with the single header line `Run position: phase execution — task T<n> <title> — next gate: <gate>`. Then use the opener "Read .codex-flow/CONTEXT-T<n>.md for context (a budgeted slice of PLAN.md; its header records the generation anchor, and blocks marked [verify] must be re-checked against the current code before relying on them)." when the slice was generated, or "Read .codex-flow/PLAN.md for context." when the helper is unavailable in a standalone install. When the slice was generated, append "Implement task T<n> exactly as specified below, and only this task. Run its acceptance checks before finishing." + the standards, testing, and language blocks from the loaded skills (or the `exec-deliverable` blocks for a non-code task) + a distilled ≤ 30-line rules block for each skill listed in the task's `Skills:` field (see `codex-flow:skill-selection` Step 6 — never paste a whole SKILL.md); do not append the full task text because the slice already embeds it as mandatory content. In the standalone fallback, append the same directive + the full task text + those same standards/testing/language, deliverable, and distilled skill blocks.
    - `cwd`: absolute path of the project root
    - `sandbox`: `workspace-write` by default. Use `read-only` for investigation-only tasks; use `danger-full-access` ONLY when the task genuinely needs network or a global install — and tell the user before doing so.
    - `model`: match the task's complexity — a stronger model for architectural, cross-cutting, or subtle-logic tasks; the default (or a faster/cheaper model) for small, mechanical, well-specified tasks. Note the choice in the Decision log.
@@ -196,20 +267,36 @@ For each task in dependency order (sequential mode):
    - `failed` / `aborted` (tool error) → inspect `attempts`/`resumeReasons` first. If bounded
      auto-resume was exhausted or the failure was ineligible for auto-resume, report it and ask the
      user before any manual retry (see Rules below).
-3. **Save the returned `sessionId`** — reviews in Phase 5 go back into this session. Reuse one session (`codex_continue`) while consecutive tasks build on each other in the SAME domain; start a fresh `codex_execute` when a task is independent OR shifts domain (e.g. backend → data pipeline → marketing copy) — a fresh session gets the new task's distilled skill blocks instead of inheriting stale context from the previous domain.
-4. Update the task's Status in TASKS.md and TaskUpdate after each run.
+3. **Save the returned `sessionId`** — when `codex_execute` returns, replace the task's launching
+   Session line with `- Session: <sessionId> (cwd: <path>, base: <short sha>)`, preserving the base
+   recorded before the call. Reviews and fix rounds in Phase 5 go
+   back into the session recorded on that line. The DEFAULT is a fresh `codex_execute` per task;
+   use `codex_continue` for review/fix rounds within the same task. Cross-task session reuse is
+   allowed only when the next task directly depends on the previous task AND stays in the same
+   domain, and is capped at that one adjacent task — after that, start fresh. A fresh session gets
+   the new task's distilled skill blocks instead of inheriting stale context from the previous
+   domain.
+4. Keep the task `in-progress` while it is under review and while its durable handoff is being
+   written. Do not mark it done here; Phase 5 step 7 makes that the last durable task write. When a
+   task is abandoned, set `- Status:` to `failed`, append
+   `  - <ISO 8601 ts> in-progress -> failed (session: <id>; reason: <reason>)`, and update
+   TaskUpdate. Transition lines are append-only — never rewrite or delete earlier ones.
 5. Run Phase 5 review for the task BEFORE starting the next one.
-6. When the task passes review, act as the only per-task writer in sequential mode: append one schema block (see plan-architecture / PLAN.md Contracts) to PLAN.md's **Decision log** (deviations from the
-   plan, decisions made, surprises) so later tasks and fresh Codex sessions inherit the context —
-   and, if the user opted in at Phase 3, make the checkpoint commit
-   (`wip(codex-flow): T<n> <title>`).
+6. When the task passes review, act as the only per-task writer in sequential mode. Phase 5 step 7
+   performs the durable completion handoff in this order: append one schema block (see
+   plan-architecture / PLAN.md Contracts) to PLAN.md's **Decision log**, write the task and review
+   report entries, and, if the user opted in at Phase 3, make the checkpoint commit
+   (`wip(codex-flow): T<n> <title>`). Only after all of those writes succeed may step 7 flip the
+   task to `done`; `done` means the complete durable handoff exists.
 
 ## Phase 5 — Review (Claude, per task + final)
 
-**Load skills first**: `codex-flow:review-conformance` (requirement/plan/structure conformance — check FIRST), `codex-flow:review-quality` (correctness hazards, silent failures, test quality), `codex-flow:review-security` (mandatory when the diff touches auth, input, queries, files, or secrets), `codex-flow:review-feedback` (severity levels + codex_continue format), `codex-flow:review-dual` (dual Codex+Claude review, comparison protocol, improvements ledger + decision gate), and `codex-flow:context-discipline` (no-raw-read, task-boundary compaction).
+**Load skills first**: (if not already loaded this session) `codex-flow:review-conformance` (requirement/plan/structure conformance — check FIRST), `codex-flow:review-quality` (correctness hazards, silent failures, test quality), `codex-flow:review-security` (mandatory when the diff touches auth, input, queries, files, or secrets), `codex-flow:review-feedback` (severity levels + codex_continue format), `codex-flow:review-dual` (dual Codex+Claude review, comparison protocol, improvements ledger + decision gate), and `codex-flow:context-discipline` (no-raw-read, task-boundary compaction).
 Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews.md`, `cost.md`, and `SUMMARY.md`).
 
-0. Re-read `.codex-flow/PLAN.md` and this task's entry in `.codex-flow/TASKS.md` before reviewing — treat the files on disk as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline, not session memory (which may have been compacted across a long backlog).
+At the Phase 4 → Phase 5 boundary, set `phase` in `.codex-flow/STATE.md` to `review`.
+
+0. Before reviewing, when the slice helper is available, reuse the existing `.codex-flow/CONTEXT-T<n>.md` only when its generated header's anchor equals the current `git rev-parse HEAD` and the tree is clean; otherwise run `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --task T<n>` to regenerate this task's `.codex-flow/CONTEXT-T<n>.md` slice, then re-read it and this task's entry in `.codex-flow/TASKS.md`. If the helper is unavailable in a standalone install, fall back to reading `.codex-flow/PLAN.md` directly and still read this task's TASKS.md entry. If the helper is present but exits non-zero, surface the error to the user and STOP; never use the standalone fallback for a failing helper. Treat the files read on disk as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline, not session memory (which may have been compacted across a long backlog). Outside the standalone fallback, read full `.codex-flow/PLAN.md` only when a finding disputes plan intent or the slice's omitted-pointer line points at a section the review needs.
 1. Inspect what Codex did: use the `diff` field returned by the tool (git status + patch), and read changed files where the patch is not enough. For diffs over 400 lines, follow `codex-flow:context-discipline` no-raw-read rules: get a subagent summary, then read only targeted critical hunks.
 2. Review in order: conformance → quality → security, per the loaded skills.
 3. Run the project's tests/build yourself to verify — Codex's claim is input, not evidence. Compare
@@ -224,23 +311,35 @@ Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews
    `.codex-flow/IMPROVEMENTS.md` per the review-dual skill; they never block the task. If
    `mcp__codex__codex_review` fails, times out, or returns status `partial`, fall back to Claude-only
    review for this task, tell the user, and do not auto-retry because of quota.
-5. **If issues found**: send verified CRITICAL/HIGH findings from EITHER review to the Phase-4
-   IMPLEMENTATION `sessionId` saved in Phase 4 step 3 via `mcp__codex__codex_continue`, never to
-   the fresh reviewer session created by `mcp__codex__codex_review`. Use the review-feedback format
-   (numbered, severity-tagged, file:line, expected vs observed). Then re-review. Repeat up to 3
-   rounds per task.
+5. **If issues found**: route verified CRITICAL/HIGH findings from EITHER review to the task's
+   recorded Session line via `mcp__codex__codex_continue`, never to the fresh reviewer session
+   created by `mcp__codex__codex_review`. Use the review-feedback format (numbered,
+   severity-tagged, file:line, expected vs observed). If `codex_continue` fails because the
+   recorded session is gone (expired or compacted), fall back to a fresh `codex_execute` fix task
+   that embeds the finding text plus the task's `.codex-flow/CONTEXT-T<n>.md` slice; never hand-edit
+   Codex's code. Then re-review. Repeat up to 3 rounds per task.
 6. **Plan drift**: if a finding traces to the PLAN being wrong (wrong architecture, missed
-   requirement) rather than Codex mis-implementing it, do NOT burn review rounds — go back to
-   Phase 2, amend PLAN.md with user approval, re-slice the affected tasks, then resume.
-7. **If clean**: mark the task done.
-   Also append this task's section to the report dir's `tasks.md` per
-   `codex-flow:session-report`; when a task is dropped or abandoned, record it with
-   `Result: dropped` at the moment of that decision.
-   For a passed task, at the same time append its dual-review record to the report dir's
-   `reviews.md` per `codex-flow:session-report`.
-   **Sequential mode**: return to Phase 4 step 6 to append one schema block (see plan-architecture /
-   PLAN.md Contracts) to the Decision log and, if enabled, make the checkpoint commit. Once the
-   Decision log block and any enabled checkpoint commit are on disk, verify the durable state,
+   requirement) rather than Codex mis-implementing it, do NOT burn review rounds. Run this
+   plan-change transaction before execution resumes: FIRST durably set
+   `backlogApproved: no (plan drift <ISO date>)` and `phase: backlog` in STATE.md → amend PLAN.md
+   with user approval → write an impact analysis listing which done and pending tasks the change
+   touches → update the affected
+   TASKS.md `Steps` / `Files` / `Requirements` / `Acceptance` fields → re-run
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`
+   plus the `plan-backlog` backlog sanity checks → regenerate affected slices → recompute waves →
+   get backlog re-approval → only then restore
+   `backlogApproved: yes (<ISO 8601 timestamp>)` and return `phase` to `execution`. Improvement
+   tasks appended at the improvement decision gate go through the same mini-transaction — state
+   invalidation first, impact analysis, coverage lint, backlog sanity checks, re-approval, then
+   approval and phase restoration — before they are scheduled.
+7. **If clean**: complete the durable handoff while the task remains `in-progress`.
+   **Sequential mode**: follow Phase 4 step 6: append the Decision-log schema block, append this
+   task's section to the report dir's `tasks.md`, append its dual-review record to `reviews.md`, and
+   make the checkpoint commit when enabled. When a task is dropped or abandoned, record it with
+   `Result: dropped` at the moment of that decision. After every required write succeeds, update
+   TaskUpdate, then make the LAST durable task write: set `- Status:` to `done` and append
+   `  - <ISO 8601 ts> in-progress -> done (session: <id>)`. Once the full
+   durable handoff and final status transition are on disk, verify the durable state,
    tell the user this is a safe compaction point, and suggest running `/compact`; with state on
    disk, an auto-compaction landing at or after the boundary is lossless. Then move to the next task.
    **Parallel mode**: follow `codex-flow:parallel-execution`'s wave workflow: always commit each
@@ -248,8 +347,14 @@ Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews
    appends the schema blocks, verifies durable state, tells the user this is a safe compaction
    point, and suggests running `/compact`. An auto-compaction at or after that boundary is lossless.
 8. **After the last task**: do a whole-feature dual review — Claude's pass PLUS a required
-   `mcp__codex__codex_review`, passing the Phase-0 `baselineRef` so the review covers
-   `baseline..HEAD`, including checkpoint/merge commits, plus current uncommitted changes. If
+   `mcp__codex__codex_review`. Review the baseline-to-working-tree diff with
+   `git diff runBaselineRef` (the one-argument form), taking `runBaselineRef` from
+   `.codex-flow/STATE.md`; never use a resume-point ref for final review. This includes
+   checkpoint/merge commits plus staged and unstaged changes. Also inspect untracked files from
+   `git status --porcelain`. When `dirtyBaseline` names `baseline-dirty.patch`, subtract the
+   run-start hunks and untracked paths recorded in that manifest when attributing run changes;
+   report them as pre-existing instead. Compare current failures against the original
+   `knownRed` list from STATE.md; only failures absent from that run-start list are new. If
    `mcp__codex__codex_review` fails, times out, or returns status `partial`, fall back to Claude-only
    review, tell the user, and do not auto-retry because of quota. Compare the final findings per the
    review-dual comparison protocol, verify every finding, and append non-blocking suggestions from
@@ -257,7 +362,13 @@ Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews
    relevant Phase-4 IMPLEMENTATION `sessionId` through the same `mcp__codex__codex_continue`
    fix/re-review loop; repeat up to 3 rounds before delivery. Run the full test suite, AND verify the
    feature end-to-end by actually exercising the changed behavior (run the app/flow, not only unit
-   tests). Then summarize the delivered change, remaining risks, and suggest a commit message. If
+   tests). Re-run
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`;
+   if the helper is unavailable in a standalone install, verify coverage manually, but if it is
+   present and exits non-zero, surface the error to the user and STOP. Walk the effective
+   REQUIREMENTS.md set ID-by-ID, reporting met/not-met with evidence (test name, file, or
+   demonstrated behavior); any not-met ID blocks completion. Then summarize the delivered change,
+   remaining risks, and suggest a commit message. If
    per-task checkpoint commits were made, offer to squash the `wip(codex-flow)` commits into one
    clean commit (or keep them — user's call). Do not commit or squash unless the user asks.
    After the whole-feature dual review resolves, record its final comparison in the report dir's
@@ -268,8 +379,13 @@ Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews
    or has no unchecked pending entries, skip AskUserQuestion and note "no improvements" in the
    delivery summary. Otherwise compile those entries into a summary + proposed execution plan,
    grouped and effort-estimated per the review-dual skill, and present it via AskUserQuestion.
-   Slice approved items into new tasks appended to `.codex-flow/TASKS.md`; when each task is
+   Before appending any approved task, FIRST durably set
+   `backlogApproved: no (improvement tasks <ISO date>)` and `phase: backlog` in STATE.md. Slice
+   approved items into new tasks appended to `.codex-flow/TASKS.md`; when each task is
    created, mark its ledger line `(approved: T<n>)`, and check it off when the task passes review.
+   Run the impact analysis, coverage lint, and backlog sanity checks, then get backlog re-approval;
+   only afterward restore `backlogApproved: yes (<ISO 8601 timestamp>)` and return `phase` to
+   `execution` before scheduling the new tasks.
    Execute those tasks through the normal Phase 4 → Phase 5 loop, but do not re-trigger this
    decision gate for improvement tasks spawned by the gate. Record declined items once in
    `.codex-flow/PLAN.md`'s Decision log using the non-task event-block schema from
@@ -286,7 +402,8 @@ Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews
    embed raw stderr.
    When the helper is available, embed its output; always include the Claude qualitative section.
    Generate `SUMMARY.md` in the report dir per `codex-flow:session-report`. Mention both reports in
-   the final delivery summary.
+   the final delivery summary. Only after the improvement gate and all final review, requirement,
+   cost, report, and delivery gates complete, set `phase` in `.codex-flow/STATE.md` to `complete`.
 10. **Retro**: per `codex-flow:skill-selection` Step 8, if the flow produced reusable domain
    knowledge not covered by any indexed skill, offer to save it as a new skill in the local
    library and rebuild the index.
