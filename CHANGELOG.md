@@ -3,6 +3,47 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.20.0] - 2026-08-14
+
+### Added
+
+- **Per-event timestamps in live logs** — the live-view writer stamps every complete JSON event
+  line with an ISO 8601 `at` field (receipt time); malformed lines pass through unchanged and the
+  `live.run_finished` marker keeps its single `at`. `scripts/tail-progress.mjs` reads logs with or
+  without `at` and prints a `… +Ns` annotation when the gap between events exceeds 30s, so long
+  shell commands no longer render as unexplained dead air.
+- **Partial-line carry cap** — both the live-log writer and the tail viewer bound their line
+  buffers at 1 MiB (`MAX_CARRY_BYTES`); overflow is flushed as a raw unstamped line, so a producer
+  that never emits newlines cannot grow memory unboundedly and no bytes are lost.
+- **Targeted-testing rules in `exec-self-testing`** — Codex prompts now instruct: run only the
+  current task's test file while iterating, run the full suite at most once as the final step, stop
+  and report verbatim on sandbox/environment failures (EMFILE, EPERM, OOM) instead of re-running,
+  and name any test command expected to exceed two minutes. `tests/flowDocs.test.ts` gates all four
+  rules.
+- **AGENTS.md sandbox note** — documents the Codex-sandbox vitest EPERM on
+  `node_modules/.vite-temp` and the `npx vitest run <file> --configLoader runner` workaround.
+- New export `captureStatusPorcelainZ` and optional `statusPorcelainZ` on
+  `CaptureOptions`/`AttributeOptions` for sharing one post-run status read.
+
+### Changed
+
+- **Post-run diff + attribution run concurrently** and share a single
+  `git status --porcelain -z` invocation (4 → 3 git spawns per attempt); public result shapes and
+  never-throw semantics unchanged. Non-`-z` status output is reconstructed with git-compatible
+  C-style path quoting (quotes, backslashes, control chars, non-ASCII octal escapes), keeping the
+  payload byte-faithful for renames and exotic filenames.
+- **`errorCount` no longer counts the hook-trust startup notice** — `isBenignCliNotice` matches the
+  canonical `--dangerously-bypass-hook-trust` notice exactly (± backticks/trailing period) and
+  fail-closed: any other message referencing the flag still counts as a real error. The
+  `BENIGN_CLI_NOTICE_PATTERNS` export was replaced by `BENIGN_HOOK_TRUST_NOTICE`.
+
+### Notes
+
+- Motivated by a measured investigation (479 runs, 45.4h): execution slowness came from repeated
+  full-suite test runs inside Codex turns (31% of wall time non-generation) and global
+  `model_reasoning_effort = "high"`, not from server spawn/queue/resume overhead. Full report in
+  `.codex-flow/reports/20260814-093855/analysis.md`.
+
 ## [0.19.1] - 2026-08-07
 
 ### Added
