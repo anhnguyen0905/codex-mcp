@@ -16,6 +16,16 @@ Testing requirements (mandatory):
 - Tests assert behavior (inputs → outputs, state changes), not implementation details.
 - Use Arrange-Act-Assert structure with descriptive names ("returns empty list when no match").
 - Before finishing: run the FULL test suite and the build/typecheck — not just your new tests.
+- While iterating: run only the test file or pattern for the current task using the project's
+  targeted command (for example, `npx vitest run tests/<file>.test.ts`); never repeatedly run the
+  full suite mid-task.
+- Full-suite limit: run the FULL test suite at most ONCE, as the final verification step before
+  finishing.
+- Environment failure: if the full suite fails with a sandbox or environment error (EMFILE, EPERM,
+  out-of-memory, or file-watcher limits), STOP and report the verbatim error in the final summary;
+  do NOT re-run the full suite hoping it passes.
+- Long test commands: name every test command expected to take more than two minutes in the final
+  summary and explain why it was needed.
 - NEVER finish with failing tests or a broken build. If a pre-existing test fails for reasons
   outside this task, stop and report it instead of "fixing" the test to pass.
 - Fix the implementation, not the test — unless the test itself is provably wrong, and say so.

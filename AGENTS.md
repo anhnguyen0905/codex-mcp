@@ -9,6 +9,8 @@ behavior is defined in **markdown instruction files**, not runtime code.
 - `npm run build` — `tsc` to `dist/`.
 - `node scripts/check-command-sync.mjs` — command-mirror gate (see below).
 - `node scripts/check-release-consistency.mjs` — version-agreement gate (only on version bumps).
+- In the Codex sandbox, if vitest fails with EPERM writing `node_modules/.vite-temp`, use
+  `npx vitest run <file> --configLoader runner`; host-run results remain the source of truth.
 
 ## Hard conventions (CI-gated — violating these red-fails tests)
 

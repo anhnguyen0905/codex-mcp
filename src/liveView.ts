@@ -10,6 +10,7 @@ import {
   type WriteStream,
 } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
 import { isBenignCliNotice } from './eventParser.js'
 import { LIVE_RUN_FINISHED_TYPE, type LiveRunFinishedStatus } from './progressFormatter.js'
@@ -18,6 +19,7 @@ import { buildWatcherEnvExports, type TerminalCloseEnv } from './terminalCloser.
 
 /** Keep at most this many run logs per workspace; older ones are pruned on each new run. */
 const MAX_LOG_FILES = 20
+const MAX_CARRY_BYTES = 1024 * 1024
 
 export interface LiveView {
   onStdout: ((chunk: Buffer) => void) | undefined
@@ -40,7 +42,6 @@ export interface LiveViewDeps {
  * - neither seen  → 'interrupted' (abort, timeout, kill, or a stream cut mid-turn).
  */
 const createStreamStateTracker = () => {
-  let carry = ''
   let status: LiveRunFinishedStatus = 'interrupted'
   let sessionId: string | null = null
 
@@ -66,17 +67,24 @@ const createStreamStateTracker = () => {
   }
 
   return {
-    observe: (chunk: Buffer): void => {
-      const lines = (carry + chunk.toString('utf8')).split('\n')
-      carry = lines.pop() ?? ''
-      for (const line of lines) observeLine(line)
-    },
-    /** Flush the trailing unterminated line, then build the marker JSONL line. */
+    observeLine,
     markerLine: (): string => {
-      observeLine(carry)
-      carry = ''
       return `${JSON.stringify({ type: LIVE_RUN_FINISHED_TYPE, status, sessionId, at: new Date().toISOString() })}\n`
     },
+  }
+}
+
+/** Add one receipt timestamp to a JSON object line; preserve non-object or malformed input. */
+const stampEventLine = (line: string): string => {
+  const trimmed = line.trim()
+  if (trimmed.length === 0) return line
+
+  try {
+    const event: unknown = JSON.parse(trimmed)
+    if (typeof event !== 'object' || event === null || Array.isArray(event)) return line
+    return JSON.stringify({ ...event, at: new Date().toISOString() })
+  } catch {
+    return line
   }
 }
 
@@ -205,6 +213,46 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
     })
 
     const tracker = createStreamStateTracker()
+    const decoder = new StringDecoder('utf8')
+    let carry = ''
+    let carryBytes = 0
+
+    const resetCarry = (): void => {
+      carry = ''
+      carryBytes = 0
+    }
+
+    const writeRawCarry = (): void => {
+      if (carry.length === 0) return
+      tracker.observeLine(carry)
+      stream.write(`${carry}\n`)
+      resetCarry()
+    }
+
+    const appendCarry = (text: string): void => {
+      if (text.length === 0) return
+      carry += text
+      carryBytes += Buffer.byteLength(text)
+      if (carryBytes > MAX_CARRY_BYTES) writeRawCarry()
+    }
+
+    const writeCompleteLines = (text: string): void => {
+      const lines = text.split('\n')
+      if (lines.length === 1) {
+        appendCarry(text)
+        return
+      }
+
+      const firstLine = carry + (lines[0] ?? '')
+      resetCarry()
+      tracker.observeLine(firstLine)
+      stream.write(`${stampEventLine(firstLine)}\n`)
+      for (const line of lines.slice(1, -1)) {
+        tracker.observeLine(line)
+        stream.write(`${stampEventLine(line)}\n`)
+      }
+      appendCarry(lines[lines.length - 1] ?? '')
+    }
 
     openTerminalFn(logPath, {
       platform: process.platform,
@@ -218,11 +266,17 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
     return {
       onStdout: (chunk: Buffer) => {
         if (!writable) return
-        tracker.observe(chunk)
-        stream.write(chunk)
+        writeCompleteLines(decoder.write(chunk))
       },
       close: () => {
         if (!writable) return
+        writable = false
+        appendCarry(decoder.end())
+        if (carry.length > 0) {
+          tracker.observeLine(carry)
+          stream.write(`${stampEventLine(carry)}\n`)
+          resetCarry()
+        }
         // Explicit end-of-run marker: lets watchers (scripts/tail-progress.mjs) detect that the
         // run settled and exit instead of following the file forever.
         stream.end(tracker.markerLine())

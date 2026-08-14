@@ -29,6 +29,8 @@ export type DiffFn = (cwd: string) => Promise<WorkspaceDiff | null>
 export interface CaptureOptions {
   maxPatchBytes?: number
   maxStatusBytes?: number
+  /** Post-run porcelain status shared with attribution to avoid a duplicate git invocation. */
+  statusPorcelainZ?: Promise<string>
 }
 
 const isMaxBufferError = (error: ExecFileException): boolean =>
@@ -49,6 +51,10 @@ const runGit = (cwd: string, args: readonly string[]): Promise<string> =>
     )
   })
 
+/** Start a porcelain status read that diff and attribution can share within one run attempt. */
+export const captureStatusPorcelainZ = (cwd: string): Promise<string> =>
+  runGit(cwd, ['status', '--porcelain', '-z'])
+
 /**
  * Capture what changed in the workspace so the caller can review without re-reading files.
  * Returns null when cwd is not a git repo (or git is unavailable) — never throws.
@@ -63,7 +69,10 @@ export const captureWorkspaceDiff = async (
   // status is the gate: if it fails, cwd isn't a usable git repo → null (unchanged contract).
   let status: string
   try {
-    status = await runGit(cwd, ['status', '--porcelain'])
+    const statusPorcelainZ = options.statusPorcelainZ
+    status = statusPorcelainZ
+      ? formatPorcelainZ(await statusPorcelainZ)
+      : await runGit(cwd, ['status', '--porcelain'])
   } catch {
     return null
   }
@@ -124,6 +133,8 @@ export interface RunAttribution {
 
 export interface AttributeOptions {
   maxUntrackedFileBytes?: number
+  /** Post-run porcelain status shared with diff to avoid a duplicate git invocation. */
+  statusPorcelainZ?: Promise<string>
 }
 
 export type AttributeFn = (
@@ -135,11 +146,12 @@ export type AttributeFn = (
 interface StatusEntry {
   code: string
   path: string
+  originalPath?: string
 }
 
 /**
  * Parse `git status --porcelain -z`: NUL-separated `XY <path>` records; renames/copies emit the
- * ORIGINAL path as an extra NUL field which is skipped (the new path is what matters post-run).
+ * ORIGINAL path as an extra NUL field, retained so non-z status can render `ORIGINAL -> NEW`.
  */
 const parsePorcelainZ = (raw: string): StatusEntry[] => {
   const fields = raw.split('\0').filter((field) => field.length > 0)
@@ -152,14 +164,53 @@ const parsePorcelainZ = (raw: string): StatusEntry[] => {
       continue // malformed record — skip defensively
     }
     const code = field.slice(0, 2)
-    entries.push({ code, path: field.slice(3) })
-    i += code.includes('R') || code.includes('C') ? 2 : 1
+    const renamedOrCopied = code.includes('R') || code.includes('C')
+    entries.push({
+      code,
+      path: field.slice(3),
+      originalPath: renamedOrCopied ? fields[i + 1] : undefined,
+    })
+    i += renamedOrCopied ? 2 : 1
   }
   return entries
 }
 
-const listDirtyEntries = async (cwd: string): Promise<StatusEntry[]> =>
-  parsePorcelainZ(await runGit(cwd, ['status', '--porcelain', '-z']))
+const needsPorcelainQuoting = (byte: number): boolean =>
+  byte === 0x22 || byte === 0x5c || byte < 0x20 || byte === 0x7f || byte > 0x7f
+
+/** Match Git's C-style path quoting with the default `core.quotePath=true`. */
+const quotePorcelainPath = (path: string): string => {
+  const bytes = Buffer.from(path, 'utf8')
+  if (!bytes.some(needsPorcelainQuoting)) return path
+
+  let quoted = '"'
+  for (const byte of bytes) {
+    if (byte === 0x22) quoted += '\\"'
+    else if (byte === 0x5c) quoted += '\\\\'
+    else if (byte === 0x09) quoted += '\\t'
+    else if (byte === 0x0a) quoted += '\\n'
+    else if (byte === 0x0d) quoted += '\\r'
+    else if (byte < 0x20 || byte === 0x7f || byte > 0x7f) {
+      quoted += `\\${byte.toString(8).padStart(3, '0')}`
+    } else quoted += String.fromCharCode(byte)
+  }
+  return `${quoted}"`
+}
+
+const formatPorcelainZ = (raw: string): string =>
+  parsePorcelainZ(raw)
+    .map((entry) =>
+      entry.originalPath === undefined
+        ? `${entry.code} ${quotePorcelainPath(entry.path)}`
+        : `${entry.code} ${quotePorcelainPath(entry.originalPath)} -> ${quotePorcelainPath(entry.path)}`,
+    )
+    .join('\n')
+
+const listDirtyEntries = async (
+  cwd: string,
+  statusPorcelainZ?: Promise<string>,
+): Promise<StatusEntry[]> =>
+  parsePorcelainZ(await (statusPorcelainZ ?? captureStatusPorcelainZ(cwd)))
 
 const hashWorkspaceFile = async (cwd: string, relPath: string): Promise<string> => {
   try {
@@ -215,7 +266,7 @@ export const attributeWorkspaceDiff: AttributeFn = async (cwd, snapshot, options
   const maxUntrackedFileBytes = options.maxUntrackedFileBytes ?? MAX_UNTRACKED_FILE_BYTES
   let entries: StatusEntry[]
   try {
-    entries = await listDirtyEntries(cwd)
+    entries = await listDirtyEntries(cwd, options.statusPorcelainZ)
   } catch {
     return null
   }

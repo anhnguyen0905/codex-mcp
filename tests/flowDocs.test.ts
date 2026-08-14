@@ -11,6 +11,7 @@ const PLAN_BACKLOG_PATH = path.join(REPO_ROOT, 'skills', 'plan-backlog', 'SKILL.
 const REVIEW_DUAL_PATH = path.join(REPO_ROOT, 'skills', 'review-dual', 'SKILL.md')
 const PREFLIGHT_PATH = path.join(REPO_ROOT, 'skills', 'preflight', 'SKILL.md')
 const SKILL_SELECTION_PATH = path.join(REPO_ROOT, 'skills', 'skill-selection', 'SKILL.md')
+const EXEC_SELF_TESTING_PATH = path.join(REPO_ROOT, 'skills', 'exec-self-testing', 'SKILL.md')
 const INTERVIEW_ELICITATION_PATH = path.join(
   REPO_ROOT,
   'skills',
@@ -177,6 +178,24 @@ describe('skill frontmatter contracts', () => {
       expect(fields.every(({ value }) => !/^["']/.test(value.trim()))).toBe(true)
     },
   )
+})
+
+describe('exec-self-testing targeted-testing rules', () => {
+  test('keeps every targeted-testing safeguard in execution prompts', () => {
+    // Arrange
+    const skill = readText(EXEC_SELF_TESTING_PATH)
+
+    // Act
+    const requiredRules = [
+      'While iterating',
+      'at most ONCE',
+      'EMFILE',
+      'more than two minutes',
+    ]
+
+    // Assert
+    for (const rule of requiredRules) expect(skill).toContain(rule)
+  })
 })
 
 describe('context-discipline skill documentation', () => {

@@ -1,12 +1,17 @@
 import { StringDecoder } from 'node:string_decoder'
 import type { CodexCommand, CodexFileChange, CodexResult, CodexUsage } from './types.js'
 
-export const BENIGN_CLI_NOTICE_PATTERNS: readonly RegExp[] = [
-  /^(?:`--dangerously-bypass-hook-trust`|--dangerously-bypass-hook-trust) is enabled\. Enabled hooks may run without review for this invocation\.?$/,
-]
+export const BENIGN_HOOK_TRUST_NOTICE = '--dangerously-bypass-hook-trust'
+const BENIGN_HOOK_TRUST_NOTICE_DETAIL =
+  'is enabled. Enabled hooks may run without review for this invocation'
 
-export const isBenignCliNotice = (message: string): boolean =>
-  BENIGN_CLI_NOTICE_PATTERNS.some((pattern) => pattern.test(message))
+export const isBenignCliNotice = (message: string): boolean => {
+  const normalizedMessage = message.endsWith('.') ? message.slice(0, -1) : message
+  return (
+    normalizedMessage === `${BENIGN_HOOK_TRUST_NOTICE} ${BENIGN_HOOK_TRUST_NOTICE_DETAIL}` ||
+    normalizedMessage === `\`${BENIGN_HOOK_TRUST_NOTICE}\` ${BENIGN_HOOK_TRUST_NOTICE_DETAIL}`
+  )
+}
 
 interface RawEvent {
   type?: string

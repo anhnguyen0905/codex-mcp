@@ -1,6 +1,17 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, test, vi } from 'vitest'
 import { createLiveView } from '../src/liveView.js'
 import { LIVE_RUN_FINISHED_TYPE } from '../src/progressFormatter.js'
@@ -26,6 +37,7 @@ const makeView = () => {
 
 const POLL_INTERVAL_MS = 20
 const POLL_TIMEOUT_MS = 3000
+const TAIL_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'tail-progress.mjs')
 
 /** Wait for the async WriteStream flush after close(), then return the log's last line parsed. */
 const readMarker = async (logPath: string): Promise<Record<string, unknown>> => {
@@ -43,6 +55,12 @@ const readMarker = async (logPath: string): Promise<Record<string, unknown>> => 
     if (Date.now() > deadline) throw new Error(`no completion marker in ${logPath} after ${POLL_TIMEOUT_MS}ms`)
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
   }
+}
+
+/** Wait for close() to flush the marker, then return every non-empty raw JSONL line. */
+const readLogLines = async (logPath: string): Promise<string[]> => {
+  await readMarker(logPath)
+  return readFileSync(logPath, 'utf8').split('\n').filter((line) => line.length > 0)
 }
 
 // These tests mock process.platform to 'darwin' but exercise real POSIX fs
@@ -232,6 +250,123 @@ describe('createLiveView completion marker', () => {
 
     const marker = await readMarker(view.logPath as string)
     expect(marker.status).toBe('completed')
+  })
+})
+
+describe('createLiveView event timestamps', () => {
+  test('adds a valid ISO receipt timestamp to complete event lines across chunk boundaries', async () => {
+    const view = makeView()
+    const eventLine = '{"type":"thread.started","thread_id":"sess-timestamp"}\n'
+    view.onStdout?.(Buffer.from(eventLine.slice(0, 17)))
+    view.onStdout?.(Buffer.from(eventLine.slice(17)))
+
+    view.close()
+
+    if (!view.logPath) throw new Error('expected a live log path')
+    const [writtenLine] = await readLogLines(view.logPath)
+    const event = JSON.parse(writtenLine ?? '') as Record<string, unknown>
+    expect(event.type).toBe('thread.started')
+    const timestamp = event.at
+    expect(timestamp).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/))
+    if (typeof timestamp !== 'string') throw new Error('expected an ISO timestamp')
+    expect(Number.isNaN(Date.parse(timestamp))).toBe(false)
+  })
+
+  test('writes malformed lines through unchanged', async () => {
+    const view = makeView()
+    const malformedLine = '{"type":"turn.started",broken}\r'
+    view.onStdout?.(Buffer.from(`${malformedLine}\n`))
+
+    view.close()
+
+    if (!view.logPath) throw new Error('expected a live log path')
+    const [writtenLine] = await readLogLines(view.logPath)
+    expect(writtenLine).toBe(malformedLine)
+  })
+
+  test('writes through and resets a partial-line carry that exceeds one MiB', async () => {
+    const view = makeView()
+    const oversizedPartialLine = 'x'.repeat(1024 * 1024 + 1)
+    const completeEvent = '{"type":"turn.completed"}'
+    view.onStdout?.(Buffer.from(oversizedPartialLine))
+    view.onStdout?.(Buffer.from(`${completeEvent}\n`))
+
+    view.close()
+
+    if (!view.logPath) throw new Error('expected a live log path')
+    const lines = await readLogLines(view.logPath)
+    expect(lines[0]).toBe(oversizedPartialLine)
+    expect(Buffer.byteLength(lines[0] ?? '')).toBe(Buffer.byteLength(oversizedPartialLine))
+    expect(JSON.parse(lines[1] ?? '')).toMatchObject({ type: 'turn.completed' })
+    expect(JSON.parse(lines[lines.length - 1] ?? '')).toMatchObject({
+      type: LIVE_RUN_FINISHED_TYPE,
+      status: 'completed',
+    })
+  })
+
+  test('writes the run-finished marker with exactly one timestamp field', async () => {
+    const view = makeView()
+    view.onStdout?.(Buffer.from('{"type":"turn.completed"}\n'))
+
+    view.close()
+
+    if (!view.logPath) throw new Error('expected a live log path')
+    const lines = await readLogLines(view.logPath)
+    const markerLine = lines.find((line) => line.includes(LIVE_RUN_FINISHED_TYPE))
+    if (!markerLine) throw new Error('expected a completion marker')
+    expect(markerLine.match(/"at":/g)).toHaveLength(1)
+    expect(JSON.parse(markerLine)).toMatchObject({
+      type: LIVE_RUN_FINISHED_TYPE,
+      status: 'completed',
+      at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+    })
+  })
+})
+
+describe('tail-progress event gaps', () => {
+  const runTail = (events: ReadonlyArray<Record<string, unknown>>) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-tail-gap-'))
+    tempDirs.push(cwd)
+    const logPath = join(cwd, 'run.jsonl')
+    const content = `${events.map((event) => JSON.stringify(event)).join('\n')}\n`
+    writeFileSync(logPath, content)
+    return spawnSync(process.execPath, [TAIL_SCRIPT, logPath], {
+      encoding: 'utf8',
+      env: { ...process.env, [TERMINAL_KEEP_OPEN_ENV]: '1' },
+    })
+  }
+
+  test('prints the elapsed-time annotation when consecutive event timestamps exceed 30 seconds', () => {
+    const result = runTail([
+      { type: 'thread.started', thread_id: 'sess-gap', at: '2026-08-14T00:00:00.000Z' },
+      { type: 'turn.completed', at: '2026-08-14T00:03:07.000Z' },
+      {
+        type: LIVE_RUN_FINISHED_TYPE,
+        status: 'completed',
+        sessionId: 'sess-gap',
+        at: '2026-08-14T00:03:07.000Z',
+      },
+    ])
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('… +187s')
+  })
+
+  test('accepts legacy events without timestamps without inventing a gap', () => {
+    const result = runTail([
+      { type: 'thread.started', thread_id: 'sess-legacy', at: '2026-08-14T00:00:00.000Z' },
+      { type: 'turn.started' },
+      { type: 'turn.completed', at: '2026-08-14T00:03:07.000Z' },
+      {
+        type: LIVE_RUN_FINISHED_TYPE,
+        status: 'completed',
+        sessionId: 'sess-legacy',
+        at: '2026-08-14T00:03:07.000Z',
+      },
+    ])
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).not.toContain('… +')
   })
 })
 

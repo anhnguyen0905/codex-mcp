@@ -16,6 +16,8 @@ if (!logPath) {
 // Keep in sync with LIVE_RUN_FINISHED_TYPE in src/progressFormatter.ts. Detected here without
 // importing dist/ so auto-exit works even in a checkout that has not been built.
 const RUN_FINISHED_TYPE = 'live.run_finished'
+const EVENT_GAP_THRESHOLD_MS = 30_000
+const MAX_CARRY_BYTES = 1024 * 1024
 const TEST_PLATFORM_OVERRIDES = new Set(['darwin', 'linux', 'win32'])
 const TEST_WINDOW_ID_ENV = 'CODEX_TAIL_TEST_WINDOW_ID'
 
@@ -43,9 +45,11 @@ console.log('\x1b[1m╰───────────────────
 
 let position = 0
 let carry = ''
+let carryBytes = 0
 let watcher
 let pollTimer
 let timeoutTimer
+let previousEventAtMs = null
 
 const finish = (code, message) => {
   if (message) console.log(message)
@@ -121,13 +125,61 @@ const tryCloseTerminal = (status) => {
   return true
 }
 
+/** Return an event's timestamp in milliseconds, or null for old/malformed lines. */
+const parseEventTimestamp = (line) => {
+  try {
+    const event = JSON.parse(line)
+    if (typeof event !== 'object' || event === null || Array.isArray(event)) return null
+    if (typeof event.at !== 'string') return null
+    const timestampMs = Date.parse(event.at)
+    return Number.isFinite(timestampMs) ? timestampMs : null
+  } catch {
+    return null
+  }
+}
+
 const handleLine = (line) => {
+  const eventAtMs = parseEventTimestamp(line)
+  if (previousEventAtMs !== null && eventAtMs !== null) {
+    const gapMs = eventAtMs - previousEventAtMs
+    if (gapMs > EVENT_GAP_THRESHOLD_MS) console.log(`… +${Math.round(gapMs / 1000)}s`)
+  }
+  previousEventAtMs = eventAtMs
+
   const formatted = formatEvent(line)
   if (formatted) console.log(formatted)
   const status = parseRunFinishedStatus(line)
   if (status === null) return
   if (tryCloseTerminal(status)) return
   finish(0, '\n(run finished — closing watcher)')
+}
+
+const resetCarry = () => {
+  carry = ''
+  carryBytes = 0
+}
+
+const appendCarry = (text) => {
+  if (text.length === 0) return
+  carry += text
+  carryBytes += Buffer.byteLength(text)
+  if (carryBytes <= MAX_CARRY_BYTES) return
+  handleLine(carry)
+  resetCarry()
+}
+
+const consumeText = (text) => {
+  const lines = text.split('\n')
+  if (lines.length === 1) {
+    appendCarry(text)
+    return
+  }
+
+  const firstLine = carry + (lines[0] ?? '')
+  resetCarry()
+  handleLine(firstLine)
+  for (const line of lines.slice(1, -1)) handleLine(line)
+  appendCarry(lines[lines.length - 1] ?? '')
 }
 
 const drain = () => {
@@ -138,10 +190,7 @@ const drain = () => {
     let bytes = readSync(fd, buffer, 0, buffer.length, position)
     while (bytes > 0) {
       position += bytes
-      carry += buffer.toString('utf8', 0, bytes)
-      const lines = carry.split('\n')
-      carry = lines.pop() ?? ''
-      for (const line of lines) handleLine(line)
+      consumeText(buffer.toString('utf8', 0, bytes))
       bytes = readSync(fd, buffer, 0, buffer.length, position)
     }
   } finally {

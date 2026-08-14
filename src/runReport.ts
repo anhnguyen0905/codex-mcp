@@ -6,12 +6,15 @@ import { writeNotes, type NotesRequest } from './notesWriter.js'
 import { combineSinks, type ProgressNotifier, type ProgressSink } from './progressNotifier.js'
 import { deriveRunStatus, isErrorStatus, RESULT_SCHEMA_VERSION } from './runStatus.js'
 import { toToolResult, type RunPayload } from './toolPayloads.js'
-import type {
-  AttributeFn,
-  DiffFn,
-  RunAttribution,
-  SnapshotFn,
-  WorkspaceSnapshot,
+import {
+  attributeWorkspaceDiff,
+  captureStatusPorcelainZ,
+  captureWorkspaceDiff,
+  type AttributeFn,
+  type DiffFn,
+  type RunAttribution,
+  type SnapshotFn,
+  type WorkspaceSnapshot,
 } from './workspaceDiff.js'
 
 /**
@@ -76,6 +79,36 @@ const safeAttribute = async (
   } catch {
     return null
   }
+}
+
+const capturePostRunWorkspace = async (
+  diffFn: DiffFn,
+  attributeFn: AttributeFn,
+  cwd: string,
+  snapshot: WorkspaceSnapshot | null,
+): Promise<{
+  diff: Awaited<ReturnType<DiffFn>> | null
+  attribution: RunAttribution | null
+}> => {
+  if (diffFn !== captureWorkspaceDiff || attributeFn !== attributeWorkspaceDiff) {
+    const [diff, attribution] = await Promise.all([
+      safeDiff(diffFn, cwd),
+      safeAttribute(attributeFn, cwd, snapshot),
+    ])
+    return { diff, attribution }
+  }
+
+  const statusPorcelainZ = captureStatusPorcelainZ(cwd)
+  const [diff, attribution] = await Promise.all([
+    safeDiff((workspace) => captureWorkspaceDiff(workspace, { statusPorcelainZ }), cwd),
+    safeAttribute(
+      (workspace, beforeRun) =>
+        attributeWorkspaceDiff(workspace, beforeRun, { statusPorcelainZ }),
+      cwd,
+      snapshot,
+    ),
+  ])
+  return { diff, attribution }
 }
 
 /** Keep the last `n` chars without leaving a dangling low surrogate that would corrupt on encode. */
@@ -193,13 +226,19 @@ export const runOnce = async (
         : null
     // Capture the diff even on timeout/abort: the workspace may be half-mutated and the caller
     // needs to see (and attribute) what changed before deciding to retry or roll back.
+    const { diff, attribution } = await capturePostRunWorkspace(
+      diffFn,
+      attributeFn,
+      options.cwd,
+      snapshot,
+    )
     const payload: RunPayload = {
       ...parsed,
       schemaVersion: RESULT_SCHEMA_VERSION,
       status,
       runId,
-      diff: await safeDiff(diffFn, options.cwd),
-      attribution: await safeAttribute(attributeFn, options.cwd, snapshot),
+      diff,
+      attribution,
       exitCode: outcome.exitCode,
       timedOut: outcome.timedOut,
       aborted,

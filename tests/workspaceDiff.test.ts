@@ -9,6 +9,19 @@ import { captureWorkspaceDiff } from '../src/workspaceDiff.js'
 import { createServer } from '../src/server.js'
 import type { RunOutcome } from '../src/types.js'
 
+const { execFileCall } = vi.hoisted(() => ({ execFileCall: vi.fn() }))
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return {
+    ...actual,
+    execFile: (...args: Parameters<typeof actual.execFile>) => {
+      execFileCall(args[0], args[1])
+      return Reflect.apply(actual.execFile, actual, args)
+    },
+  }
+})
+
 const git = (cwd: string, ...args: string[]): void => {
   execFileSync('git', args, { cwd, stdio: 'ignore' })
 }
@@ -108,9 +121,132 @@ describe('captureWorkspaceDiff', () => {
     expect(diff?.truncated).toBe(true)
     expect(diff?.patch.length).toBeLessThanOrEqual(1024)
   })
+
+  test('formats rename paths with Git-compatible independent quoting', async () => {
+    const repo = makeRepo()
+    const statusPorcelainZ = Promise.resolve(
+      'R  dest.txt\0orig"name.txt\0R  dest\nname.txt\0orig.txt\0R  plain-dest.txt\0plain-orig.txt\0',
+    )
+
+    const diff = await captureWorkspaceDiff(repo, { statusPorcelainZ })
+
+    expect(diff?.status).toBe(
+      'R  "orig\\"name.txt" -> dest.txt\n' +
+        'R  orig.txt -> "dest\\nname.txt"\n' +
+        'R  plain-orig.txt -> plain-dest.txt',
+    )
+  })
+
+  test('C-quotes newline and double-quote bytes like git status porcelain', async () => {
+    const repo = makeRepo()
+    const statusPorcelainZ = Promise.resolve('?? line\nbreak.txt\0?? quote"name.txt\0')
+
+    const diff = await captureWorkspaceDiff(repo, { statusPorcelainZ })
+
+    expect(diff?.status).toBe('?? "line\\nbreak.txt"\n?? "quote\\"name.txt"')
+  })
+
+  test('C-quotes backslash, control, DEL, and non-ASCII bytes', async () => {
+    const repo = makeRepo()
+    const statusPorcelainZ = Promise.resolve(
+      '?? slash\\name\0?? tab\tname\0?? carriage\rname\0?? bell\u0007name\0?? café\0?? del\u007fname\0',
+    )
+
+    const diff = await captureWorkspaceDiff(repo, { statusPorcelainZ })
+
+    expect(diff?.status).toBe(
+      '?? "slash\\\\name"\n' +
+        '?? "tab\\tname"\n' +
+        '?? "carriage\\rname"\n' +
+        '?? "bell\\007name"\n' +
+        '?? "caf\\303\\251"\n' +
+        '?? "del\\177name"',
+    )
+  })
 })
 
 describe('server diff wiring', () => {
+  test('shares post-run status while preserving dirty-repo diff and attribution', async () => {
+    const repo = makeRepo()
+    writeFileSync(join(repo, 'a.txt'), 'dirty before run\n')
+    const runFn = vi.fn(async (): Promise<RunOutcome> => {
+      writeFileSync(join(repo, 'new.txt'), 'brand new\n')
+      return { stdout: '', stderr: '', exitCode: 0, timedOut: false }
+    })
+    const server = createServer({ runFn: runFn as never })
+    const client = new Client({ name: 'test-client', version: '0.0.1' })
+    const [ct, st] = InMemoryTransport.createLinkedPair()
+    await Promise.all([server.connect(st), client.connect(ct)])
+    execFileCall.mockClear()
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'go', cwd: repo, terminal: false },
+    })
+    const payload = JSON.parse((result.content as Array<{ text: string }>)[0].text)
+    const gitCalls = execFileCall.mock.calls.filter(([command]) => command === 'git')
+
+    expect(gitCalls).toHaveLength(3)
+    expect(payload.diff).toEqual({
+      status: ' M a.txt\n?? new.txt',
+      statusTruncated: false,
+      patch: expect.stringContaining('+dirty before run'),
+      truncated: false,
+    })
+    expect(payload.attribution).toEqual({
+      files: [
+        { path: 'a.txt', status: ' M', attribution: 'preExisting' },
+        { path: 'new.txt', status: '??', attribution: 'changedByRun' },
+      ],
+      untracked: [
+        {
+          path: 'new.txt',
+          content: 'brand new\n',
+          truncated: false,
+          binary: false,
+        },
+      ],
+    })
+  })
+
+  test('starts diff and attribution concurrently and isolates a diff failure', async () => {
+    let diffSettled = false
+    const runFn = vi.fn(async (): Promise<RunOutcome> => ({
+      stdout: '',
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+    }))
+    const diffFn = vi.fn(async () => {
+      await Promise.resolve()
+      diffSettled = true
+      throw new Error('git exploded')
+    })
+    const attribution = { files: [], untracked: [] }
+    const attributeFn = vi.fn(async () => {
+      expect(diffSettled).toBe(false)
+      return attribution
+    })
+    const server = createServer({
+      runFn: runFn as never,
+      diffFn: diffFn as never,
+      snapshotFn: vi.fn(async () => null),
+      attributeFn,
+    })
+    const client = new Client({ name: 'test-client', version: '0.0.1' })
+    const [ct, st] = InMemoryTransport.createLinkedPair()
+    await Promise.all([server.connect(st), client.connect(ct)])
+
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'go', cwd: '/repo' },
+    })
+    const payload = JSON.parse((result.content as Array<{ text: string }>)[0].text)
+
+    expect(payload.diff).toBeNull()
+    expect(payload.attribution).toEqual(attribution)
+  })
+
   test('includes the workspace diff in the tool payload', async () => {
     const runFn = vi.fn(async (): Promise<RunOutcome> => ({ stdout: '', stderr: '', exitCode: 0, timedOut: false }))
     const diffFn = vi.fn(async () => ({ status: 'M a.txt', statusTruncated: false, patch: 'diff --git a/a.txt', truncated: false }))

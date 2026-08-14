@@ -188,6 +188,50 @@ describe('parseEvents', () => {
 })
 
 describe('parseEvents warnings plumbing', () => {
+  test('excludes two hook-trust warnings while counting one real error', () => {
+    // Arrange
+    const jsonl = [
+      line({ type: 'item.completed', item: { type: 'error', message: BENIGN_NOTICE } }),
+      line({
+        type: 'item.completed',
+        item: {
+          type: 'error',
+          message:
+            '--dangerously-bypass-hook-trust is enabled. Enabled hooks may run without review for this invocation',
+        },
+      }),
+      line({ type: 'item.completed', item: { type: 'error', message: 'sandbox denied' } }),
+    ].join('\n')
+
+    // Act
+    const result = parseEvents(jsonl)
+
+    // Assert
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors).toEqual(['sandbox denied'])
+  })
+
+  test('reports zero errors when the stream contains only hook-trust warnings', () => {
+    // Arrange
+    const jsonl = [
+      line({ type: 'item.completed', item: { type: 'error', message: BENIGN_NOTICE } }),
+      line({
+        type: 'item.completed',
+        item: {
+          type: 'error',
+          message:
+            '--dangerously-bypass-hook-trust is enabled. Enabled hooks may run without review for this invocation',
+        },
+      }),
+    ].join('\n')
+
+    // Act
+    const result = parseEvents(jsonl)
+
+    // Assert
+    expect(result.errors).toHaveLength(0)
+  })
+
   test('leaves warnings empty when the stream has no error notices', () => {
     const result = parseEvents(line({ type: 'turn.completed', usage: { input_tokens: 1 } }))
 
@@ -225,7 +269,7 @@ describe('parseEvents warnings plumbing', () => {
     expect(result.warnings).toEqual([notice])
   })
 
-  test('keeps a prefix-collision error fail-closed and derives failed status', () => {
+  test('keeps a hook-trust prefix collision fail-closed and derives failed status', () => {
     // Arrange
     const message =
       '--dangerously-bypass-hook-trust is enabled but the hook trust setup failed'
