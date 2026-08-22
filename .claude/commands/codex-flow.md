@@ -49,6 +49,10 @@ archive the old control files that exist to `.codex-flow/archive/<timestamp>/` a
 If STATE.md does not exist, do not offer resume. Treat any PLAN.md or TASKS.md as orphaned control
 files and offer to archive them before beginning a fresh run.
 
+Before baselining, evaluate the **Fast-path gate** (next section). When the task qualifies and the
+user confirms the fast path, run only baseline step 1 below as an informational check and skip
+steps 2–5 — a fast-path run writes no `.codex-flow/` control files and needs no known-red baseline.
+
 Then baseline the workspace (in the project root):
 
 1. `git status --porcelain` — if the tree is dirty, ask the user: commit/stash first
@@ -74,6 +78,46 @@ Then baseline the workspace (in the project root):
    `executionMode: undecided`. Set `dirtyBaseline` to `baseline-dirty.patch` when the user proceeded
    dirty, otherwise `none`. The orchestrator is the only writer. Never modify `runBaselineRef`,
    `knownRed`, or `dirtyBaseline` on resume.
+
+## Fast-path gate — small and analysis-only tasks
+
+The full six-phase flow exists for multi-task feature work. Its fixed overhead (interview docs,
+PLAN/TASKS/STATE, per-task slices, dual review, reports) is the wrong cost for a small or
+read-only task, so route those through one of two lite lanes instead. Evaluate this gate right
+after the preflight health and resume checks, before any control file is written.
+
+**Eligibility** — the task must fit ONE of these lanes, and NONE of the exclusions:
+
+- **Analysis lane**: the deliverable is an answer, report, or data readout; no tracked project
+  file is created or modified. Examples: "why is X slow", "analyze this export", "compare these
+  two builds", "review this module's structure".
+- **Small-change lane**: a well-specified change touching ≤ 2 files with unambiguous requirements
+  and a checkable outcome. Examples: a config flag, a copy fix, a single-function bug fix with a
+  known repro.
+
+**Exclusions (always full flow)**: security-sensitive changes (auth, payments, secrets,
+migrations, input handling), changes spanning components or contracts, ambiguous requirements
+that need real elicitation, anything the user explicitly asked to run as the full flow. When
+unsure, ask the user one question: fast path or full flow.
+
+**Analysis lane workflow**: Claude works directly — read code, run read-only commands, query
+data — and delivers the findings with a short "what I verified" note. No Codex session is
+required; use a single read-only `mcp__codex__codex_execute` only when an independent second
+opinion adds value. For any data-analysis work, follow the Data tooling rules in
+`codex-flow:exec-deliverable` (ingest-once columnar tooling, sample-first iteration) — never
+row-by-row scripts over large raw files.
+
+**Small-change lane workflow**: one `mcp__codex__codex_execute` carrying the same embedded blocks
+Phase 4 would use (`codex-flow:exec-coding-standards`, `codex-flow:exec-self-testing`, the
+project-language skill), then ONE Claude review pass in Phase 5 order (conformance → quality →
+security triggers, per `codex-flow:review-conformance`, `codex-flow:review-quality`,
+`codex-flow:review-security`) plus running the relevant tests yourself. Skip the dual
+`codex_review`, backlog, reports, and improvement gate. Route fixes back via
+`mcp__codex__codex_continue`, up to 3 rounds as usual. Do not commit unless the user asks.
+
+**Escalation rule**: the moment fast-path work reveals the task is bigger than its lane — more
+files than declared, architectural impact, hidden ambiguity — STOP, tell the user what changed,
+and restart at Phase 1 with the full flow. Never stretch a lane to avoid the restart.
 
 ## Phase 1 — Interview (Claude)
 
@@ -266,6 +310,8 @@ After backlog approval, write `allocation.md` (task → PIC table) to the report
 **Load skills first (code tasks)**: (if not already loaded this session) `codex-flow:exec-coding-standards` and `codex-flow:exec-self-testing` (blocks to embed into every Codex prompt), `codex-flow:context-discipline` (no-raw-read, task-boundary compaction), plus the language skill matching the project: `codex-flow:exec-typescript`, `codex-flow:exec-python`, `codex-flow:exec-go`, `codex-flow:exec-jvm` (Java/Kotlin), `codex-flow:exec-rust`, `codex-flow:exec-csharp`, `codex-flow:exec-php`, `codex-flow:exec-ruby`, `codex-flow:exec-swift`, or `codex-flow:exec-cpp` (C/C++). If the project's language has no exec skill, use `codex-flow:exec-coding-standards` alone plus any language guidance from the skill index. Codex cannot see Claude's skills — the prompt is the only channel, so these standards blocks MUST be embedded in the prompt text. When a task must illustrate a chart/graph (code OR deliverable), also load `codex-flow:exec-visualization` so Codex routes the chart to flint-chart (PNG/SVG) instead of ad-hoc Python.
 
 **Non-code tasks**: when a task produces content instead of code (data analysis, marketing copy, docs, research, a plan), load `codex-flow:exec-deliverable` INSTEAD of `exec-coding-standards` + `exec-self-testing` + the language skill, and embed its deliverable + verification blocks. A mixed backlog picks per task: code tasks get the coding blocks, content tasks get the deliverable block. The selected domain skills (from Phase 2) are embedded either way. `codex-flow:context-discipline` still applies either way.
+
+**Data processing tooling**: the project-language skill governs code that lands in the repo, NOT ad-hoc data processing inside a task. Whenever a task reads or transforms a dataset beyond ~50 MB (in any lane, code or content), also embed the Data tooling block from `codex-flow:exec-deliverable`: ingest once into columnar tooling (DuckDB first), iterate on a sample, run the full pass once at the end — never let Codex write row-by-row scan scripts over large raw files just because the repo happens to be TypeScript/Node (or any other language).
 
 **Sequential vs parallel**: always run
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/task-waves.mjs" .codex-flow/TASKS.md` to compute execution

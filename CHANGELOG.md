@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.21.0] - 2026-08-22
+
+### Added
+
+- **Fast-path gate in `/codex-flow`** — a new section between Phase 0 and Phase 1 routes small
+  and analysis-only tasks around the full six-phase machinery. Two lanes: an *analysis lane*
+  (answer/report/readout with no tracked-file changes — Claude works directly, no control files,
+  no Codex session required) and a *small-change lane* (≤ 2 well-specified files — one
+  `codex_execute` with the usual embedded blocks plus one Claude review pass, skipping backlog,
+  dual review, reports, and the improvement gate). Security-sensitive or multi-component work is
+  always excluded, and an escalation rule restarts at Phase 1 the moment a task outgrows its
+  lane. This removes the fixed multi-phase overhead that made simple-to-medium requests slow.
+- **Data tooling block in `exec-deliverable`** — mandatory rules embedded into Codex prompts for
+  any task processing datasets beyond ~50 MB: ingest raw exports once into columnar form (DuckDB/
+  Parquet) and query that, never write row-by-row scan scripts over large raw files regardless of
+  the repo's language, develop on a sample and run the full pass exactly once, build shared
+  intermediate tables instead of per-report full scans, copy inputs out of cloud-synced folders,
+  and aggregate incrementally instead of accumulating per-row objects in RAM.
+- **Phase 4 data-processing tooling rule** — the project-language skill now explicitly governs
+  only code that lands in the repo; ad-hoc data processing follows the Data tooling block, so a
+  TypeScript project no longer causes Codex to scan an 800 MB CSV with Node readline scripts.
+
 ## [0.20.0] - 2026-08-14
 
 ### Added

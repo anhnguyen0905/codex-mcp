@@ -28,6 +28,34 @@ Deliverable standards (mandatory — this task produces content, not code):
   that don't exist.
 ```
 
+## Data tooling block (embed additionally when the task processes a dataset)
+
+Embed this block whenever the task reads or transforms data files beyond ~50 MB, in ANY lane —
+a content task analyzing an export, or a code task that happens to crunch data. Tool choice
+follows the data, not the repo's language: a TypeScript project does not mean Node scripts are
+the right way to scan an 800 MB CSV.
+
+```
+Data tooling rules (mandatory — this task processes a large dataset):
+- Ingest once, query many: convert raw CSV/JSON exports into columnar form first (DuckDB database
+  file or Parquet — e.g. `duckdb analysis.duckdb "CREATE TABLE events AS SELECT * FROM
+  read_csv('<file>', union_by_name=true)"`), then run every question as a query against that.
+  Never re-parse the raw file per question or per report.
+- Never write row-by-row scan scripts (Node readline, Python line loops, etc.) over large raw
+  files when columnar tooling can express the aggregation — regardless of the project's language.
+- Sample-first iteration: develop and debug every query/script against a small sample (e.g. the
+  first 10-50k rows) and run the full dataset exactly once, after the logic passes on the sample.
+  Report the full-pass wall-clock time and row count in the deliverable.
+- One pass, many outputs: when several reports derive from the same raw data, build shared
+  intermediate tables (per-user, per-day aggregates) in the ingest step and point every report at
+  those — never give each report its own full scan of the raw file.
+- Keep heavy I/O local: if the input lives in a cloud-synced folder (OneDrive, Dropbox, Google
+  Drive), copy it to a local temp dir before ingesting and write outputs locally; sync overhead
+  can multiply runtimes.
+- Memory discipline: never accumulate per-row objects for the whole dataset in RAM; aggregate
+  incrementally or let the columnar engine do it.
+```
+
 ## Verification block (the non-code equivalent of self-testing)
 
 ```
