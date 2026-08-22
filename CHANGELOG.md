@@ -3,6 +3,31 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.21.1] - 2026-08-22
+
+### Fixed
+
+- **Analysis lane no longer blocked by Codex login** — the Fast-path gate's analysis lane needs
+  no Codex session, so a failed `codex_health` check or missing login no longer stops
+  analysis-only requests; the small-change lane and the full flow still require `loggedIn: true`.
+
+### Added
+
+- **Mechanical scope trip-wire for the small-change lane** — after each fast-path
+  `codex_execute`/`codex_continue`, the actual changed files are diffed against the ≤ 2 files the
+  lane was entered with; any extra file (excluding generated lockfiles) triggers escalation to the
+  full flow automatically instead of relying on judgment.
+- **Small-change lane known-red baseline** — the lane runs the project's test command once before
+  executing and only counts failures absent from that list against the change.
+- **Fast-path log** — every fast-path run appends one durable line to
+  `.codex-flow/notes/fastpath.log` (lane, task, sessionId, outcome), preserving the session
+  lineage for `codex_continue` fix rounds and leaving an audit trail even on escalation.
+- **Measure-before-choosing rule** — the Data tooling block and Phase 4 now require measuring
+  input sizes (`du -h`) before selecting tooling instead of guessing against the ~50 MB threshold.
+- **Guard tests** — `tests/flowDocs.test.ts` now locks the Fast-path gate contract (lanes,
+  health-gate exemption, trip-wire, known-red, log) and the data-processing tooling rules in
+  Phase 4 and `exec-deliverable`.
+
 ## [0.21.0] - 2026-08-22
 
 ### Added

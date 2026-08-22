@@ -37,6 +37,8 @@ the right way to scan an 800 MB CSV.
 
 ```
 Data tooling rules (mandatory — this task processes a large dataset):
+- Measure before choosing: run `du -h` on the inputs (and `wc -l` when cheap) BEFORE picking
+  tooling; these rules bind when inputs exceed ~50 MB — never guess sizes.
 - Ingest once, query many: convert raw CSV/JSON exports into columnar form first (DuckDB database
   file or Parquet — e.g. `duckdb analysis.duckdb "CREATE TABLE events AS SELECT * FROM
   read_csv('<file>', union_by_name=true)"`), then run every question as a query against that.

@@ -25,6 +25,11 @@ Call `mcp__codex__codex_health` before anything else:
   until a re-check shows `loggedIn: true`.
 - **`loggedIn: true`** → report the Codex version and continue.
 
+Exception: a failed health check or missing login does NOT block the **analysis lane** of the
+Fast-path gate below — that lane needs no Codex session. Tell the user about the health failure,
+then proceed in the analysis lane; the small-change lane and the full flow still require
+`loggedIn: true`.
+
 **Resume check** — if `.codex-flow/STATE.md` exists, treat it as an interrupted run and offer
 **resume** or **restart**, even when PLAN.md or TASKS.md has not been created yet. STATE.md is the
 resume authority: skip only phases whose approvals STATE.md records, and enter the first unapproved
@@ -102,22 +107,38 @@ unsure, ask the user one question: fast path or full flow.
 
 **Analysis lane workflow**: Claude works directly — read code, run read-only commands, query
 data — and delivers the findings with a short "what I verified" note. No Codex session is
-required; use a single read-only `mcp__codex__codex_execute` only when an independent second
-opinion adds value. For any data-analysis work, follow the Data tooling rules in
-`codex-flow:exec-deliverable` (ingest-once columnar tooling, sample-first iteration) — never
-row-by-row scripts over large raw files.
+required (this lane is exempt from the Codex health gate); use a single read-only
+`mcp__codex__codex_execute` only when an independent second opinion adds value AND Codex is
+healthy. For any data-analysis work, follow the Data tooling rules in
+`codex-flow:exec-deliverable` (measure input sizes first, ingest-once columnar tooling,
+sample-first iteration) — never row-by-row scripts over large raw files.
 
-**Small-change lane workflow**: one `mcp__codex__codex_execute` carrying the same embedded blocks
+**Small-change lane workflow**: first run the project's test command once and note any
+pre-existing failures as the lane's known-red list — only failures NOT on that list count against
+the change. Then one `mcp__codex__codex_execute` carrying the same embedded blocks
 Phase 4 would use (`codex-flow:exec-coding-standards`, `codex-flow:exec-self-testing`, the
 project-language skill), then ONE Claude review pass in Phase 5 order (conformance → quality →
 security triggers, per `codex-flow:review-conformance`, `codex-flow:review-quality`,
-`codex-flow:review-security`) plus running the relevant tests yourself. Skip the dual
-`codex_review`, backlog, reports, and improvement gate. Route fixes back via
+`codex-flow:review-security`) plus running the relevant tests yourself against that known-red
+list. Skip the dual `codex_review`, backlog, reports, and improvement gate. Route fixes back via
 `mcp__codex__codex_continue`, up to 3 rounds as usual. Do not commit unless the user asks.
 
+**Scope trip-wire (mechanical, not judgment)**: after each small-change `codex_execute` or
+`codex_continue` returns, diff the actual changed files (the returned `diff` plus
+`git status --porcelain`) against the ≤ 2 files the lane was entered with. ANY extra changed
+file — excluding generated lockfiles — triggers the escalation rule automatically; do not review
+the oversized diff in-lane and do not re-argue eligibility after the fact.
+
+**Fast-path log**: append one line per fast-path run to `.codex-flow/notes/fastpath.log`:
+`<ISO 8601> <analysis|small-change> <one-line task> session=<sessionId or -> outcome=<delivered|done|escalated|failed>`.
+The recorded sessionId is what later `codex_continue` fix rounds attach to; the log is the only
+durable trace a fast-path run leaves, so write it even on escalation or failure.
+
 **Escalation rule**: the moment fast-path work reveals the task is bigger than its lane — more
-files than declared, architectural impact, hidden ambiguity — STOP, tell the user what changed,
-and restart at Phase 1 with the full flow. Never stretch a lane to avoid the restart.
+files than declared (the trip-wire), architectural impact, hidden ambiguity — STOP, log
+`outcome=escalated` with a note of any partial work that exists, tell the user what changed,
+and restart at Phase 1 with the full flow. A wrong up-front size estimate is not a failure;
+stretching the lane to avoid the restart is. Never stretch a lane.
 
 ## Phase 1 — Interview (Claude)
 
@@ -311,7 +332,7 @@ After backlog approval, write `allocation.md` (task → PIC table) to the report
 
 **Non-code tasks**: when a task produces content instead of code (data analysis, marketing copy, docs, research, a plan), load `codex-flow:exec-deliverable` INSTEAD of `exec-coding-standards` + `exec-self-testing` + the language skill, and embed its deliverable + verification blocks. A mixed backlog picks per task: code tasks get the coding blocks, content tasks get the deliverable block. The selected domain skills (from Phase 2) are embedded either way. `codex-flow:context-discipline` still applies either way.
 
-**Data processing tooling**: the project-language skill governs code that lands in the repo, NOT ad-hoc data processing inside a task. Whenever a task reads or transforms a dataset beyond ~50 MB (in any lane, code or content), also embed the Data tooling block from `codex-flow:exec-deliverable`: ingest once into columnar tooling (DuckDB first), iterate on a sample, run the full pass once at the end — never let Codex write row-by-row scan scripts over large raw files just because the repo happens to be TypeScript/Node (or any other language).
+**Data processing tooling**: the project-language skill governs code that lands in the repo, NOT ad-hoc data processing inside a task. Whenever a task reads or transforms a dataset beyond ~50 MB — measure with `du -h` first, never guess sizes — (in any lane, code or content), also embed the Data tooling block from `codex-flow:exec-deliverable`: ingest once into columnar tooling (DuckDB first), iterate on a sample, run the full pass once at the end — never let Codex write row-by-row scan scripts over large raw files just because the repo happens to be TypeScript/Node (or any other language).
 
 **Sequential vs parallel**: always run
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/task-waves.mjs" .codex-flow/TASKS.md` to compute execution

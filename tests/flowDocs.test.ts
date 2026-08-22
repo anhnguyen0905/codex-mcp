@@ -681,6 +681,100 @@ describe('sufficiency check and brief-grounded authoring contract', () => {
   })
 })
 
+function extractFastPathSection(command: string): string {
+  const start = command.indexOf('## Fast-path gate')
+  const end = command.indexOf('## Phase 1', start)
+  if (start === -1 || end === -1) {
+    throw new Error('Fast-path gate section is missing from commands/codex-flow.md')
+  }
+
+  return command.slice(start, end)
+}
+
+describe('fast-path gate contract', () => {
+  test('defines both lanes with exclusions and a full-flow escalation', () => {
+    const section = extractFastPathSection(readText(COMMAND_PATH))
+
+    expect(section).toContain('**Analysis lane**')
+    expect(section).toContain('**Small-change lane**')
+    expect(section).toContain('security-sensitive')
+    expect(section).toContain('restart at Phase 1 with the full flow')
+    expect(section).toContain('Never stretch a lane')
+  })
+
+  test('exempts the analysis lane from the Codex health gate', () => {
+    const command = readText(COMMAND_PATH)
+    const phaseZero = extractPhaseSection(command, 0).replace(/\s+/g, ' ')
+    const section = extractFastPathSection(command).replace(/\s+/g, ' ')
+
+    expect(phaseZero).toContain(
+      'a failed health check or missing login does NOT block the **analysis lane**',
+    )
+    expect(section).toContain('this lane is exempt from the Codex health gate')
+    expect(phaseZero).toContain(
+      'the small-change lane and the full flow still require `loggedIn: true`',
+    )
+  })
+
+  test('enforces a mechanical scope trip-wire on the small-change lane', () => {
+    const section = extractFastPathSection(readText(COMMAND_PATH)).replace(/\s+/g, ' ')
+
+    expect(section).toContain('**Scope trip-wire (mechanical, not judgment)**')
+    expect(section).toContain('ANY extra changed file — excluding generated lockfiles — triggers the escalation rule automatically')
+    expect(section).toContain('do not review the oversized diff in-lane')
+  })
+
+  test('gives the small-change lane its own known-red baseline', () => {
+    const section = extractFastPathSection(readText(COMMAND_PATH)).replace(/\s+/g, ' ')
+
+    expect(section).toContain(
+      "first run the project's test command once and note any pre-existing failures as the lane's known-red list",
+    )
+    expect(section).toContain('only failures NOT on that list count against the change')
+  })
+
+  test('logs every fast-path run to the durable fastpath log', () => {
+    const section = extractFastPathSection(readText(COMMAND_PATH)).replace(/\s+/g, ' ')
+
+    expect(section).toContain('`.codex-flow/notes/fastpath.log`')
+    expect(section).toContain('session=<sessionId or ->')
+    expect(section).toContain('outcome=<delivered|done|escalated|failed>')
+    expect(section).toContain('so write it even on escalation or failure')
+  })
+
+  test('skips control files and baseline steps 2-5 in Phase 0 for fast-path runs', () => {
+    const phaseZero = extractPhaseSection(readText(COMMAND_PATH), 0).replace(/\s+/g, ' ')
+
+    expect(phaseZero).toContain('evaluate the **Fast-path gate** (next section)')
+    expect(phaseZero).toContain('skip steps 2–5')
+    expect(phaseZero).toContain('a fast-path run writes no `.codex-flow/` control files')
+  })
+})
+
+describe('data processing tooling rules', () => {
+  test('Phase 4 routes large-data work to the Data tooling block regardless of repo language', () => {
+    const phaseSection = extractPhaseSection(readText(COMMAND_PATH), 4).replace(/\s+/g, ' ')
+
+    expect(phaseSection).toContain('**Data processing tooling**')
+    expect(phaseSection).toContain('measure with `du -h` first, never guess sizes')
+    expect(phaseSection).toContain('Data tooling block from `codex-flow:exec-deliverable`')
+    expect(phaseSection).toContain('never let Codex write row-by-row scan scripts over large raw files')
+  })
+
+  test('exec-deliverable carries the embeddable data tooling rules', () => {
+    const skill = readText(path.join(REPO_ROOT, 'skills', 'exec-deliverable', 'SKILL.md'))
+      .replace(/\s+/g, ' ')
+
+    expect(skill).toContain('## Data tooling block')
+    expect(skill).toContain('Measure before choosing: run `du -h` on the inputs')
+    expect(skill).toContain('Ingest once, query many')
+    expect(skill).toContain('Never write row-by-row scan scripts')
+    expect(skill).toContain('Sample-first iteration')
+    expect(skill).toContain('One pass, many outputs')
+    expect(skill).toContain('Keep heavy I/O local')
+  })
+})
+
 describe('codex-flow command structure', () => {
   test.each([2, 4, 5])('names context-discipline in the Phase %i load list', (phaseNumber) => {
     const command = readText(COMMAND_PATH)
