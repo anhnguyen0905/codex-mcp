@@ -1184,3 +1184,28 @@ describe('executor fallback contract', () => {
     expect(sessionReport).toContain('`claude (fallback: <reason>)` as PIC values')
   })
 })
+
+describe('structured, concurrent dual review contract', () => {
+  const command = readText(COMMAND_PATH)
+  const reviewDual = readText(REVIEW_DUAL_PATH)
+  const phase5 = extractPhaseSection(command, 5).replace(/\s+/g, ' ')
+
+  test('Phase 5 launches codex_review in a background subagent before Claude\'s own pass', () => {
+    expect(phase5).toContain('**Start the Codex-side review in the background FIRST**')
+    expect(phase5).toContain('launch a background subagent (Agent tool, general-purpose)')
+    expect(phase5).toContain('If the Agent tool is unavailable, call `mcp__codex__codex_review` directly at step 5 instead (sequential fallback).')
+  })
+
+  test('Phase 5 reads reviewFindings instead of re-deriving severities from prose', () => {
+    expect(phase5).toContain('Read Codex\'s findings from the result\'s `reviewFindings` field')
+    expect(phase5).toContain('do not re-derive severities from the prose')
+    expect(phase5).toContain('when `parsed: false`, tell the user, fall back to the prose `agentMessage`')
+  })
+
+  test('review-dual carries the concurrency rule and the reviewFindings reading rule', () => {
+    expect(reviewDual).toContain('## Run the two reviews concurrently')
+    expect(reviewDual).toContain('never run the two\nin series')
+    expect(reviewDual).toContain('## Read Codex\'s findings from `reviewFindings`, not prose')
+    expect(reviewDual).toContain('Never re-grade a\n  finding\'s severity from the surrounding prose')
+  })
+})

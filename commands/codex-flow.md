@@ -463,17 +463,22 @@ Also load `codex-flow:session-report` (report templates for `tasks.md`, `reviews
 At the Phase 4 → Phase 5 boundary, set `phase` in `.codex-flow/STATE.md` to `review`.
 
 0. Before reviewing, when the slice helper is available, reuse the existing `.codex-flow/CONTEXT-T<n>.md` only when its generated header's anchor equals the current `git rev-parse HEAD` and the tree is clean; otherwise run `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --task T<n>` to regenerate this task's `.codex-flow/CONTEXT-T<n>.md` slice, then re-read it and this task's entry in `.codex-flow/TASKS.md`. If the helper is unavailable in a standalone install, fall back to reading `.codex-flow/PLAN.md` directly and still read this task's TASKS.md entry. If the helper is present but exits non-zero, surface the error to the user and STOP; never use the standalone fallback for a failing helper. Treat the files read on disk as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline, not session memory (which may have been compacted across a long backlog). Outside the standalone fallback, read full `.codex-flow/PLAN.md` only when a finding disputes plan intent or the slice's omitted-pointer line points at a section the review needs.
-1. Inspect what Codex did: use the `diff` field returned by the tool (git status + patch), and read changed files where the patch is not enough. For diffs over 400 lines, follow `codex-flow:context-discipline` no-raw-read rules: get a subagent summary, then read only targeted critical hunks.
+1. **Start the Codex-side review in the background FIRST**: `mcp__codex__codex_review` is read-only and independent of your own pass, so do not run it after your review — launch a background subagent (Agent tool, general-purpose) whose only job is to call `mcp__codex__codex_review` for THIS task with the focus block from `codex-flow:review-dual` (task id/title, acceptance criteria, `Files:` list) and return the tool result's `reviewFindings` object plus `status` verbatim, nothing else. Then do steps 2–4 yourself while it runs; collect the subagent's result in step 5. If the Agent tool is unavailable, call `mcp__codex__codex_review` directly at step 5 instead (sequential fallback).
+   Inspect what Codex did: use the `diff` field returned by the tool (git status + patch), and read changed files where the patch is not enough. For diffs over 400 lines, follow `codex-flow:context-discipline` no-raw-read rules: get a subagent summary, then read only targeted critical hunks.
 2. Review in order: conformance → quality → security, per the loaded skills.
 3. Read the tool result's `verification` field first: `passed: true` is evidence the task's
    acceptance command ran green in the workspace; `passed: false` (or `skipped`) means the task is
    not done regardless of what `agentMessage` says — quote `outputTail` in the finding. Then run
    the project's full tests/build yourself — Codex's claim is input, not evidence. Compare
    failures against the **known-red baseline** in PLAN.md: only new failures count against the task.
-4. **Run the Codex-side review**: call `mcp__codex__codex_review` for THIS task with the focus
-   block template from `codex-flow:review-dual`, filling in the task id/title, acceptance criteria,
-   and the task's `Files:` list. Without checkpoint commits, the uncommitted diff is cumulative, so
-   the focus block restricts the review to this task's scope. Compare Claude's and Codex's findings
+4. **Collect the Codex-side review** started in step 1 (wait for the subagent; in the sequential
+   fallback call `mcp__codex__codex_review` now with the same focus block). Without checkpoint
+   commits, the uncommitted diff is cumulative, so the focus block restricts the review to this
+   task's scope. Read Codex's findings from the result's `reviewFindings` field: when
+   `parsed: true`, its `findings[]` (severity, file, line, summary, expected, observed) and
+   `improvements[]` are the Codex review — do not re-derive severities from the prose; when
+   `parsed: false`, tell the user, fall back to the prose `agentMessage`, and treat any severity you
+   assign yourself as unverified until checked. Compare Claude's and Codex's findings
    per the review-dual comparison protocol: bucket agreed / unique-to-one / conflicting, and verify
    every finding with evidence. Use AskUserQuestion only for an unverifiable CRITICAL/HIGH finding
    or two mutually exclusive valid fixes. Append non-blocking suggestions from BOTH reviews to

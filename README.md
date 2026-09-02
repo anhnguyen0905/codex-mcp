@@ -232,6 +232,11 @@ explicit **Executor fallback** (fix Codex and re-check, or let Claude execute th
 same plan/review contract, with an independent subagent review replacing `codex_review`). The choice
 is recorded in `.codex-flow/STATE.md` as `executor:` and is never made silently or mid-task.
 
+`codex_review` asks Codex to end its message with one fenced json block and returns it parsed
+fail-closed as `reviewFindings: { parsed, findings[], improvements[], dropped, parseError? }`
+(severity is one of CRITICAL/HIGH/MEDIUM/LOW; malformed entries are counted in `dropped`, never
+coerced). The prose `agentMessage` is still returned for the `parsed: false` case.
+
 `codex_execute` / `codex_continue` accept `verifyCommand` (plus optional `verifyTimeoutMs`, default
 10 min, cap 30): after the Codex run settles, the server runs that acceptance command in `cwd`
 (still inside the workspace lock) and returns `verification: { command, exitCode, timedOut,

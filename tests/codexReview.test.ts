@@ -144,3 +144,73 @@ describe('codex_review baselineRef', () => {
     expect(args[args.length - 1]).not.toContain('..HEAD')
   })
 })
+
+describe('codex_review structured findings', () => {
+  const findingsMessage = [
+    'Findings:',
+    '1. [HIGH] src/a.ts:42 — wrong status',
+    '',
+    '```json',
+    JSON.stringify({
+      findings: [{ severity: 'HIGH', file: 'src/a.ts', line: 42, summary: 'wrong status', expected: '404', observed: '200' }],
+      improvements: [{ id: 'IMP-1', summary: 'dedupe validator', file: 'src/a.ts:15' }],
+    }),
+    '```',
+  ].join('\n')
+  const outcomeWith = (text: string): RunOutcome => ({
+    stdout: [
+      JSON.stringify({ type: 'thread.started', thread_id: 'rev-1' }),
+      JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } }),
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } }),
+    ].join('\n'),
+    stderr: '',
+    exitCode: 0,
+    timedOut: false,
+  })
+  const payloadOf = (result: Awaited<ReturnType<Client['callTool']>>) =>
+    JSON.parse((result.content as Array<{ text: string }>)[0].text)
+
+  test('asks Codex for the fenced json findings block in the review prompt', async () => {
+    const runFn = vi.fn(async () => okOutcome)
+    const client = await connect(runFn)
+
+    await client.callTool({ name: 'codex_review', arguments: { cwd: '/repo' } })
+
+    const [, opts] = runFn.mock.calls[0] as [string[], { stdinInput?: string }]
+    expect(opts.stdinInput).toContain('```json')
+    expect(opts.stdinInput).toContain('"findings"')
+  })
+
+  test('attaches parsed reviewFindings to the payload and structuredContent', async () => {
+    const client = await connect(vi.fn(async () => outcomeWith(findingsMessage)))
+
+    const result = await client.callTool({ name: 'codex_review', arguments: { cwd: '/repo' } })
+    const payload = payloadOf(result)
+
+    expect(payload.reviewFindings.parsed).toBe(true)
+    expect(payload.reviewFindings.findings).toEqual([
+      { severity: 'HIGH', file: 'src/a.ts', line: 42, summary: 'wrong status', expected: '404', observed: '200' },
+    ])
+    expect(payload.reviewFindings.improvements[0].id).toBe('IMP-1')
+    expect((result.structuredContent as { reviewFindings: unknown }).reviewFindings).toEqual(payload.reviewFindings)
+  })
+
+  test('reports parsed=false when Codex answered in prose only, without failing the tool', async () => {
+    const client = await connect(vi.fn(async () => outcomeWith('Looks fine, no findings.')))
+
+    const result = await client.callTool({ name: 'codex_review', arguments: { cwd: '/repo' } })
+    const payload = payloadOf(result)
+
+    expect(result.isError).toBe(false)
+    expect(payload.reviewFindings.parsed).toBe(false)
+    expect(payload.reviewFindings.findings).toEqual([])
+  })
+
+  test('codex_execute payloads carry no reviewFindings field', async () => {
+    const client = await connect(vi.fn(async () => outcomeWith('done')))
+
+    const payload = payloadOf(await client.callTool({ name: 'codex_execute', arguments: { prompt: 'x', cwd: '/repo' } }))
+
+    expect(payload).not.toHaveProperty('reviewFindings')
+  })
+})

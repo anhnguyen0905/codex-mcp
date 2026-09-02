@@ -29,6 +29,26 @@ Then add a SEPARATE `## Improvements` section.
 Tag non-blocking suggestions IMP-1, IMP-2, ...: worthwhile refactors, better naming, missing nice-to-have tests, or documentation gaps that are not defects.
 ```
 
+## Run the two reviews concurrently
+
+`mcp__codex__codex_review` is read-only and does not depend on Claude's pass, so never run the two
+in series. Launch a background subagent whose single job is to call `mcp__codex__codex_review`
+with the focus block above and return the result's `reviewFindings` and `status` verbatim; run
+Claude's conformance → quality → security pass while it works; then compare. Only when the Agent
+tool is unavailable call `mcp__codex__codex_review` directly after Claude's pass.
+
+## Read Codex's findings from `reviewFindings`, not prose
+
+The tool asks Codex to end with one fenced json block and parses it fail-closed into
+`reviewFindings: { parsed, findings[], improvements[], dropped, parseError? }`.
+
+- `parsed: true` → `findings[]` (severity ∈ CRITICAL/HIGH/MEDIUM/LOW, file, line, summary,
+  expected, observed) and `improvements[]` (IMP ids) ARE the Codex review. Never re-grade a
+  finding's severity from the surrounding prose. `dropped > 0` means Codex emitted malformed
+  entries — mention it, do not reconstruct them.
+- `parsed: false` → say so to the user, work from the prose `agentMessage`, and mark every severity
+  you assign yourself as unverified until the evidence check.
+
 ## Comparison protocol
 
 - Bucket the union of Claude's and Codex's findings into agreed, unique-to-one, and conflicting.

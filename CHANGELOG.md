@@ -3,6 +3,22 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Structured review findings** — `codex_review` now instructs Codex to end with one fenced json
+  block and returns it parsed fail-closed as `reviewFindings: { parsed, findings[], improvements[],
+  dropped, parseError? }` (new `src/reviewFindings.ts`). Severities are restricted to
+  CRITICAL/HIGH/MEDIUM/LOW; malformed entries are dropped and counted, never coerced. Phase 5 and
+  `review-dual` read this field instead of re-deriving severities from prose.
+
+### Changed
+
+- **Concurrent dual review** — Phase 5 launches `codex_review` in a background subagent BEFORE
+  Claude's own conformance/quality/security pass and collects it afterwards, instead of running the
+  two reviews in series (sequential fallback when the Agent tool is unavailable).
+
 ## [0.22.0] - 2026-09-02
 
 ### Added

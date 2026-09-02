@@ -34,6 +34,7 @@ import {
   type VerifyFn,
 } from './verification.js'
 import { isErrorStatus } from './runStatus.js'
+import { parseReviewFindings, REVIEW_FINDINGS_INSTRUCTIONS } from './reviewFindings.js'
 import { listSessions, MAX_LIMIT as MAX_SESSIONS_LIMIT } from './sessionStore.js'
 import { aggregate, parsePricing, readMetrics } from './metricsLog.js'
 import { REASONING_EFFORTS, SANDBOX_MODES, type RunOutcome } from './types.js'
@@ -292,6 +293,7 @@ const buildReviewPrompt = (focus?: string, baselineRef?: string): string =>
     'covering correctness, security, error handling and maintainability.',
     'Do not modify any files — this is a read-only review.',
     ...(focus ? [`Focus especially on: ${focus}`] : []),
+    REVIEW_FINDINGS_INSTRUCTIONS,
   ].join('\n')
 
 const errorResult = toErrorResult
@@ -582,7 +584,9 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 model: input.model,
                 reasoningEffort: input.reasoningEffort,
               },
-            ).then(({ payload, isError }) => toToolResult(payload, isError))
+            ).then(({ payload, isError }) =>
+              toToolResult({ ...payload, reviewFindings: parseReviewFindings(payload.agentMessage) }, isError),
+            )
           }),
         )
       } catch (error) {
