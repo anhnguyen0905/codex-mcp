@@ -1119,12 +1119,9 @@ describe('codex-flow command structure', () => {
 })
 
 describe('server-side acceptance verification contract', () => {
-  const command = readFileSync(COMMAND_PATH, 'utf8')
-  const reviewConformance = readFileSync(
-    path.join(REPO_ROOT, 'skills', 'review-conformance', 'SKILL.md'),
-    'utf8',
-  )
-  const execSelfTesting = readFileSync(EXEC_SELF_TESTING_PATH, 'utf8')
+  const command = readText(COMMAND_PATH)
+  const reviewConformance = readText(path.join(REPO_ROOT, 'skills', 'review-conformance', 'SKILL.md'))
+  const execSelfTesting = readText(EXEC_SELF_TESTING_PATH)
 
   test('Phase 4 passes the task acceptance check as verifyCommand on execute and every fix round', () => {
     const phase4 = extractPhaseSection(command, 4).replace(/\s+/g, ' ')
@@ -1145,9 +1142,9 @@ describe('server-side acceptance verification contract', () => {
 })
 
 describe('executor fallback contract', () => {
-  const command = readFileSync(COMMAND_PATH, 'utf8')
-  const preflight = readFileSync(PREFLIGHT_PATH, 'utf8')
-  const sessionReport = readFileSync(path.join(REPO_ROOT, 'skills', 'session-report', 'SKILL.md'), 'utf8')
+  const command = readText(COMMAND_PATH)
+  const preflight = readText(PREFLIGHT_PATH)
+  const sessionReport = readText(path.join(REPO_ROOT, 'skills', 'session-report', 'SKILL.md'))
   const sectionStart = command.indexOf('## Executor fallback')
   const sectionEnd = command.indexOf('## Phase 1 — Interview (Claude)')
   const section = command.slice(sectionStart, sectionEnd).replace(/\s+/g, ' ')
