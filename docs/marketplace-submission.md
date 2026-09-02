@@ -18,7 +18,7 @@ npm test
 - **Plugin name**: `codex-flow`
 - **Display name**: Codex Flow
 - **Repository**: https://github.com/anhnguyen0905/codex-mcp
-- **Version**: 0.23.0 (pinned in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`)
+- **Version**: 0.23.1 (pinned in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`)
 - **License**: MIT
 - **Category**: development-workflows
 - **Keywords**: codex, openai-codex, mcp, workflow, plan-execute-review, multi-agent, code-review
