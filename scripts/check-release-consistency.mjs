@@ -8,6 +8,7 @@
 //   - package-lock.json           .version and .packages[""].version
 //   - server.json                 .version and .packages[0].version
 //   - .claude-plugin/plugin.json  .version
+//   - .claude-plugin/marketplace.json  .plugins[0].version (marketplace pin — users only update when it changes)
 //   - CHANGELOG.md                a "## [<version>]" (or "## <version>") heading
 //
 // Usage: node scripts/check-release-consistency.mjs [--tag]
@@ -26,6 +27,7 @@ export const VERSION_SOURCES = [
   { file: 'package-lock.json', paths: [['version'], ['packages', '', 'version']] },
   { file: 'server.json', paths: [['version'], ['packages', 0, 'version']] },
   { file: '.claude-plugin/plugin.json', paths: [['version']] },
+  { file: '.claude-plugin/marketplace.json', paths: [['plugins', 0, 'version']] },
 ]
 
 export const CHANGELOG_FILE = 'CHANGELOG.md'

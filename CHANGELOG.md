@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Marketplace-ready manifests** — `.claude-plugin/marketplace.json` gains a marketplace
+  `description` and a full plugin entry (`displayName`, pinned `version`, author, homepage,
+  repository, license, category, keywords, tags); `plugin.json` gains `displayName` (the validator places
+  `category`/`tags` in the marketplace entry only). `check-release-consistency.mjs` now also enforces the marketplace `version` pin.
+  Added `SECURITY.md`, a README "Security & privacy" section, and
+  `docs/marketplace-submission.md` (submission form text + gates). `claude plugin validate --strict`
+  passes.
+
 ## [0.23.0] - 2026-09-02
 
 ### Added

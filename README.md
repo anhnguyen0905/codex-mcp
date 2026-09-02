@@ -25,12 +25,16 @@ npm i -g @openai/codex
 codex login          # ChatGPT Plus/Pro/Team — or set OPENAI_API_KEY
 ```
 
-**2. Install the plugin** (bundles the `/codex-flow` command + the `codex` MCP server):
+**2. Install the plugin** (bundles the `/codex-flow` command, ~60 skills, and the `codex` MCP server):
 
 ```
 /plugin marketplace add anhnguyen0905/codex-mcp
 /plugin install codex-flow@codex-mcp
 ```
+
+Once listed in the Claude community directory, this also works:
+`claude plugin marketplace add anthropics/claude-plugins-community` then
+`claude plugin install codex-flow@claude-community`.
 
 **3. Run it** in any project:
 
@@ -298,8 +302,23 @@ run still succeeds; follow the `liveLog` or the in-session progress instead.
 | `CODEX_FLOW_SKILLS_INDEX` | Override the skill index path. |
 | `MCP_TOOL_TIMEOUT` | Raise Claude Code's MCP tool timeout (ms) for long runs. |
 
-> **Security:** the server never reads, stores, or transmits your credentials — auth is handled
-> entirely by the Codex CLI (`~/.codex/`). Run `npm run doctor` to verify your setup.
+## Security & privacy
+
+- **No credentials handled.** The server never reads, stores, or transmits your credentials — auth
+  is handled entirely by the Codex CLI (`~/.codex/`). Run `npm run doctor` to verify your setup.
+- **No network calls of its own.** The MCP server only spawns the local `codex` CLI (and `git` for
+  diffs). All model traffic is Codex's, under your OpenAI account and its data policies.
+- **Local-only telemetry.** Run metrics (tokens, durations, exit codes, a 200-char error head) are
+  appended to `~/.codex-mcp/metrics.jsonl` on your machine and never uploaded. Live-progress logs
+  and run notes stay under the project's gitignored `.codex-flow/`.
+- **Sandboxed writes.** Codex runs in `workspace-write` by default; `codex_review` is always
+  `read-only`; `danger-full-access` is never used unless a task explicitly needs it and the user is
+  told first. Per-cwd locks serialize runs into the same workspace.
+- **Caller-defined commands.** `verifyCommand` runs the acceptance command you pass, in your
+  workspace, with the server's environment; its output tail is returned unredacted — treat it like
+  any other shell output. Third-party skills are loaded only after a content-pinned vet
+  (`skill-selection`).
+- Report vulnerabilities per [SECURITY.md](SECURITY.md).
 
 ---
 

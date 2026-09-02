@@ -1,5 +1,6 @@
 {
   "name": "codex-mcp",
+  "description": "Self-hosted marketplace for codex-flow: plan with Claude, execute with OpenAI Codex, review with Claude + Codex.",
   "owner": {
     "name": "anhnguyen0905",
     "url": "https://github.com/anhnguyen0905"
@@ -7,8 +8,33 @@
   "plugins": [
     {
       "name": "codex-flow",
+      "displayName": "Codex Flow",
       "source": "./",
-      "description": "Plan with Claude, execute with OpenAI Codex, review with Claude — /codex-flow command plus the codex MCP server."
+      "version": "0.23.0",
+      "description": "Plan with Claude, execute with OpenAI Codex, review with Claude + Codex — the /codex-flow six-phase workflow plus the codex MCP server (execute, continue, review, batch, health, metrics).",
+      "author": {
+        "name": "anhnguyen0905",
+        "url": "https://github.com/anhnguyen0905"
+      },
+      "homepage": "https://github.com/anhnguyen0905/codex-mcp",
+      "repository": "https://github.com/anhnguyen0905/codex-mcp",
+      "license": "MIT",
+      "category": "development-workflows",
+      "keywords": [
+        "codex",
+        "openai-codex",
+        "mcp",
+        "workflow",
+        "plan-execute-review",
+        "multi-agent",
+        "code-review"
+      ],
+      "tags": [
+        "orchestration",
+        "codex-cli",
+        "dual-review",
+        "tdd"
+      ]
     }
   ]
 }
