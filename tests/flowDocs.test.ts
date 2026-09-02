@@ -330,6 +330,7 @@ describe('preflight resume protocol', () => {
       'checkpointCommits',
       'executionMode',
       'dirtyBaseline',
+      'executor',
     ])
     expect(skill).toContain('exactly one\n   `## Run state` section')
     expect(skill).toContain('The orchestrator is the only writer.')
@@ -712,7 +713,7 @@ describe('fast-path gate contract', () => {
     )
     expect(section).toContain('this lane is exempt from the Codex health gate')
     expect(phaseZero).toContain(
-      'the small-change lane and the full flow still require `loggedIn: true`',
+      'the small-change lane and the full flow require either `loggedIn: true` or an explicit Executor-fallback choice',
     )
   })
 
@@ -1114,5 +1115,75 @@ describe('codex-flow command structure', () => {
     expect(extractPhaseSection(command, 4).replace(/\s+/g, ' ')).toContain(
       '`mandatory slice content exceeds tokenBudget`, split the oversized task in the backlog before continuing; never raise the slice budget.',
     )
+  })
+})
+
+describe('server-side acceptance verification contract', () => {
+  const command = readFileSync(COMMAND_PATH, 'utf8')
+  const reviewConformance = readFileSync(
+    path.join(REPO_ROOT, 'skills', 'review-conformance', 'SKILL.md'),
+    'utf8',
+  )
+  const execSelfTesting = readFileSync(EXEC_SELF_TESTING_PATH, 'utf8')
+
+  test('Phase 4 passes the task acceptance check as verifyCommand on execute and every fix round', () => {
+    const phase4 = extractPhaseSection(command, 4).replace(/\s+/g, ' ')
+    expect(phase4).toContain('`verifyCommand`: the task\'s exact acceptance check from its `Acceptance:` field')
+    expect(phase4).toContain('Pass the same `verifyCommand` on every `codex_continue` fix round.')
+  })
+
+  test('Phase 5 reads the verification field before trusting agentMessage', () => {
+    const phase5 = extractPhaseSection(command, 5).replace(/\s+/g, ' ')
+    expect(phase5).toContain('Read the tool result\'s `verification` field first')
+    expect(phase5).toContain('`passed: false` (or `skipped`) means the task is not done regardless of what `agentMessage` says')
+  })
+
+  test('review-conformance and exec-self-testing treat verification as evidence, not Codex claims', () => {
+    expect(reviewConformance).toContain('`passed: false` or\n  `skipped` is an automatic unmet criterion')
+    expect(execSelfTesting).toContain('pass the task\'s acceptance command as `verifyCommand`')
+  })
+})
+
+describe('executor fallback contract', () => {
+  const command = readFileSync(COMMAND_PATH, 'utf8')
+  const preflight = readFileSync(PREFLIGHT_PATH, 'utf8')
+  const sessionReport = readFileSync(path.join(REPO_ROOT, 'skills', 'session-report', 'SKILL.md'), 'utf8')
+  const sectionStart = command.indexOf('## Executor fallback')
+  const sectionEnd = command.indexOf('## Phase 1 — Interview (Claude)')
+  const section = command.slice(sectionStart, sectionEnd).replace(/\s+/g, ' ')
+
+  test('Phase 0 offers the fallback instead of a hard STOP when Codex is missing or logged out', () => {
+    const phase0 = command.slice(command.indexOf('## Phase 0'), command.indexOf('## Fast-path gate')).replace(/\s+/g, ' ')
+    expect(sectionStart).toBeGreaterThan(0)
+    expect(sectionEnd).toBeGreaterThan(sectionStart)
+    expect(phase0).toContain('offer the **Executor fallback** (section below): fix Codex and re-check, or continue with Claude as executor. Never continue silently.')
+    expect(phase0).toContain('either a re-check shows `loggedIn: true` or the user has explicitly chosen the fallback')
+  })
+
+  test('the switch is explicit, task-boundary only, and durably recorded', () => {
+    expect(section).toContain('use AskUserQuestion exactly once per outage')
+    expect(section).toContain('never switch mid-task')
+    expect(section).toContain('`executor: claude (fallback: <not-logged-in | server-missing | codex-unavailable> <ISO 8601>)`')
+    expect(section).toContain('`executor: codex (restored <ISO 8601>)`')
+  })
+
+  test('fallback execution keeps the slice, standards blocks, and self-run acceptance evidence', () => {
+    expect(section).toContain('they bind Claude the same way they bind Codex')
+    expect(section).toContain('`- Session: claude-fallback (base: <short sha>)`')
+    expect(section).toContain('`- Verification: <command> → exit <code>`')
+    expect(section).toContain('Parallel worktree mode is not available under fallback')
+  })
+
+  test('fallback review replaces codex_review with an independent subagent and keeps the round cap', () => {
+    expect(section).toContain('Claude must not grade its own homework alone')
+    expect(section).toContain('independent review by a fresh subagent')
+    expect(section).toContain('keep the 3-round cap')
+    expect(command).toContain('Never switch executors silently or mid-task')
+  })
+
+  test('preflight and session-report carry the executor key and fallback PIC', () => {
+    expect(preflight).toContain('- executor: codex')
+    expect(preflight).toContain('It changes only at a task boundary and never silently.')
+    expect(sessionReport).toContain('`claude (fallback: <reason>)` as PIC values')
   })
 })

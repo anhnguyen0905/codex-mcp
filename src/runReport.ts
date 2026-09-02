@@ -1,7 +1,7 @@
 import type { RunOptions, RunOutcomeWithEvents } from './codexRunner.js'
 import { parseEvents, type ParsedEvents } from './eventParser.js'
 import type { LiveView } from './liveView.js'
-import { appendMetric, type MetricEntry } from './metricsLog.js'
+import { appendMetric, errorMessageHead, type MetricEntry } from './metricsLog.js'
 import { writeNotes, type NotesRequest } from './notesWriter.js'
 import { combineSinks, type ProgressNotifier, type ProgressSink } from './progressNotifier.js'
 import { deriveRunStatus, isErrorStatus, RESULT_SCHEMA_VERSION } from './runStatus.js'
@@ -181,6 +181,7 @@ const buildMetricEntry = (
   truncated: outcome.truncated ?? false,
   errorCount: parsed.errors.length,
   errorKind: deriveErrorKind(outcome, aborted, parsed.errors.length),
+  errorMessage: errorMessageHead(parsed.errors),
   runId: deps.runId,
   model: deps.model,
   taskId: deps.taskId,

@@ -22,6 +22,11 @@ export interface MetricEntry {
   errorCount?: number
   /** Primary failure kind: 'exit' | 'timeout' | 'abort' | 'turn-failed'. Absent on legacy lines / successes. */
   errorKind?: string
+  /**
+   * Head of the first Codex-emitted error message (capped at MAX_ERROR_MESSAGE_CHARS) so failures can
+   * be classified offline (quota vs sandbox vs model). Absent on successes / legacy lines.
+   */
+  errorMessage?: string
   /** Server-generated UUID for this run, matching the tool result payload. Absent on legacy lines. */
   runId?: string
   /** Model requested for the run (via --model). Absent when the CLI default was used / legacy lines. */
@@ -143,6 +148,28 @@ export interface MetricsLogOptions {
 }
 
 export const DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024
+/** Cap on the recorded error-message head — enough to classify, not enough to leak a whole log. */
+export const MAX_ERROR_MESSAGE_CHARS = 200
+
+/** Truncate an error message to the recorded head; undefined when there is none. */
+export const errorMessageHead = (messages: readonly string[]): string | undefined => {
+  const first = messages.find((message) => message.trim().length > 0)
+  if (first === undefined) return undefined
+  return first.length > MAX_ERROR_MESSAGE_CHARS ? first.slice(0, MAX_ERROR_MESSAGE_CHARS) : first
+}
+
+/**
+ * Under a test runner (VITEST set) with no explicit destination, refuse to write: a fake run must
+ * never land in the operator's real ~/.codex-mcp/metrics.jsonl. An env override or an explicit
+ * logPath is an opt-in and always honored. In this repo's own suite `tests/setup.ts` already
+ * redirects the env var per worker, so this guard is the second line of defence for a test file
+ * that clears the env, and for downstream projects that import the server in their tests.
+ */
+export const isMetricsWriteSuppressed = (
+  env: NodeJS.ProcessEnv,
+  explicitLogPath: string | undefined,
+): boolean =>
+  explicitLogPath === undefined && env.CODEX_MCP_METRICS_LOG === undefined && env.VITEST !== undefined
 
 /** Location of the metrics log, honoring CODEX_MCP_METRICS_LOG env, else ~/.codex-mcp/metrics.jsonl. */
 export const defaultLogPath = (): string =>
@@ -168,8 +195,12 @@ export const parsePricing = (raw: string | undefined): PricingTable | undefined 
   }
 }
 
-/** Append one entry. Rotates the file first if it's past `maxBytes`. Errors are swallowed. */
-export const appendMetric = (entry: MetricEntry, options: MetricsLogOptions = {}): void => {
+/**
+ * Append one entry. Rotates the file first if it's past `maxBytes`. Errors are swallowed.
+ * Returns true when a line was written, false when suppressed or the write failed.
+ */
+export const appendMetric = (entry: MetricEntry, options: MetricsLogOptions = {}): boolean => {
+  if (isMetricsWriteSuppressed(process.env, options.logPath)) return false
   const logPath = options.logPath ?? defaultLogPath()
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_LOG_BYTES
   try {
@@ -184,8 +215,10 @@ export const appendMetric = (entry: MetricEntry, options: MetricsLogOptions = {}
       // no file yet — first write.
     }
     appendFileSync(logPath, JSON.stringify(entry) + '\n', { mode: 0o600 })
+    return true
   } catch {
     // best-effort — metrics logging must never fail a real run.
+    return false
   }
 }
 

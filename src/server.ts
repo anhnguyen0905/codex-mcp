@@ -26,6 +26,14 @@ import {
   type SnapshotFn,
 } from './workspaceDiff.js'
 import { acquireWorkspaceLease, type LeaseFn } from './workspaceLease.js'
+import {
+  MAX_VERIFY_TIMEOUT_MS,
+  runVerification,
+  skippedVerification,
+  type VerificationResult,
+  type VerifyFn,
+} from './verification.js'
+import { isErrorStatus } from './runStatus.js'
 import { listSessions, MAX_LIMIT as MAX_SESSIONS_LIMIT } from './sessionStore.js'
 import { aggregate, parsePricing, readMetrics } from './metricsLog.js'
 import { REASONING_EFFORTS, SANDBOX_MODES, type RunOutcome } from './types.js'
@@ -85,6 +93,8 @@ export interface ServerDeps {
   verifyRefFn?: VerifyRefFn
   /** Cross-process workspace lease (default: lease files under ~/.codex-mcp/locks). */
   leaseFn?: LeaseFn
+  /** Runs the caller's verifyCommand after a run settles (default: shell spawn in cwd). */
+  verifyFn?: VerifyFn
 }
 
 const terminalEnabled = (requested?: boolean): boolean =>
@@ -113,6 +123,20 @@ const executeShape = {
     .boolean()
     .optional()
     .describe('Persist a markdown summary of this run to <cwd>/.codex-flow/notes/<sessionId>.md (default false).'),
+  verifyCommand: z
+    .string()
+    .optional()
+    .describe(
+      'Acceptance command the server runs in cwd AFTER the Codex run settles (e.g. the test suite). ' +
+        'Its exit code and output tail are returned in `verification` — deterministic evidence, not Codex\'s claim.',
+    ),
+  verifyTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_VERIFY_TIMEOUT_MS)
+    .optional()
+    .describe('Max time for verifyCommand in ms (default 10 minutes, cap 30).'),
 }
 
 const continueShape = {
@@ -136,6 +160,20 @@ const continueShape = {
     .boolean()
     .optional()
     .describe('Persist a markdown summary of this run to <cwd>/.codex-flow/notes/<sessionId>.md (default false).'),
+  verifyCommand: z
+    .string()
+    .optional()
+    .describe(
+      'Acceptance command the server runs in cwd AFTER the Codex run settles (e.g. the test suite). ' +
+        'Its exit code and output tail are returned in `verification` — deterministic evidence, not Codex\'s claim.',
+    ),
+  verifyTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_VERIFY_TIMEOUT_MS)
+    .optional()
+    .describe('Max time for verifyCommand in ms (default 10 minutes, cap 30).'),
 }
 
 const sessionsShape = {
@@ -319,8 +357,34 @@ const batchProgressNotifiersFor = (
     })
 }
 
+interface VerifyRequest {
+  command?: string
+  timeoutMs?: number
+  cwd: string
+  signal: AbortSignal
+}
+
+/**
+ * Run the caller's acceptance command once the logical run has settled, still inside the cwd
+ * lock so nothing else mutates the workspace in between. Skipped (not run) when the run itself
+ * failed/aborted — there is nothing meaningful to verify — or when the client cancelled.
+ */
+const verifyAfterRun = async (
+  verifyFn: VerifyFn,
+  request: VerifyRequest,
+  status: RunPayloadStatus,
+): Promise<VerificationResult | undefined> => {
+  if (request.command === undefined) return undefined
+  if (request.signal.aborted) return skippedVerification(request.command, 'aborted')
+  if (isErrorStatus(status)) return skippedVerification(request.command, 'run-failed')
+  return verifyFn(request.command, { cwd: request.cwd, timeoutMs: request.timeoutMs, signal: request.signal })
+}
+
+type RunPayloadStatus = Parameters<typeof isErrorStatus>[0]
+
 export const createServer = (deps: ServerDeps = {}): McpServer => {
   const runFn: RunFn = deps.runFn ?? runCodex
+  const verifyFn: VerifyFn = deps.verifyFn ?? runVerification
   const diffFn: DiffFn = deps.diffFn ?? captureWorkspaceDiff
   const snapshotFn: SnapshotFn = deps.snapshotFn ?? captureWorkspaceSnapshot
   const attributeFn: AttributeFn = deps.attributeFn ?? attributeWorkspaceDiff
@@ -381,7 +445,14 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 model: input.model,
                 reasoningEffort: input.reasoningEffort,
               },
-            ).then(({ payload, isError }) => toToolResult(payload, isError))
+            ).then(async ({ payload, isError }) => {
+              const verification = await verifyAfterRun(
+                verifyFn,
+                { command: input.verifyCommand, timeoutMs: input.verifyTimeoutMs, cwd: input.cwd, signal: extra.signal },
+                payload.status,
+              )
+              return toToolResult(verification === undefined ? payload : { ...payload, verification }, isError)
+            })
           }),
         )
       } catch (error) {
@@ -437,7 +508,14 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 model: input.model,
                 reasoningEffort: input.reasoningEffort,
               },
-            ).then(({ payload, isError }) => toToolResult(payload, isError))
+            ).then(async ({ payload, isError }) => {
+              const verification = await verifyAfterRun(
+                verifyFn,
+                { command: input.verifyCommand, timeoutMs: input.verifyTimeoutMs, cwd: input.cwd, signal: extra.signal },
+                payload.status,
+              )
+              return toToolResult(verification === undefined ? payload : { ...payload, verification }, isError)
+            })
           }),
         )
       } catch (error) {

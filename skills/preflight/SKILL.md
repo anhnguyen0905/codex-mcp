@@ -12,10 +12,13 @@ Nothing downstream is safe until these pass. Do not interview, plan, or execute 
 Call `mcp__codex__codex_health` before anything else:
 
 - **Tool call fails / server missing** → the MCP server isn't set up. Point the user to the codex-mcp
-  README install steps (or `node scripts/doctor.mjs`), then STOP.
+  README install steps (or `node scripts/doctor.mjs`), then offer the command's **Executor
+  fallback**: fix and re-check, or continue with Claude as executor. Never continue silently.
 - **`loggedIn: false`** → tell the user to run `codex login` (ChatGPT Plus/Pro/Team, or set
-  `OPENAI_API_KEY`), then STOP until a re-check shows `loggedIn: true`.
-- **`loggedIn: true`** → report the Codex version and continue.
+  `OPENAI_API_KEY`), then offer the same Executor fallback choice. Proceed only after a re-check
+  shows `loggedIn: true` or the user explicitly chose the fallback.
+- **`loggedIn: true`** → report the Codex version, record `executor: codex`, and continue.
+- The analysis lane of the Fast-path gate needs no Codex session and no fallback decision.
 
 ## Step 2 — Resume check (don't clobber an interrupted run)
 
@@ -92,7 +95,12 @@ files and offer to archive them before beginning a fresh run.
    - checkpointCommits:
    - executionMode: undecided
    - dirtyBaseline: <none | baseline-dirty.patch>
+   - executor: codex
    ```
+
+   `executor` records who writes code: `codex` (default), `claude (fallback: <reason> <ISO 8601>)`
+   after an explicit Executor-fallback choice, or `codex (restored <ISO 8601>)` after returning.
+   It changes only at a task boundary and never silently.
 
    The orchestrator is the only writer. `runBaselineRef`, `knownRed`, and `dirtyBaseline` are
    written once at run start and NEVER modified on resume. A resume writes only `resumeHead` and

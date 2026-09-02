@@ -4,6 +4,7 @@ import type { ParsedEvents } from './eventParser.js'
 import type { ResumeReason } from './retryPolicy.js'
 import type { RunStatus } from './runStatus.js'
 import type { DiffFn, RunAttribution } from './workspaceDiff.js'
+import { verificationSchema, type VerificationResult } from './verification.js'
 
 /**
  * Named payload shapes for every codex-mcp tool result plus the structured-content plumbing
@@ -30,6 +31,8 @@ export type RunPayload = ParsedEvents & {
   notesPath: string | null
   attempts?: number
   resumeReasons?: readonly ResumeReason[]
+  /** Server-run acceptance check (verifyCommand); absent when the caller did not request one. */
+  verification?: VerificationResult | null
 }
 
 /** Per-status roll-up over a batch's task results (T4.6). */
@@ -163,6 +166,7 @@ export const runOutputShape = {
   notesPath: z.string().nullable(),
   attempts: z.number().optional(),
   resumeReasons: z.array(resumeReasonSchema).optional(),
+  verification: verificationSchema.optional(),
 }
 
 // Skipped/never-started batch tasks carry a bare CodexResult without parser counters.

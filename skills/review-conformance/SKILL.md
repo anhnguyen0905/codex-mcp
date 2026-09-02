@@ -18,6 +18,9 @@ Wrong-but-clean code is worse than ugly-but-right code. Check conformance FIRST.
 - Check the tool result's `status` field first: only review a `success` run normally. A `partial`
   run (no completion marker / parse errors) means the result may be incomplete — verify everything
   from the diff and your own check runs, or re-run the task (see `review-feedback`).
+- When the run carried a `verifyCommand`, read the `verification` field before anything else:
+  `passed: true` proves the acceptance command exited 0 in the workspace; `passed: false` or
+  `skipped` is an automatic unmet criterion — quote its `outputTail` in the finding.
 - Work from the tool result's `diff` field (status + patch); read full files when the patch lacks context. Never review from Codex's `agentMessage` alone — it describes intent, not reality.
 - Run the acceptance checks yourself (tests, build, manual probe). `commands` in the result shows what Codex ran and exit codes — verify it actually ran the full suite, not a subset.
 

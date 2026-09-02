@@ -227,6 +227,21 @@ N× simultaneous quota. Playbook:
 `codex_execute` / `codex_continue` / `codex_review` accept `writeNotes: true` to persist a markdown
 summary of the run to `<cwd>/.codex-flow/notes/<sessionId>.md`.
 
+When Codex is not logged in or unreachable, `/codex-flow` no longer stops dead: it offers an
+explicit **Executor fallback** (fix Codex and re-check, or let Claude execute the backlog under the
+same plan/review contract, with an independent subagent review replacing `codex_review`). The choice
+is recorded in `.codex-flow/STATE.md` as `executor:` and is never made silently or mid-task.
+
+`codex_execute` / `codex_continue` accept `verifyCommand` (plus optional `verifyTimeoutMs`, default
+10 min, cap 30): after the Codex run settles, the server runs that acceptance command in `cwd`
+(still inside the workspace lock) and returns `verification: { command, exitCode, timedOut,
+durationMs, outputTail, passed, skipped? }`. This is deterministic evidence that the acceptance
+check ran — independent of Codex's own claim. It is skipped (`skipped: "run-failed"`) when the run
+itself failed or aborted, and it never changes the run's `status`/`isError`. Termination is bounded
+(SIGTERM → tree SIGKILL → forced settle) so a hung check can never hold the workspace lock. The
+command runs with the server's environment and its raw output tail is returned unredacted — treat
+it with the same trust as Codex's own output.
+
 `codex_execute` / `codex_continue` / `codex_review` and each `codex_batch` task accept
 `reasoningEffort: minimal | low | medium | high | xhigh`, passed to Codex as
 `-c model_reasoning_effort="<value>"`.

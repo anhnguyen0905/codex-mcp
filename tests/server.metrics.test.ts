@@ -100,6 +100,7 @@ describe('metrics wiring', () => {
     expect(line.exitCode).toBe(0)
     expect(line.errorCount).toBe(1)
     expect(line.errorKind).toBe('turn-failed')
+    expect(line.errorMessage).toBe('model refused')
 
     const r = await client.callTool({ name: 'codex_metrics', arguments: {} })
     const payload = JSON.parse((r.content as Array<{ text: string }>)[0].text)

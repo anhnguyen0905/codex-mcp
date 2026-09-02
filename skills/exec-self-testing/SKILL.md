@@ -33,4 +33,7 @@ Testing requirements (mandatory):
 
 ## Claude's verification duty
 
-Trust but verify: the review phase re-runs the suite itself. Codex's claim that "tests pass" is input, not evidence — the tool result's `commands` list shows what was actually run and its exit codes; check them.
+Trust but verify: pass the task's acceptance command as `verifyCommand` so the server runs it after
+the Codex run settles and returns `verification` (`exitCode`, `passed`, `outputTail`) — that field
+is evidence, Codex's "tests pass" is not. The review phase still re-runs the full suite itself; the
+tool result's `commands` list shows what Codex actually ran and its exit codes.

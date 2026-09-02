@@ -56,9 +56,12 @@ Agreed: … | Unique to Claude: … | Unique to Codex: … | Conflicting: …
 
 ## Enforce PIC semantics
 
-Use only `claude`, `codex`, or `both (claude: <part>, codex: <part>)` as PIC values.
+Use only `claude`, `codex`, `both (claude: <part>, codex: <part>)`, or — for work done under the
+command's Executor fallback — `claude (fallback: <reason>)` as PIC values.
 Set planning and allocation PIC to `claude`.
-Set each task implementation PIC to `codex`.
+Set each task implementation PIC to `codex`, or `claude (fallback: <reason>)` when the task ran
+under the Executor fallback; set that task's review PIC to
+`claude (fallback: conformance/quality/security + independent subagent review)`.
 Always attribute the review line to `both (claude: conformance/quality/security review + verification runs, codex: codex_review pass)`.
 After three failed review rounds and a Claude hand-fix, change the task PIC to `both (claude: hand-fix <what>, codex: implementation)`.
 

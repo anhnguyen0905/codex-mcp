@@ -3,6 +3,41 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.22.0] - 2026-09-02
+
+### Added
+
+- **Executor fallback in `/codex-flow`** — when `codex_health` fails, the server is missing, Codex
+  is logged out, or a run dies mid-backlog with an unhealthy re-check, the flow offers one explicit
+  AskUserQuestion: fix Codex and re-check, or continue with Claude as executor. Under fallback Claude
+  implements each task from the same context slice under the same embedded standards blocks, runs
+  the acceptance command itself (`- Verification:` line), and an independent subagent review replaces
+  `codex_review` so Claude never grades its own homework alone. The switch is recorded in a new
+  STATE.md key `executor` (`codex` | `claude (fallback: <reason> <ISO>)` | `codex (restored <ISO>)`),
+  happens only at a task boundary, and reverses at any boundary once Codex is healthy again. The
+  analysis lane still needs no decision; the small-change lane may run under fallback. Preflight and
+  session-report skills carry the new key and PIC value; `tests/flowDocs.test.ts` guards the contract.
+
+- **Server-side acceptance verification** — `codex_execute` / `codex_continue` accept
+  `verifyCommand` (+ `verifyTimeoutMs`, default 10 min, cap 30). After the logical run settles
+  (post auto-resume, still inside the cwd lock) the server runs the command in `cwd` and attaches
+  `verification: { command, exitCode, timedOut, durationMs, outputTail, passed, skipped? }` to the
+  payload and `structuredContent`. Skipped with `skipped: "run-failed"` when the run failed/aborted;
+  never alters `status`/`isError`. Phase 4 passes the task's acceptance command; Phase 5 reads the
+  field instead of trusting Codex's account. New module `src/verification.ts`.
+- **`errorMessage` on metric entries** — the first Codex-emitted error message (head, 200 chars) is
+  recorded next to `errorKind`, so turn-failed runs can be classified offline (quota vs sandbox vs
+  model).
+
+### Fixed
+
+- **Test runs no longer pollute the operator's metrics log** — `tests/setup.ts` redirects
+  `CODEX_MCP_METRICS_LOG` to a per-worker temp file, and `appendMetric` refuses to write to the
+  default `~/.codex-mcp/metrics.jsonl` when running under vitest without an explicit destination
+  (`isMetricsWriteSuppressed`). Before this, ~97% of the lines in a developer's real log were
+  fixture runs (`/repo`, `/w/1`, …), making `codex_metrics` and `session-cost.mjs` untrustworthy.
+  `appendMetric` now returns whether a line was written.
+
 ## [0.21.1] - 2026-08-22
 
 ### Fixed
