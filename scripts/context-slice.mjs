@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import { parseRequirements } from './requirements-coverage.mjs'
 import { parseTasks } from './task-waves.mjs'
 
 export const TASK_SLICE_TOKEN_BUDGET = 4000
@@ -676,8 +677,9 @@ function fitToBudget(items, tokenBudget, headSha, preDroppedItems = [], preamble
   }
 }
 
-function assertTaskRawWithinCeiling(taskItem) {
-  const tokens = tokensOf(taskItem.markdown)
+function assertMandatoryTierWithinCeiling(items) {
+  const markdown = items.map((item) => item.markdown).join('\n\n')
+  const tokens = tokensOf(markdown)
   if (tokens <= MANDATORY_TIER_CEILING) return
   throw new Error(
     `mandatory slice content exceeds tokenBudget ${MANDATORY_TIER_CEILING} ` +
@@ -750,12 +752,69 @@ function validateSliceText(planText, tasksText) {
   if (typeof tasksText !== 'string') throw new TypeError('tasksText must be a string')
 }
 
+function requirementSourceOf(requirementsText) {
+  const lines = requirementsText.split(/\r?\n/)
+  const deltasIndex = lines.findIndex((line) => /^##\s+Deltas\s*$/i.test(line))
+  const baseLines = lines.slice(0, deltasIndex === -1 ? lines.length : deltasIndex)
+  const headings = new Map()
+  const clauses = new Map()
+  for (const line of baseLines) {
+    const heading = line.match(/^##\s+(R\d+):/i)
+    const clause = line.match(/^\s*-\s*(R\d+\.\d+):/i)
+    if (heading) headings.set(heading[1].toUpperCase(), line)
+    if (clause) clauses.set(clause[1].toUpperCase(), line)
+  }
+  const deltaLines = deltasIndex === -1 ? [] : lines.slice(deltasIndex + 1)
+  const starts = deltaLines.flatMap((line, index) => {
+    const match = line.match(/^###\s+\d{4}-\d{2}-\d{2}(?:T\S+)?\s+(?:ADDED|MODIFIED|REMOVED)\s+(R\d+(?:\.\d+)?)\s*$/i)
+    return match ? [{ index, id: match[1].toUpperCase() }] : []
+  })
+  const deltas = starts.map((start, index) => ({
+    id: start.id,
+    markdown: deltaLines.slice(start.index, starts[index + 1]?.index).join('\n').trimEnd(),
+  }))
+  return { headings, clauses, deltas }
+}
+
+function requirementsItemOf(requirementsText, task) {
+  if (requirementsText === null || requirementsText === undefined) return null
+  if (typeof requirementsText !== 'string') {
+    throw new TypeError('requirementsText must be a string, null, or undefined')
+  }
+  const effective = parseRequirements(requirementsText)
+  const effectiveIds = new Set(effective.flatMap((requirement) => requirement.criteria
+    .map((criterion) => criterion.id)))
+  const citedIds = [...new Set(task.requirements.map((id) => id.toUpperCase()))]
+  const unknownId = citedIds.find((id) => !effectiveIds.has(id))
+  if (unknownId) throw new Error(`task ${task.id} cites unknown requirement ${unknownId}`)
+
+  const source = requirementSourceOf(requirementsText)
+  const parentIds = [...new Set(citedIds.map((id) => id.split('.')[0]))]
+  const body = parentIds.flatMap((parentId) => {
+    const requirement = effective.find(({ id }) => id === parentId)
+    const heading = source.headings.get(parentId) ?? `## ${parentId}: ${requirement.title}`
+    const clauses = citedIds.filter((id) => id.startsWith(`${parentId}.`))
+      .flatMap((id) => source.clauses.get(id) ?? [])
+    return [heading, ...clauses]
+  })
+  const deltas = source.deltas.filter(({ id }) => citedIds.some(
+    (citedId) => id === citedId || id === citedId.split('.')[0],
+  ))
+  if (deltas.length) body.push('## Deltas', ...deltas.map(({ markdown }) => markdown))
+  return {
+    name: 'Requirements (verbatim)',
+    section: 'requirements',
+    markdown: ['## Requirements (verbatim)', ...body].join('\n'),
+    mandatory: true,
+  }
+}
+
 /** Render a deterministic, budgeted PLAN.md slice for one task. */
 export function sliceForTask(
   planText,
   tasksText,
   taskId,
-  { tokenBudget = TASK_SLICE_TOKEN_BUDGET, git = defaultGit() } = {},
+  { tokenBudget = TASK_SLICE_TOKEN_BUDGET, git = defaultGit(), requirementsText = null } = {},
 ) {
   validateSliceText(planText, tasksText)
   validateTokenBudget(tokenBudget)
@@ -770,11 +829,11 @@ export function sliceForTask(
   if (!task) throw new Error(`task ${taskId ?? '<missing>'} is missing from tasksText`)
   const taskRaw = taskRawOf(tasksText, task.id)
   const taskItem = { name: `Task ${task.id}`, section: `task ${task.id}`, markdown: taskRaw, mandatory: true }
-  assertTaskRawWithinCeiling(taskItem)
-  const items = [
-    taskItem,
-    contractsIndexItem(sections.get('Contracts'), decisionBlocks, gitState),
-  ]
+  const requirementsItem = requirementsItemOf(requirementsText, task)
+  const mandatoryTierItems = [taskItem, requirementsItem].filter(Boolean)
+  assertMandatoryTierWithinCeiling(mandatoryTierItems)
+  const items = [...mandatoryTierItems]
+  items.push(contractsIndexItem(sections.get('Contracts'), decisionBlocks, gitState))
   const planItems = taskPlanItems(sections, decisionBlocks, task, taskRaw, gitState)
   items.push(...planItems.items)
   return fitToBudget(items, tokenBudget, gitState.headSha, planItems.omittedItems)
@@ -802,6 +861,23 @@ function statusItemOf(records) {
     markdown: `## Task statuses\n${lines.join('\n')}`,
     mandatory: true,
   }
+}
+
+function inProgressItemsOf(records) {
+  const fieldNames = ['Files', 'Depends on', 'Session', 'Status']
+  return records.filter(({ status }) => status === 'in-progress').map(({ task, raw }) => {
+    const lines = raw.split(/\r?\n/)
+    const fields = fieldNames.flatMap((field) => {
+      const pattern = new RegExp(`^[ \\t]*-[ \\t]*${escapedPattern(field)}:`, 'i')
+      return lines.find((line) => pattern.test(line)) ?? []
+    })
+    return {
+      name: `${task.id} in-progress`,
+      section: `task ${task.id}`,
+      markdown: `### ${task.id} (in-progress)\n${fields.join('\n')}`,
+      mandatory: true,
+    }
+  })
 }
 
 function resumeDecisionSelection(decisionBlocks, unfinishedRecords) {
@@ -843,7 +919,7 @@ export function sliceForResume(
   const { sections, decisionBlocks } = parsePlan(planText)
   const records = taskRecordsOf(tasksText)
   const unfinishedRecords = records.filter(({ status }) => status !== 'done')
-  const items = [statusItemOf(records)]
+  const items = [statusItemOf(records), ...inProgressItemsOf(records)]
   if (unfinishedRecords[0]) {
     items.push({
       name: `Next task ${unfinishedRecords[0].task.id}`,
@@ -912,8 +988,15 @@ function parseCliArgs(args) {
   if (!Array.isArray(args) || args.some((arg) => typeof arg !== 'string')) {
     throw new TypeError('CLI args must be an array of strings')
   }
-  const config = { taskId: null, resume: false, plan: '.codex-flow/PLAN.md', tasks: '.codex-flow/TASKS.md', out: '.codex-flow' }
-  const valuedFlags = new Set(['--task', '--plan', '--tasks', '--out'])
+  const config = {
+    taskId: null,
+    resume: false,
+    plan: '.codex-flow/PLAN.md',
+    tasks: '.codex-flow/TASKS.md',
+    requirements: '.codex-flow/REQUIREMENTS.md',
+    out: '.codex-flow',
+  }
+  const valuedFlags = new Set(['--task', '--plan', '--tasks', '--requirements', '--out'])
   const seen = new Set()
 
   for (let index = 0; index < args.length; index += 1) {
@@ -930,6 +1013,7 @@ function parseCliArgs(args) {
     if (flag === '--task') config.taskId = value
     if (flag === '--plan') config.plan = value
     if (flag === '--tasks') config.tasks = value
+    if (flag === '--requirements') config.requirements = value
     if (flag === '--out') config.out = value
     index += 1
   }
@@ -938,24 +1022,39 @@ function parseCliArgs(args) {
   return config
 }
 
+async function readRequirements(requirementsPath) {
+  try {
+    return await fs.readFile(requirementsPath, 'utf8')
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      console.error('warning: requirements file not found; slice has no requirement clauses')
+      return null
+    }
+    throw error
+  }
+}
+
 /** Execute the context-slice CLI and return the written absolute path. */
 export async function main(args = process.argv.slice(2), { cwd = process.cwd() } = {}) {
   if (typeof cwd !== 'string' || !cwd.trim()) throw new TypeError('cwd must be a non-empty string')
   const config = parseCliArgs(args)
   const planPath = path.resolve(cwd, config.plan)
   const tasksPath = path.resolve(cwd, config.tasks)
+  const requirementsPath = path.resolve(cwd, config.requirements)
   const outputDirectory = path.resolve(cwd, config.out)
+  const outputName = config.resume ? 'RESUME.md' : `CONTEXT-${config.taskId.toUpperCase()}.md`
+  const outputPath = path.join(outputDirectory, outputName)
   const [planText, tasksText] = await Promise.all([
     fs.readFile(planPath, 'utf8'),
     fs.readFile(tasksPath, 'utf8'),
   ])
+  await assertNotSymlink(outputDirectory, 'output directory')
+  await assertNotSymlink(outputPath, 'output file')
+  const requirementsText = config.resume ? null : await readRequirements(requirementsPath)
   const git = defaultGit(cwd)
   const slice = config.resume
     ? sliceForResume(planText, tasksText, { git })
-    : sliceForTask(planText, tasksText, config.taskId, { git })
-  const outputName = config.resume ? 'RESUME.md' : `CONTEXT-${config.taskId.toUpperCase()}.md`
-  const outputPath = path.join(outputDirectory, outputName)
-  await assertNotSymlink(outputDirectory, 'output directory')
+    : sliceForTask(planText, tasksText, config.taskId, { git, requirementsText })
   await fs.mkdir(outputDirectory, { recursive: true })
   await assertNotSymlink(outputDirectory, 'output directory')
   await assertNotSymlink(outputPath, 'output file')

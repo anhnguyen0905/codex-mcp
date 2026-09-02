@@ -48,15 +48,24 @@ not been created yet:
   review the work as-is / reset to pending**. For reset to pending, roll back through the
   checkpoint commit when `checkpointCommits` is enabled. Never blindly re-execute an in-progress
   task.
-- **Resume** → skip only the phases whose approvals STATE.md records, then route from STATE.md's
-  recorded `phase`. For `phase: execution`, enter Phase 4 at the first task not marked done. For
+- **Resume** → first run `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check`; when it reports only missing keys on a legacy file, add them
+  with `set` (`currentTask -`, `taskStage idle`, `wave -`) and continue; any other violation is
+  surfaced to the user before routing. Then skip only the phases whose approvals STATE.md records, and route from STATE.md's
+  recorded `phase`. For `phase: execution`, enter Phase 4 at the first task not marked done. Before
+  that, first route by `taskStage` regardless of `currentTask` (`currentTask` names the task in sequential
+  mode; in parallel mode it is `-` and `wave` names the wave): `reviewing` → resume Phase 5 for that task;
+  `launching` or `executing` → run the in-progress reconciliation above before anything else;
+  `handoff` → finish Phase 5 step 7's durable handoff (or the wave's Step 3.8); `merge-conflict` → surface the conflict to the
+  user and STOP; `idle` → the next pending task. For
   `phase: review`, resume Phase 5 completion work; when all tasks are done but `phase` is not
   `complete`, also resume Phase 5 for the final dual review, requirement ID-walk, improvement gate,
   cost/report delivery gates, and completion write instead of concluding there is no work. For an
   earlier phase, enter its first unapproved gate. Treat
   every `[verify]` block as a hypothesis: confirm it against `git diff` and the current code before
-  relying on it. Record the current `git rev-parse HEAD` as `resumeHead` and update `phase`; change
-  no other STATE.md key as part of the resume operation.
+  relying on it. Record the current `git rev-parse HEAD` as `resumeHead` and update `phase`; apart
+  from the legacy-key backfill above, change no other STATE.md key as part of the resume operation.
+  The reconciliation choice for an in-progress task (continue / review as-is / reset) is made
+  first; the `taskStage` routing then applies to the task as the user left it.
 - On resume, reuse the report dir recorded under `## Session report` in PLAN.md; create it only if
   missing.
 - **Restart** → archive the old control files that exist to `.codex-flow/archive/<timestamp>/`,
@@ -96,15 +105,29 @@ files and offer to archive them before beginning a fresh run.
    - executionMode: undecided
    - dirtyBaseline: <none | baseline-dirty.patch>
    - executor: codex
+   - currentTask: -
+   - taskStage: idle
+   - wave: -
    ```
 
    `executor` records who writes code: `codex` (default), `claude (fallback: <reason> <ISO 8601>)`
    after an explicit Executor-fallback choice, or `codex (restored <ISO 8601>)` after returning.
    It changes only at a task boundary and never silently.
 
+   `currentTask` is the task being worked (`T<n>`) or `-`; `taskStage` is one of
+   `idle | launching | executing | reviewing | handoff | merge-conflict`; `wave` is the current
+   parallel wave number or `-`. `phase` stays `execution` for the whole task loop — per-task
+   progress lives in `currentTask` + `taskStage`; `phase: review` means the whole-feature review
+   after the last task.
+
+   Write STATE.md and TASKS.md status lines only through the helper:
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set <key> <value>`, `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check`, and
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" task <T-id> <status>` (which appends the transition
+   line). If the helper is unavailable in a standalone install, edit the file directly; if it is present but exits non-zero, surface the error to the user and STOP.
+
    The orchestrator is the only writer. `runBaselineRef`, `knownRed`, and `dirtyBaseline` are
    written once at run start and NEVER modified on resume. A resume writes only `resumeHead` and
-   updates `phase` as its resume operation; later approval or execution transitions update only
+   updates `phase` as its resume operation (apart from the legacy-key backfill); later approval or execution transitions update only
    their corresponding mutable fields.
 
 ## Why it's a gate

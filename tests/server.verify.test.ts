@@ -92,3 +92,50 @@ describe('verifyCommand', () => {
     expect(verifyFn).not.toHaveBeenCalled()
   })
 })
+
+describe('accepted verdict on execute/continue payloads', () => {
+  const verifyWith = (passed: boolean): VerifyFn =>
+    vi.fn<VerifyFn>(async (command) => ({ command, exitCode: passed ? 0 : 1, timedOut: false, durationMs: 1, outputTail: '', passed }))
+
+  test('accepted is true for a successful run without verifyCommand', async () => {
+    const client = await connect(async () => okOutcome, vi.fn<VerifyFn>())
+
+    const payload = payloadOf(await client.callTool({ name: 'codex_execute', arguments: { prompt: 'x', cwd: '/repo' } }))
+
+    expect(payload.status).toBe('success')
+    expect(payload.accepted).toBe(true)
+  })
+
+  test('accepted is true when verification passed', async () => {
+    const client = await connect(async () => okOutcome, verifyWith(true))
+
+    const payload = payloadOf(
+      await client.callTool({ name: 'codex_execute', arguments: { prompt: 'x', cwd: '/repo', verifyCommand: 'npm test' } }),
+    )
+
+    expect(payload.accepted).toBe(true)
+  })
+
+  test('accepted is false when verification failed even though status is success', async () => {
+    const client = await connect(async () => okOutcome, verifyWith(false))
+
+    const result = await client.callTool({ name: 'codex_continue', arguments: { sessionId: 's', prompt: 'x', cwd: '/repo', verifyCommand: 'npm test' } })
+    const payload = payloadOf(result)
+
+    expect(payload.status).toBe('success')
+    expect(result.isError).toBe(false)
+    expect(payload.accepted).toBe(false)
+    expect((result.structuredContent as { accepted: boolean }).accepted).toBe(false)
+  })
+
+  test('accepted is false when the run failed and verification was skipped', async () => {
+    const client = await connect(async () => failedOutcome, vi.fn<VerifyFn>())
+
+    const payload = payloadOf(
+      await client.callTool({ name: 'codex_execute', arguments: { prompt: 'x', cwd: '/repo', verifyCommand: 'npm test' } }),
+    )
+
+    expect(payload.status).toBe('failed')
+    expect(payload.accepted).toBe(false)
+  })
+})

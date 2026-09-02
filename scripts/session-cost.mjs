@@ -7,6 +7,8 @@ const TOKENS_PER_MILLION = 1_000_000
 const COST_DECIMALS = 6
 const DEFAULT_LOG_PATH = path.join(homedir(), '.codex-mcp', 'metrics.jsonl')
 const VALUE_FLAGS = new Set(['--since', '--until', '--cwd', '--log'])
+/** Repeatable value flag: each occurrence appends to `sessions`. */
+const SESSION_FLAG = '--session'
 const PRICING_KEYS = ['inputPer1M', 'cachedInputPer1M', 'outputPer1M', 'reasoningOutputPer1M']
 const ISO_FLAG_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2}))?$/
@@ -61,6 +63,13 @@ export function parseArgs(argv) {
     const flag = argv[index]
     if (flag === '--json') {
       parsed = { ...parsed, json: true }
+      continue
+    }
+    if (flag === SESSION_FLAG) {
+      const sessionId = requireFlagValue(argv, index, flag)
+      const sessions = parsed.sessions ?? []
+      parsed = { ...parsed, sessions: sessions.includes(sessionId) ? sessions : [...sessions, sessionId] }
+      index += 1
       continue
     }
     if (!VALUE_FLAGS.has(flag)) throw new Error(`unknown argument: ${flag}`)
@@ -133,19 +142,28 @@ export function readEntries(logPath) {
   return [...readEntriesFile(`${logPath}.1`), ...readEntriesFile(logPath)]
 }
 
-/** Filter entries by inclusive timestamps and an optional exact cwd match. */
-export function filterEntries(entries, { since, until, cwd } = {}) {
+const isStringArray = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string')
+
+/**
+ * Filter entries by inclusive timestamps, then by identity: when `sessions` is non-empty, keep
+ * entries whose sessionId is listed and IGNORE `cwd` (parallel worktrees run under other cwds);
+ * otherwise apply the optional exact cwd match.
+ */
+export function filterEntries(entries, { since, until, cwd, sessions } = {}) {
   if (!Array.isArray(entries)) throw new TypeError('entries must be an array')
   if (!isStrictIsoDate(since)) throw new Error('since must be a valid ISO date')
   if (until !== undefined && !isStrictIsoDate(until)) throw new Error('until must be a valid ISO date')
   if (cwd !== undefined && typeof cwd !== 'string') throw new TypeError('cwd must be a string')
+  if (sessions !== undefined && !isStringArray(sessions)) throw new TypeError('sessions must be an array of strings')
 
   const sinceMs = Date.parse(since)
   const untilMs = until === undefined ? undefined : Date.parse(until)
+  const sessionSet = sessions && sessions.length > 0 ? new Set(sessions) : undefined
   return entries.filter((entry) => {
     if (!isMetricEntry(entry)) throw new TypeError('entries must contain valid metric entries')
     const timestamp = Date.parse(entry.ts)
     if (timestamp < sinceMs || (untilMs !== undefined && timestamp > untilMs)) return false
+    if (sessionSet) return sessionSet.has(entry.sessionId)
     return cwd === undefined || entry.cwd === cwd
   })
 }

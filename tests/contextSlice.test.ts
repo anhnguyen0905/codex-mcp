@@ -429,6 +429,77 @@ describe('tokensOf', () => {
 })
 
 describe('sliceForTask', () => {
+  test('embeds cited clauses under each parent header once and includes touching deltas', () => {
+    // Arrange
+    const requirements = `## R1: Accounts
+- R1.1: Create an account exactly as requested.
+- R1.2: Delete an account safely.
+
+## R2: Audit
+- R2.1: Record every account change.
+
+## Deltas
+### 2026-09-01 MODIFIED R1.1
+Create an account with a verified address.
+### 2026-09-02 MODIFIED R2.1
+Record every audited change with an actor.
+`
+    const tasks = `## T1: Account changes
+- Files: src/accounts.ts
+- Requirements: R1.1, R1.2
+- Status: pending
+`
+
+    // Act
+    const result = sliceForTask('## Objective\nImplement accounts.\n', tasks, 'T1', {
+      git: FAKE_GIT,
+      requirementsText: requirements,
+    })
+
+    // Assert
+    expect(result.markdown).toContain('## Requirements (verbatim)')
+    expect(result.markdown.match(/^## R1: Accounts$/gm)).toHaveLength(1)
+    expect(result.markdown).toContain('- R1.1: Create an account exactly as requested.')
+    expect(result.markdown).toContain('- R1.2: Delete an account safely.')
+    expect(result.markdown).toContain(
+      '### 2026-09-01 MODIFIED R1.1\nCreate an account with a verified address.',
+    )
+    expect(result.markdown).not.toContain('### 2026-09-02 MODIFIED R2.1')
+  })
+
+  test('throws when a task cites an unknown effective requirement', () => {
+    const requirements = `## R1: Accounts
+- R1.1: Create an account.
+`
+    const tasks = `## T3: Unknown requirement
+- Files: src/accounts.ts
+- Requirements: R9.9
+- Status: pending
+`
+
+    expect(() => sliceForTask('## Objective\nImplement accounts.\n', tasks, 'T3', {
+      git: FAKE_GIT,
+      requirementsText: requirements,
+    })).toThrow('task T3 cites unknown requirement R9.9')
+  })
+
+  test('keeps requirement clauses mandatory when they push the slice over budget', () => {
+    const requirements = `## R1: Accounts
+- R1.1: ${'Mandatory requirement clause. '.repeat(60)}
+`
+    const tasks = `## T1: Budgeted requirement
+- Files: src/accounts.ts
+- Requirements: R1.1
+- Status: pending
+`
+
+    expect(() => sliceForTask('## Objective\nOptional.\n', tasks, 'T1', {
+      tokenBudget: 100,
+      git: FAKE_GIT,
+      requirementsText: requirements,
+    })).toThrow(/mandatory slice content exceeds tokenBudget 100 \(measured \d+ tokens\)/)
+  })
+
   test('always includes a stamped Contracts index and marks a contract verify when its file is dirty', () => {
     // Arrange
     const plan = `## Contracts
@@ -843,6 +914,22 @@ stdout | noisy setup log
       .toThrow(/mandatory slice content exceeds tokenBudget 2000 \(measured \d+ tokens\)/)
   })
 
+  test('counts mandatory requirement clauses toward the mandatory-tier ceiling', () => {
+    const requirements = `## R1: Mandatory clauses
+- R1.1: ${'x'.repeat(8_200)}
+`
+    const tasks = `## T1: Small task
+- Files: src/task.ts
+- Requirements: R1.1
+- Status: pending
+`
+
+    expect(() => sliceForTask('## Context\nSmall.\n', tasks, 'T1', {
+      git: FAKE_GIT,
+      requirementsText: requirements,
+    })).toThrow(/mandatory slice content exceeds tokenBudget 2000 \(measured \d+ tokens\)/)
+  })
+
   test('drops oversized optional content while retaining mandatory task text', () => {
     const plan = `## Context
 ${'optional context '.repeat(1_500)}
@@ -1078,6 +1165,34 @@ C7 defines the unrelated contract.
 })
 
 describe('sliceForResume', () => {
+  test('adds verbatim mandatory blocks for every in-progress task within the resume budget', () => {
+    // Arrange
+    const tasks = Array.from({ length: 3 }, (_, index) => `## T${index + 1}: Active ${index + 1}
+- Depends on: ${index === 0 ? '—' : `T${index}`}
+- Files: src/active-${index + 1}.ts, tests/active-${index + 1}.test.ts
+- Session: session-${index + 1} (cwd: /worktrees/T${index + 1}, base: abc${index + 1})
+- Status: in-progress
+`).join('\n')
+
+    // Act
+    const result = sliceForResume('## Objective\nResume every active task.\n', tasks, { git: FAKE_GIT })
+
+    // Assert
+    expect(result.tokens).toBeLessThanOrEqual(RESUME_TOKEN_BUDGET)
+    for (let id = 1; id <= 3; id += 1) {
+      expect(result.markdown).toContain(`### T${id} (in-progress)`)
+      expect(result.markdown).toContain(`- Files: src/active-${id}.ts, tests/active-${id}.test.ts`)
+      expect(result.markdown).toContain(`- Session: session-${id} (cwd: /worktrees/T${id}, base: abc${id})`)
+      expect(result.markdown).toContain('- Status: in-progress')
+    }
+    expect(result.markdown.indexOf('## Task statuses')).toBeLessThan(
+      result.markdown.indexOf('### T1 (in-progress)'),
+    )
+    expect(result.markdown.indexOf('### T3 (in-progress)')).toBeLessThan(
+      result.markdown.indexOf('## T1: Active 1'),
+    )
+  })
+
   test('opens with the interruption warning, includes Out of scope, and points to never-candidate sections', () => {
     // Arrange
     const plan = `## Architecture
@@ -1369,6 +1484,39 @@ describe.skipIf(!GIT_AVAILABLE)('defaultGit filename parsing', () => {
 })
 
 describe('context-slice CLI', () => {
+  test('continues without a requirements block and warns when the requirements file is absent', () => {
+    // Arrange
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-no-requirements-'))
+    tempDirectories.push(directory)
+    const planPath = join(directory, 'PLAN.md')
+    const tasksPath = join(directory, 'TASKS.md')
+    const outputDirectory = join(directory, 'derived')
+    writeFileSync(planPath, '## Objective\nGenerate the slice.\n')
+    writeFileSync(tasksPath, `## T1: Missing requirements file
+- Files: src/task.ts
+- Requirements: R1.1
+- Status: pending
+`)
+
+    // Act
+    const result = spawnSync(process.execPath, [
+      CONTEXT_SLICE_SCRIPT,
+      '--task', 'T1',
+      '--plan', planPath,
+      '--tasks', tasksPath,
+      '--requirements', join(directory, 'missing.md'),
+      '--out', outputDirectory,
+    ], { cwd: directory, encoding: 'utf8' })
+
+    // Assert
+    expect(result.status).toBe(0)
+    expect(result.stderr.trim()).toBe(
+      'warning: requirements file not found; slice has no requirement clauses',
+    )
+    const output = readFileSync(join(outputDirectory, 'CONTEXT-T1.md'), 'utf8')
+    expect(output).not.toContain('## Requirements (verbatim)')
+  })
+
   test('preserves a symlink target and cleans up its sibling temp file after atomic failure', async () => {
     // Arrange
     const directory = mkdtempSync(join(tmpdir(), 'context-slice-atomic-'))

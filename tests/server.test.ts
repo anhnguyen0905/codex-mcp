@@ -143,7 +143,7 @@ describe('codex-mcp server', () => {
     }
   })
 
-  test('codex_review auto-resumes a transient turn failure in the read-only sandbox', async () => {
+  test('codex_review never auto-resumes: a transient turn failure ends after one attempt', async () => {
     const previousAutoResume = process.env.CODEX_MCP_AUTO_RESUME
     delete process.env.CODEX_MCP_AUTO_RESUME
     runFn.mockResolvedValueOnce(transientFailureOutcome).mockResolvedValueOnce(okOutcome)
@@ -154,15 +154,13 @@ describe('codex-mcp server', () => {
         name: 'codex_review',
         arguments: { cwd: '/repo' },
       })
-      const [resumeArgs] = runFn.mock.calls[1]
 
-      expect(result.structuredContent).toMatchObject({
-        attempts: 2,
-        resumeReasons: ['transient-turn-failure'],
-      })
-      expect(runFn).toHaveBeenCalledTimes(2)
-      expect(resumeArgs.slice(0, 3)).toEqual(['exec', 'resume', 'sess-1'])
-      expect(resumeArgs).toContain('sandbox_mode="read-only"')
+      expect(runFn).toHaveBeenCalledTimes(1)
+      expect(result.isError).toBe(true)
+      const payload = JSON.parse((result.content as Array<{ text: string }>)[0].text)
+      expect(payload.attempts).toBe(1)
+      expect(payload.resumeReasons).toEqual([])
+      expect(payload.accepted).toBe(false)
     } finally {
       if (previousAutoResume === undefined) delete process.env.CODEX_MCP_AUTO_RESUME
       else process.env.CODEX_MCP_AUTO_RESUME = previousAutoResume

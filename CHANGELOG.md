@@ -3,6 +3,48 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.24.0] - 2026-09-03
+
+### Added
+
+- **`scripts/flow-state.mjs`** — validated, atomic writer for `.codex-flow/STATE.md` and TASKS.md
+  status lines: `set <key> <value>` (exactly one line, legacy keys appended in canonical order),
+  `check` (one `violation:` line per bad/missing key), `task <T-id> <status>` (append-only
+  transition line, legal transitions only). Values must be single-line; unknown keys, invalid
+  phases/stages and illegal transitions exit 1 without writing.
+- **14-key run state** — STATE.md gains `currentTask`, `taskStage`
+  (`idle|launching|executing|reviewing|handoff|merge-conflict`) and `wave`. `phase` now stays
+  `execution` for the whole task loop; `phase: review` is written once, after the last task. Resume
+  routes by `taskStage` regardless of `currentTask` (sequential: `T<n>`; parallel: `-` + `wave`).
+  All STATE.md/TASKS.md writes in the command and skills route through the helper.
+- **Requirement clauses inside task slices** — `context-slice.mjs --task` reads
+  `.codex-flow/REQUIREMENTS.md` (new `--requirements` flag) and embeds the verbatim `R<n>.<m>`
+  clauses (plus Deltas) cited by the task as mandatory content; unknown IDs exit 1; a missing file
+  only warns. The mandatory-tier ceiling now counts the clauses.
+- **Resume fidelity** — `RESUME.md` renders a `### T<n> (in-progress)` block (Files, Depends on,
+  Session, Status) for EVERY in-progress task, not just the first.
+- **`accepted` verdict on run payloads** — `codex_execute` / `codex_continue` / `codex_review`
+  return `accepted: boolean`: `status === 'success'` AND the acceptance evidence holds
+  (`verification.passed` when a `verifyCommand` was given; `reviewFindings.parsed` for reviews).
+  Informational — `status`/`isError` unchanged; batch task results unaffected.
+- **`session-cost.mjs --session <id>`** (repeatable) — aggregate by session ids across worktree
+  cwds; when given, `--cwd` is ignored. `session-report` collects every TASKS.md Session id.
+
+### Changed
+
+- **Fail-closed review parsing** — `reviewFindings` is `parsed: true` only when the json block has
+  BOTH `findings` and `improvements` arrays; findings without non-empty `expected`/`observed` are
+  dropped and counted.
+- **`codex_review` never auto-resumes** — recovery disabled for the review tool; a timed-out or
+  partial review is reported after one attempt.
+- **Single authoritative test run per task** — `exec-self-testing` tells Codex to run targeted
+  tests + build only (never the full suite); Phase 5 step 3 reads `accepted`/`verification` and
+  does not re-run the suite per task; the full suite runs once per merged parallel wave and once
+  in the whole-feature review. `review-conformance` and `review-feedback` aligned.
+- **Parallel-execution skill** — coordinator writes route through `flow-state.mjs`; wave stage
+  sequence `executing → handoff → idle`; merge conflicts are recorded as `taskStage: merge-conflict`
+  before stopping; the files-expansion transaction returns `phase` to `execution`.
+
 ## [0.23.1] - 2026-09-02
 
 ### Changed

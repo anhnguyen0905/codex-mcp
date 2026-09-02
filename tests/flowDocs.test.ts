@@ -188,7 +188,8 @@ describe('exec-self-testing targeted-testing rules', () => {
     // Act
     const requiredRules = [
       'While iterating',
-      'at most ONCE',
+      'Do NOT run the full test suite',
+      'single authoritative acceptance run',
       'EMFILE',
       'more than two minutes',
     ]
@@ -331,6 +332,9 @@ describe('preflight resume protocol', () => {
       'executionMode',
       'dirtyBaseline',
       'executor',
+      'currentTask',
+      'taskStage',
+      'wave',
     ])
     expect(skill).toContain('exactly one\n   `## Run state` section')
     expect(skill).toContain('The orchestrator is the only writer.')
@@ -611,7 +615,7 @@ describe('parallel-execution worktree branch points', () => {
     expect(restorationIndex).toBeGreaterThan(filesUpdateIndex)
     expect(expandedReviewIndex).toBeGreaterThan(restorationIndex)
     expect(skill).toContain('`phase: backlog` in STATE.md')
-    expect(skill).toContain('return `phase` to `review`')
+    expect(skill).toContain('return `phase` to `execution`')
     expect(skill).toContain('using a fresh `codex_review` or a Claude pass, before the branch may merge')
     expect(skill).toContain(
       'The security review is mandatory when the expansion touches auth, input, queries, files, or secrets.',
@@ -1047,7 +1051,8 @@ describe('codex-flow command structure', () => {
     expect(taskUpdateIndex).toBeGreaterThan(checkpointIndex)
     expect(statusIndex).toBeGreaterThan(taskUpdateIndex)
     expect(stepSeven.replace(/\s+/g, ' ')).toContain('make the LAST durable task write')
-    expect(stepSeven).toContain('`  - <ISO 8601 ts> in-progress -> done (session: <id>)`')
+    expect(stepSeven).toContain('`  - <ISO 8601 ts> in-progress -> done`')
+    expect(stepSeven).not.toContain('in-progress -> done (session:')
   })
 
   test('falls back to a fresh fix session when the recorded implementation session is gone', () => {
@@ -1131,7 +1136,17 @@ describe('server-side acceptance verification contract', () => {
 
   test('Phase 5 reads the verification field before trusting agentMessage', () => {
     const phase5 = extractPhaseSection(command, 5).replace(/\s+/g, ' ')
-    expect(phase5).toContain('Read the tool result\'s `verification` field first')
+    expect(phase5).toContain('Read the tool result\'s `accepted` verdict first')
+    expect(phase5).toContain('Do NOT re-run the full test suite per task — `verifyCommand` is the single authoritative acceptance run')
+    expect(phase5).toContain('the full suite runs once per merged parallel wave (integration review) and once in the whole-feature review (step 8)')
+    expect(phase5).not.toContain('Then run the project\'s full tests/build yourself')
+    expect(readText(EXEC_SELF_TESTING_PATH).replace(/\s+/g, ' ')).toContain('Claude does NOT re-run the full suite per task')
+    expect(readText(path.join(REPO_ROOT, 'skills', 'review-conformance', 'SKILL.md'))).toContain('Do not re-run the suite per task')
+    expect(readText(path.join(REPO_ROOT, 'skills', 'review-feedback', 'SKILL.md'))).toContain('re-run the targeted tests for the touched files')
+    expect(readText(path.join(REPO_ROOT, 'skills', 'review-feedback', 'SKILL.md'))).not.toContain('re-run the full test suite')
+    expect(phase5).toContain('`accepted` verdict first (`true` only when the run succeeded AND its `verification` passed')
+    expect(phase5).toContain('(passing the same `verifyCommand`, see Phase 4 step 1, so acceptance re-runs mechanically)')
+    expect(readText(EXEC_SELF_TESTING_PATH)).not.toContain('run the FULL test suite at most ONCE')
     expect(phase5).toContain('`passed: false` (or `skipped`) means the task is not done regardless of what `agentMessage` says')
   })
 
@@ -1207,5 +1222,56 @@ describe('structured, concurrent dual review contract', () => {
     expect(reviewDual).toContain('never run the two\nin series')
     expect(reviewDual).toContain('## Read Codex\'s findings from `reviewFindings`, not prose')
     expect(reviewDual).toContain('Never re-grade a\n  finding\'s severity from the surrounding prose')
+  })
+})
+
+describe('durable task-loop state contract (R1.2, R1.6)', () => {
+  const command = readText(COMMAND_PATH)
+  const preflight = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
+  const phase0 = command.slice(command.indexOf('## Phase 0'), command.indexOf('## Fast-path gate')).replace(/\s+/g, ' ')
+  const phase4 = extractPhaseSection(command, 4).replace(/\s+/g, ' ')
+  const phase5 = extractPhaseSection(command, 5).replace(/\s+/g, ' ')
+  const helper = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs"'
+
+  test('preflight documents the three new keys and their allowed values', () => {
+    expect(preflight).toContain('`taskStage` is one of `idle | launching | executing | reviewing | handoff | merge-conflict`')
+    expect(preflight).toContain('`phase` stays `execution` for the whole task loop')
+    expect(preflight).toContain(`${helper} task <T-id> <status>`)
+  })
+
+  test('phase stays execution through the task loop and review is set only after the last task', () => {
+    expect(phase5).toContain('`phase` stays `execution`. Sequential mode: set `taskStage` to `reviewing`')
+    expect(phase5).toContain(`${helper} set taskStage reviewing`)
+    expect(phase5).toContain(`${helper} set taskStage handoff`)
+    expect(phase5).toContain(`${helper} task T<n> done`)
+    expect(phase5).toContain('then set `taskStage idle` and `currentTask -`')
+    expect(phase5).toContain(`set \`phase\` to \`review\` with \`${helper} set phase review\` (the only place \`phase: review\` is written)`)
+    expect(command).not.toContain('At the Phase 4 → Phase 5 boundary, set `phase` in `.codex-flow/STATE.md` to `review`.')
+  })
+
+  test('task status writes route through the helper with a standalone fallback', () => {
+    expect(phase4).toContain(`${helper} task T<n> in-progress`)
+    expect(phase4).toContain('set `currentTask T<n>` and `taskStage launching`')
+    expect(phase4).toContain('once the call is dispatched, set `taskStage executing`')
+    expect(phase4).toContain(`${helper} task T<n> failed`)
+    expect(phase4).toContain(`${helper} set wave <n>`)
+    expect(phase0).toContain('set `currentTask: -`, `taskStage: idle`, `wave: -` (14 keys total)')
+    expect(phase0).toContain('If the helper is unavailable in a standalone install, edit the file directly; if it is present but exits non-zero, surface the error to the user and STOP.')
+  })
+
+  test('resume routing uses currentTask and taskStage under phase execution', () => {
+    expect(phase0).toContain(`Run \`${helper} check\` first: when it reports ONLY missing keys on a legacy file`)
+    expect(phase0).toContain('any other violation is surfaced to the user before routing')
+    expect(phase4).toContain('then set `taskStage idle` and `currentTask -`, and update TaskUpdate')
+    expect(readText(PARALLEL_EXECUTION_PATH)).toContain(`${helper} set taskStage merge-conflict`)
+    expect(readText(PARALLEL_EXECUTION_PATH)).toContain(`${helper} task T<n> in-progress`)
+    expect(readText(PARALLEL_EXECUTION_PATH)).toContain(`${helper} task T<n> done`)
+    expect(readText(PARALLEL_EXECUTION_PATH)).toContain(`${helper} set taskStage handoff`)
+    expect(phase0).toContain('but first route by `taskStage`, regardless of `currentTask`')
+    expect(phase0).toContain('`merge-conflict` → surface it and STOP')
+    expect(preflight).toContain('first route by `taskStage` regardless of `currentTask`')
+    expect(phase5).toContain('Sequential mode: set `taskStage` to `reviewing`')
+    expect(phase5).toContain('Parallel mode: `taskStage` stays `executing` for the whole wave')
+    expect(preflight).toContain('`merge-conflict` → surface the conflict to the user and STOP')
   })
 })

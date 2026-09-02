@@ -236,6 +236,12 @@ explicit **Executor fallback** (fix Codex and re-check, or let Claude execute th
 same plan/review contract, with an independent subagent review replacing `codex_review`). The choice
 is recorded in `.codex-flow/STATE.md` as `executor:` and is never made silently or mid-task.
 
+Every `codex_execute` / `codex_continue` / `codex_review` payload carries `accepted: boolean`, a
+fail-closed delivery verdict: `status === "success"` AND the acceptance evidence holds — the
+`verifyCommand` passed (when given), or for `codex_review` the findings block parsed. It never
+changes `status`/`isError`; read it before trusting `agentMessage`. `codex_review` is never
+auto-resumed: a timed-out or partial review is reported after one attempt.
+
 `codex_review` asks Codex to end its message with one fenced json block and returns it parsed
 fail-closed as `reviewFindings: { parsed, findings[], improvements[], dropped, parseError? }`
 (severity is one of CRITICAL/HIGH/MEDIUM/LOW; malformed entries are counted in `dropped`, never

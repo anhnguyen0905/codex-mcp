@@ -91,9 +91,13 @@ For each task in the wave (width > 1):
    task complexity, and save the `sessionId`. Skip every control-file write prescribed by Phase 4:
    no TASKS.md, STATE.md, report, ledger, or Decision-log writes.
 4. At dispatch time, before launching the batch, the coordinator marks every wave task
-   `in-progress`, appends its pending-to-in-progress transition, and writes
+   `in-progress`, appends its pending-to-in-progress transition (both via
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" task T<n> in-progress`), and writes
    `- Session: launching (base: <short sha>, worktree: <path>, branch: <name>)` using that
-   worktree's branch-point base sha, path, and branch.
+   worktree's branch-point base sha, path, and branch. Parallel-mode STATE.md convention:
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set wave <n>` names the wave and `currentTask` stays `-`
+   (several tasks run at once); the wave's stage sequence is `executing` (whole wave) → `handoff`
+   (Step 3.8) → `idle`; per-task `reviewing` is not used in parallel mode.
 5. After the serial worktree setup, control-file copies, and coordinator dispatch records finish,
    launch the subagents concurrently in a single batch.
 
@@ -126,7 +130,7 @@ Because each `cwd` differs, the per-workspace concurrency guard allows all of th
    `phase: backlog` in STATE.md. Only then update the task's `Files:` in TASKS.md, re-run
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`
    plus the `plan-backlog` backlog sanity checks, and get user re-approval. Only after re-approval,
-   restore `backlogApproved: yes (<ISO 8601 timestamp>)` and return `phase` to `review`. Then RE-RUN
+   restore `backlogApproved: yes (<ISO 8601 timestamp>)` and return `phase` to `execution`. Then RE-RUN
    the task's conformance → quality → security review over the EXPANDED `Files:` scope, using a
    fresh `codex_review` or a Claude pass, before the branch may merge. The security review is
    mandatory when the expansion touches auth, input, queries, files, or secrets.
@@ -139,12 +143,14 @@ Because each `cwd` differs, the per-workspace concurrency guard allows all of th
 7. After merging the whole wave, run a **wave integration review**: full test suite on the merged
    result + a quick end-to-end probe. Branches never saw each other, so a green-in-isolation task
    can still break in combination — this pass is mandatory, not optional.
-8. After each wave, the coordinator serially applies the remaining structured handoffs:
+8. After each wave, first set `taskStage handoff` with
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set taskStage handoff`, then the coordinator serially applies the remaining structured handoffs:
    Decision-log appends, report entries, and IMP-id allocation in IMPROVEMENTS.md. Serial IMP-id
    allocation prevents duplicate ids. For each passed task, append one schema block (see
    `plan-architecture`) and write its report entries. Append one wave-integration event block using
    that skill's event schema. Only after every required handoff and event write succeeds, make each
-   task's `Status: done` transition as the last durable task write. Follow `context-discipline` to
+   task's `Status: done` transition as the last durable task write via
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" task T<n> done`, then set `taskStage idle`. Follow `context-discipline` to
    declare the safe wave-boundary
    compaction point, then compute the next wave (dependencies of later tasks are now satisfied).
    The next wave's worktrees branch from the integration branch HEAD as it stands now — post-merge,
@@ -160,8 +166,10 @@ sequential Phase 5 step 8), then summarize. Offer to squash the per-task/per-wav
 - Never parallelize tasks that share a file — the wave tool already prevents this; do not override.
 - If a subagent's task fails after 3 review rounds, quarantine it: keep the rest of the wave,
   report the failure, and ask the user before retrying (quota is not free).
-- If a merge conflict is non-trivial, stop and surface it — do not let a subagent force-resolve
-  another task's code.
+- If a merge conflict is non-trivial, first record it durably with
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set taskStage merge-conflict`, then stop and surface it — do not let a
+  subagent force-resolve another task's code. A resume that finds `taskStage: merge-conflict`
+  surfaces the conflict to the user and STOPs.
 - Never spawn more than **10 subagents at once** — the wave tool already caps each wave at 10
   (`--max <n>` to lower it) and flows the rest into the next wave, so a very wide backlog is split
   into consecutive ≤10 waves. Lower the cap when quota or review load is tight.

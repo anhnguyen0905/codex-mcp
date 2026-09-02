@@ -10,7 +10,7 @@
       "name": "codex-flow",
       "displayName": "Codex Flow",
       "source": "./",
-      "version": "0.23.1",
+      "version": "0.24.0",
       "description": "Plan with Claude, execute with OpenAI Codex, review with Claude + Codex — the /codex-flow six-phase workflow plus the codex MCP server (execute, continue, review, batch, health, metrics).",
       "author": {
         "name": "anhnguyen0905",

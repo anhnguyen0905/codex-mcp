@@ -40,7 +40,7 @@ Execute them only after user approval at the `review-dual` improvement decision 
 Numbered, concrete, self-contained — Codex sees only what you send, not your reasoning:
 
 ```
-Review findings to fix (address ALL, re-run the full test suite, do not change anything else):
+Review findings to fix (address ALL, re-run the targeted tests for the touched files, do not change anything else):
 1. [HIGH] src/api/users.ts:42 — `getUser` returns 200 with null body when the ID doesn't exist;
    acceptance criterion 2 requires 404. Fix the handler and add a test for the missing-ID case.
 2. [MEDIUM] src/api/users.ts:15 — validation duplicates `validateId` from src/lib/validate.ts; use it.
@@ -50,7 +50,7 @@ Rules: exact file:line · observed vs expected behavior · which criterion/stand
 
 ## Round discipline
 
-- Re-review after every round: verify each finding is actually fixed (re-run tests yourself) and nothing new broke — diff the diff.
+- Re-review after every round: pass the same `verifyCommand` on the `codex_continue` so acceptance re-runs mechanically, read `accepted`/`verification` from the fix-round result, verify each finding is actually fixed, and check nothing new broke — diff the diff.
 - Max 3 rounds per task. Persisting findings after 3 rounds → stop sending to Codex; tell the user, then either fix by hand (flagging it) or re-plan the task.
 - Never fix Codex's code yourself during rounds 1–3 — parallel edits desync the Codex session's view of the workspace.
-- Clean review → mark the task done, state what was verified (suite ran, criteria met) — not just "looks good".
+- Clean review → mark the task done, state what was verified (verification passed, criteria met) — not just "looks good".

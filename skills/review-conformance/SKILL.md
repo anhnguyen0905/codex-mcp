@@ -22,7 +22,7 @@ Wrong-but-clean code is worse than ugly-but-right code. Check conformance FIRST.
   `passed: true` proves the acceptance command exited 0 in the workspace; `passed: false` or
   `skipped` is an automatic unmet criterion — quote its `outputTail` in the finding.
 - Work from the tool result's `diff` field (status + patch); read full files when the patch lacks context. Never review from Codex's `agentMessage` alone — it describes intent, not reality.
-- Run the acceptance checks yourself (tests, build, manual probe). `commands` in the result shows what Codex ran and exit codes — verify it actually ran the full suite, not a subset.
+- Do not re-run the suite per task: read `accepted` and `verification` (the server-run `verifyCommand`) as the acceptance evidence, and run a manual probe only when the acceptance is not a command. `commands` in the result shows what Codex ran and exit codes — confirm the targeted tests plus build/typecheck ran green; Codex is not expected to run the full suite (it runs once per merged parallel wave and once in the whole-feature review).
 
 ## Non-code deliverable tasks
 

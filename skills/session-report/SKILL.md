@@ -69,11 +69,17 @@ After three failed review rounds and a Claude hand-fix, change the task PIC to `
 
 Set the `cost.md` PIC to `both (codex: measured tokens/duration from metrics.jsonl, claude: qualitative — phase durations, review rounds; tokens not measurable)`.
 Read `<session-start ISO>` from the `- Session start: <ISO 8601>` line under `## Session report` in PLAN.md; if absent, fall back to the report-dir timestamp interpreted in local time.
-Run the helper from the project root through the same absolute plugin-root convention used for other runtime scripts:
+Before running the helper, collect every Session id from TASKS.md (`- Session:` lines of all tasks,
+worktree runs included — parallel tasks ran under other cwds, so a cwd filter would miss them) and
+pass each as a `--session <id>` flag. Run the helper from the project root through the same absolute
+plugin-root convention used for other runtime scripts:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/session-cost.mjs" --since "<session-start ISO>" --cwd "$PWD"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/session-cost.mjs" --since "<session-start ISO>" --session <id> --session <id> …
 ```
+
+Fall back to `--cwd "$PWD"` instead of `--session` flags only when no session ids exist (for example,
+every task ran under the Claude-executor fallback).
 
 If `${CLAUDE_PLUGIN_ROOT}` is unset in a standalone install, locate `session-cost.mjs` in the codex-mcp package or repository install; if unavailable, still write `cost.md` with the Claude qualitative section, mark measured Codex cost `unavailable`, never fabricate numbers, and never embed raw stderr.
 When the helper is available, embed its command output in `cost.md`.

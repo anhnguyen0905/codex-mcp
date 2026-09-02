@@ -237,6 +237,8 @@ export const runOnce = async (
       ...parsed,
       schemaVersion: RESULT_SCHEMA_VERSION,
       status,
+      // Baseline verdict; the tool handler narrows it with verification / review-parse evidence.
+      accepted: status === 'success',
       runId,
       diff,
       attribution,

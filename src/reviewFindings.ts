@@ -19,8 +19,8 @@ export const findingSchema = z.object({
   file: z.string().min(1),
   line: z.number().int().nullable().default(null),
   summary: z.string().min(1),
-  expected: z.string().optional(),
-  observed: z.string().optional(),
+  expected: z.string().min(1),
+  observed: z.string().min(1),
 })
 
 export const improvementSchema = z.object({
@@ -57,7 +57,8 @@ export const REVIEW_FINDINGS_INSTRUCTIONS = [
   '{"findings":[{"severity":"CRITICAL|HIGH|MEDIUM|LOW","file":"path/relative/to/cwd","line":123,"summary":"one sentence","expected":"...","observed":"..."}],',
   ' "improvements":[{"id":"IMP-1","summary":"non-blocking suggestion","file":"path:line"}]}',
   '```',
-  'Use an empty "findings" array when there is nothing to report. Never invent a severity outside the four listed.',
+  'Both "findings" and "improvements" arrays are required; use an empty array when there are no entries.',
+  'Every finding must include non-empty "expected" and "observed" strings. Never invent a severity outside the four listed.',
 ].join('\n')
 
 const JSON_FENCE = /```json\s*\n([\s\S]*?)\n\s*```/g
@@ -104,6 +105,8 @@ export const parseReviewFindings = (agentMessage: string | null): ReviewFindings
     return notParsed('json block is not an object')
   }
   const record = raw as Record<string, unknown>
+  if (!Array.isArray(record.findings)) return notParsed('missing findings array')
+  if (!Array.isArray(record.improvements)) return notParsed('missing improvements array')
   const findings = collect(record.findings, findingSchema)
   const improvements = collect(record.improvements, improvementSchema)
   return {

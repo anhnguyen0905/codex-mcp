@@ -384,6 +384,10 @@ const verifyAfterRun = async (
 
 type RunPayloadStatus = Parameters<typeof isErrorStatus>[0]
 
+/** Delivery verdict for execute/continue: success AND (no verifyCommand OR it passed). */
+const acceptedWithVerification = (status: RunPayloadStatus, verification: VerificationResult | undefined): boolean =>
+  status === 'success' && (verification === undefined || verification.passed)
+
 export const createServer = (deps: ServerDeps = {}): McpServer => {
   const runFn: RunFn = deps.runFn ?? runCodex
   const verifyFn: VerifyFn = deps.verifyFn ?? runVerification
@@ -453,7 +457,11 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 { command: input.verifyCommand, timeoutMs: input.verifyTimeoutMs, cwd: input.cwd, signal: extra.signal },
                 payload.status,
               )
-              return toToolResult(verification === undefined ? payload : { ...payload, verification }, isError)
+              const accepted = acceptedWithVerification(payload.status, verification)
+              return toToolResult(
+                verification === undefined ? { ...payload, accepted } : { ...payload, verification, accepted },
+                isError,
+              )
             })
           }),
         )
@@ -516,7 +524,11 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 { command: input.verifyCommand, timeoutMs: input.verifyTimeoutMs, cwd: input.cwd, signal: extra.signal },
                 payload.status,
               )
-              return toToolResult(verification === undefined ? payload : { ...payload, verification }, isError)
+              const accepted = acceptedWithVerification(payload.status, verification)
+              return toToolResult(
+                verification === undefined ? { ...payload, accepted } : { ...payload, verification, accepted },
+                isError,
+              )
             })
           }),
         )
@@ -579,14 +591,17 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
               invocation,
               { cwd: input.cwd, timeoutMs: input.timeoutMs, signal: extra.signal },
               {
-                enabled: process.env.CODEX_MCP_AUTO_RESUME !== '0',
+                // Reviews are never auto-resumed: a timed-out review is reported, not retried on quota (R6.1).
+                enabled: false,
                 sandbox: 'read-only',
                 model: input.model,
                 reasoningEffort: input.reasoningEffort,
               },
-            ).then(({ payload, isError }) =>
-              toToolResult({ ...payload, reviewFindings: parseReviewFindings(payload.agentMessage) }, isError),
-            )
+            ).then(({ payload, isError }) => {
+              const reviewFindings = parseReviewFindings(payload.agentMessage)
+              const accepted = payload.status === 'success' && reviewFindings.parsed
+              return toToolResult({ ...payload, reviewFindings, accepted }, isError)
+            })
           }),
         )
       } catch (error) {
@@ -698,6 +713,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
               const {
                 schemaVersion,
                 status,
+                accepted: _accepted,
                 diff,
                 attribution,
                 runId: taskRunId,

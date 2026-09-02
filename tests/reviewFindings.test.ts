@@ -9,7 +9,7 @@ describe('parseReviewFindings', () => {
     const message = wrap({
       findings: [
         { severity: 'HIGH', file: 'src/a.ts', line: 42, summary: 'returns 200 on missing id', expected: '404', observed: '200 with null body' },
-        { severity: 'low', file: 'src/b.ts', line: null, summary: 'naming' },
+        { severity: 'low', file: 'src/b.ts', line: null, summary: 'naming', expected: 'clear name', observed: 'ambiguous name' },
       ],
       improvements: [{ id: 'IMP-1', summary: 'extract helper', file: 'src/a.ts:10' }],
     })
@@ -40,12 +40,27 @@ describe('parseReviewFindings', () => {
     expect(result.parseError).toMatch(/invalid json/i)
   })
 
+  test('reports parsed=false when the findings array is missing', () => {
+    const result = parseReviewFindings(wrap({ note: 'done' }))
+
+    expect(result.parsed).toBe(false)
+    expect(result.parseError).toBe('missing findings array')
+  })
+
+  test('reports parsed=false when the improvements array is missing', () => {
+    const result = parseReviewFindings(wrap({ findings: [] }))
+
+    expect(result.parsed).toBe(false)
+    expect(result.parseError).toBe('missing improvements array')
+  })
+
   test('drops malformed entries fail-closed and counts them instead of inventing severities', () => {
     const message = wrap({
       findings: [
-        { severity: 'HIGH', file: 'src/a.ts', line: 1, summary: 'ok' },
-        { severity: 'URGENT', file: 'src/a.ts', line: 1, summary: 'bad severity' },
-        { file: 'src/a.ts', summary: 'no severity' },
+        { severity: 'HIGH', file: 'src/a.ts', line: 1, summary: 'ok', expected: 'expected', observed: 'observed' },
+        { severity: 'URGENT', file: 'src/a.ts', line: 1, summary: 'bad severity', expected: 'expected', observed: 'observed' },
+        { file: 'src/a.ts', summary: 'no severity', expected: 'expected', observed: 'observed' },
+        { severity: 'LOW', file: 'src/a.ts', line: 2, summary: 'no observed', expected: 'expected' },
         'not an object',
       ],
       improvements: [{ summary: 'missing id' }, { id: 'IMP-2', summary: 'fine' }],
@@ -56,13 +71,13 @@ describe('parseReviewFindings', () => {
     expect(result.parsed).toBe(true)
     expect(result.findings).toHaveLength(1)
     expect(result.improvements).toEqual([{ id: 'IMP-2', summary: 'fine' }])
-    expect(result.dropped).toBe(4)
+    expect(result.dropped).toBe(5)
   })
 
   test('uses the LAST json block when several are present', () => {
     const message =
-      wrap({ findings: [{ severity: 'LOW', file: 'x', line: 1, summary: 'first' }] }) +
-      wrap({ findings: [{ severity: 'HIGH', file: 'y', line: 2, summary: 'last' }] }, '')
+      wrap({ findings: [{ severity: 'LOW', file: 'x', line: 1, summary: 'first', expected: 'first expected', observed: 'first observed' }], improvements: [] }) +
+      wrap({ findings: [{ severity: 'HIGH', file: 'y', line: 2, summary: 'last', expected: 'last expected', observed: 'last observed' }], improvements: [] }, '')
 
     const result = parseReviewFindings(message)
 
@@ -81,6 +96,8 @@ describe('parseReviewFindings', () => {
     expect(REVIEW_FINDINGS_INSTRUCTIONS).toContain('```json')
     expect(REVIEW_FINDINGS_INSTRUCTIONS).toContain('"findings"')
     expect(REVIEW_FINDINGS_INSTRUCTIONS).toContain('"improvements"')
+    expect(REVIEW_FINDINGS_INSTRUCTIONS).toMatch(/Both "findings" and "improvements" arrays are required/)
+    expect(REVIEW_FINDINGS_INSTRUCTIONS).toMatch(/must include non-empty "expected" and "observed" strings/)
     expect(REVIEW_FINDINGS_INSTRUCTIONS).toMatch(/CRITICAL\|HIGH\|MEDIUM\|LOW/)
   })
 })

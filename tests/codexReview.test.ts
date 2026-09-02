@@ -214,3 +214,46 @@ describe('codex_review structured findings', () => {
     expect(payload).not.toHaveProperty('reviewFindings')
   })
 })
+
+describe('codex_review accepted verdict and recovery policy', () => {
+  const outcomeWith = (text: string): RunOutcome => ({
+    stdout: [
+      JSON.stringify({ type: 'thread.started', thread_id: 'rev-2' }),
+      JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } }),
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } }),
+    ].join('\n'),
+    stderr: '',
+    exitCode: 0,
+    timedOut: false,
+  })
+  const structured = '```json\n' + JSON.stringify({ findings: [], improvements: [] }) + '\n```'
+  const payloadOf = (result: Awaited<ReturnType<Client['callTool']>>) =>
+    JSON.parse((result.content as Array<{ text: string }>)[0].text)
+
+  test('accepted is true only when the review parsed', async () => {
+    const parsed = payloadOf(await (await connect(vi.fn(async () => outcomeWith(structured)))).callTool({ name: 'codex_review', arguments: { cwd: '/repo' } }))
+    const prose = payloadOf(await (await connect(vi.fn(async () => outcomeWith('looks fine')))).callTool({ name: 'codex_review', arguments: { cwd: '/repo' } }))
+
+    expect(parsed.accepted).toBe(true)
+    expect(prose.status).toBe('success')
+    expect(prose.accepted).toBe(false)
+  })
+
+  test('a timed-out review is not auto-resumed (single attempt)', async () => {
+    const runFn = vi.fn(async (): Promise<RunOutcome> => ({
+      stdout: JSON.stringify({ type: 'thread.started', thread_id: 'rev-timeout' }),
+      stderr: '',
+      exitCode: null,
+      timedOut: true,
+    }))
+    const client = await connect(runFn)
+
+    const result = await client.callTool({ name: 'codex_review', arguments: { cwd: '/repo' } })
+    const payload = payloadOf(result)
+
+    expect(runFn).toHaveBeenCalledTimes(1)
+    expect(payload.attempts).toBe(1)
+    expect(payload.status).toBe('failed')
+    expect(payload.accepted).toBe(false)
+  })
+})

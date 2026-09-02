@@ -20,6 +20,12 @@ import { reviewFindingsSchema, type ReviewFindings } from './reviewFindings.js'
 export type RunPayload = ParsedEvents & {
   schemaVersion: number
   status: RunStatus
+  /**
+   * Fail-closed delivery verdict: true only when the run succeeded AND its acceptance evidence
+   * holds (verifyCommand passed when given; for codex_review, the findings block parsed).
+   * Informational — never changes `status` or `isError`.
+   */
+  accepted: boolean
   runId: string
   diff: Awaited<ReturnType<DiffFn>> | null
   attribution: RunAttribution | null
@@ -157,6 +163,7 @@ export const runOutputShape = {
   ...parsedEventsShape,
   schemaVersion: z.number(),
   status: runStatusSchema,
+  accepted: z.boolean(),
   runId: z.string(),
   diff: diffSchema,
   attribution: attributionSchema,

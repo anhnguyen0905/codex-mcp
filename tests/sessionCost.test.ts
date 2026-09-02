@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -403,5 +403,61 @@ describe('renderMarkdown', () => {
 
     expect(markdown).toContain('| gpt 5 | 1 | 0 | 100 |')
     expect(markdown).not.toContain('gpt\n5')
+  })
+})
+
+describe('--session filter (R5.2)', () => {
+  test('parseArgs collects repeatable --session values in order and de-duplicates', () => {
+    const parsed = parseArgs(['--since', '2026-07-23', '--session', 'a', '--session', 'b', '--session', 'a'])
+
+    expect(parsed.sessions).toEqual(['a', 'b'])
+  })
+
+  test('parseArgs rejects an empty or flag-like --session value', () => {
+    expect(() => parseArgs(['--since', '2026-07-23', '--session', ''])).toThrow('--session requires a value')
+    expect(() => parseArgs(['--since', '2026-07-23', '--session', '--json'])).toThrow('--session requires a value')
+  })
+
+  test('parseArgs without --session yields no sessions key so cwd filtering is unchanged', () => {
+    const parsed = parseArgs(['--since', '2026-07-23', '--cwd', '/w'])
+
+    expect(parsed.sessions).toBeUndefined()
+    expect(parsed.cwd).toBe('/w')
+  })
+
+  test('filterEntries matches by sessionId and ignores cwd when sessions are given', () => {
+    const entries = [
+      makeEntry({ ts: '2026-07-23T09:00:00Z', sessionId: 'keep-1', cwd: '/worktree/a' }),
+      makeEntry({ ts: '2026-07-23T09:30:00Z', sessionId: 'drop', cwd: '/workspace/project' }),
+      makeEntry({ ts: '2026-07-23T10:00:00Z', sessionId: 'keep-2', cwd: '/worktree/b' }),
+    ]
+
+    const filtered = filterEntries(entries, { since: '2026-07-23T00:00:00Z', cwd: '/workspace/project', sessions: ['keep-1', 'keep-2'] })
+
+    expect(filtered.map((entry) => entry.sessionId)).toEqual(['keep-1', 'keep-2'])
+  })
+
+  test('filterEntries with an empty sessions list behaves exactly like the cwd filter', () => {
+    const entries = [makeEntry({ ts: '2026-07-23T09:00:00Z', cwd: '/workspace/project' }), makeEntry({ ts: '2026-07-23T09:00:00Z', cwd: '/other' })]
+
+    const filtered = filterEntries(entries, { since: '2026-07-23T00:00:00Z', cwd: '/workspace/project', sessions: [] })
+
+    expect(filtered).toHaveLength(1)
+  })
+
+  test('filterEntries rejects a non-array or non-string sessions option', () => {
+    expect(() => filterEntries([], { since: '2026-07-23', sessions: 'x' as unknown as string[] })).toThrow(/sessions/)
+  })
+})
+
+describe('session-report skill cost instructions (R5.3)', () => {
+  const skillRepoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
+  const skill = readFileSync(join(skillRepoRoot, 'skills', 'session-report', 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n')
+
+  test('tells the orchestrator to pass every TASKS.md session id as --session and fall back to --cwd only without ids', () => {
+    expect(skill).toContain('--session <id>')
+    expect(skill).toContain('collect every Session id from TASKS.md')
+    expect(skill).toContain('worktree runs included')
+    expect(skill).toContain('only when no session ids exist')
   })
 })

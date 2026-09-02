@@ -30,6 +30,10 @@ behavior is defined in **markdown instruction files**, not runtime code.
   `package-lock.json` (2 spots), `server.json` (2 spots), `.claude-plugin/plugin.json`, the
   `.mcp.json` npx pin, and a `## [<version>]` heading in `CHANGELOG.md`.
 
+- **Run-state writes**: `.codex-flow/STATE.md` and task `Status` lines in `.codex-flow/TASKS.md` are
+  edited only through `node scripts/flow-state.mjs` (`set` / `check` / `task`); never hand-edit
+  them in the flow. The helper validates keys, phases, task stages, and status transitions.
+
 - **Runtime scripts**: a new `scripts/*.mjs` helper the plugin invokes at runtime follows the
   `scripts/task-waves.mjs` idiom — Node stdlib only, pure named exports, CLI behind a
   `pathToFileURL` direct-run guard — and MUST be added to `package.json` `files[]` to reach the
