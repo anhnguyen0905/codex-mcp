@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.25.0] - 2026-09-09
+
+### Added
+
+- **`scripts/scope-check.mjs`** — sequential-mode scope trip-wire: compares `git diff --name-only <base>` + untracked paths against the task `Files:` set (POSIX-strict canonicalization, darwin/win32 case fold, extras printed in original spelling; lockfiles, `node_modules`, `.codex-flow/**` excluded); wired into command Phase 5 step 1.
+- **`codex_health { deep: true }`** — one bounded read-only `codex exec` probe returning `execProbe: ok | quota | model | error | skipped` + `execProbeMessage`; `ok` requires a completed, parseable turn. The Executor-fallback trigger no longer requires an unhealthy health re-check.
+- **`flow-state.mjs check`** — relational checks (`currentTask` vs `taskStage`, non-idle stage needs a task or wave), `--tasks <path>` terminal validation for `phase: complete` (missing/duplicate Status lines reported as `tasks` violations); preflight routes `phase: complete` to archive-and-restart.
+- **`requirements-coverage.mjs --plan <path>`** — every PLAN `A<n>` must be cited by a task `Acceptance:` field (`satisfies A<n>[, A<n>]`); unknown citations and unknown flags fail closed. Command/plan-backlog templates require the citation.
+- **Metrics** — `model` recorded from event > `--model` override > `~/.codex/config.toml` (memoized by mtime+size) with `modelSource` provenance; `readMetricsDetailed` (invalidLines, rotationNotice, readErrors); byModel `sources`; `codex_metrics` forwards the diagnostics; `session-cost` mirrors the shape rules and failure predicate and prints the rotation notice on stderr.
+- **flowDocs guards** — every written `taskStage` value must be routed in preflight; no per-task full-suite instruction (literal + paraphrase-tolerant detector); recursive `skills/**` discovery.
+
+### Changed
+
+- **reviewFindings** — `line` is a required integer; `droppedReasons: string[]` names each dropped item; `codex_review` `accepted` is `false` when `dropped > 0`.
+- **task-waves** — file paths canonicalized before conflict detection; a dependency on an equal-or-greater task ID is rejected.
+- **context-slice** — the 3-block recency floor drops to 0 when a Decision block explicitly names the task or `all`.
+- **metricsLog** — aggregation uses Maps (no prototype pollution); `__proto__`/`constructor`/`prototype` model names rejected; `parsePricing` rejects negative/NaN/infinite rates; non-empty `errorKind` counts as a failed run (aligned with session-cost).
+
 ## [0.24.0] - 2026-09-03
 
 ### Added
