@@ -17,7 +17,7 @@ const severitySchema = z.preprocess(
 export const findingSchema = z.object({
   severity: severitySchema,
   file: z.string().min(1),
-  line: z.number().int().nullable().default(null),
+  line: z.number().int(),
   summary: z.string().min(1),
   expected: z.string().min(1),
   observed: z.string().min(1),
@@ -39,6 +39,12 @@ export interface ReviewFindings {
   improvements: ReviewImprovement[]
   /** Entries present in the block but rejected by the schema (never coerced into a severity). */
   dropped: number
+  /**
+   * One ordered entry per dropped item naming its first failing field, as
+   * `findings[<index>].<field>` / `improvements[<index>].<field>` (the index alone when the
+   * whole entry is invalid, e.g. a string instead of an object).
+   */
+  droppedReasons: string[]
   /** Why `parsed` is false. */
   parseError?: string
 }
@@ -48,6 +54,7 @@ export const reviewFindingsSchema = z.object({
   findings: z.array(findingSchema),
   improvements: z.array(improvementSchema),
   dropped: z.number(),
+  droppedReasons: z.array(z.string()),
   parseError: z.string().optional(),
 })
 
@@ -59,6 +66,7 @@ export const REVIEW_FINDINGS_INSTRUCTIONS = [
   '```',
   'Both "findings" and "improvements" arrays are required; use an empty array when there are no entries.',
   'Every finding must include non-empty "expected" and "observed" strings. Never invent a severity outside the four listed.',
+  'Every finding must include an integer "line" — null or a missing "line" makes the finding invalid and it is dropped.',
 ].join('\n')
 
 const JSON_FENCE = /```json\s*\n([\s\S]*?)\n\s*```/g
@@ -74,21 +82,32 @@ const notParsed = (parseError: string): ReviewFindings => ({
   findings: [],
   improvements: [],
   dropped: 0,
+  droppedReasons: [],
   parseError,
 })
 
-const collect = <T>(items: unknown, schema: z.ZodType<T>): { kept: T[]; dropped: number } => {
-  if (!Array.isArray(items)) return { kept: [], dropped: 0 }
-  return items.reduce<{ kept: T[]; dropped: number }>(
-    (acc, item) => {
+interface CollectResult<T> {
+  kept: T[]
+  reasons: string[]
+}
+
+/** `findings[2].line` for a field issue, `findings[2]` when the whole entry is invalid. */
+const dropReason = (arrayName: string, index: number, error: z.ZodError): string => {
+  const field = error.issues[0]?.path.join('.') ?? ''
+  const location = `${arrayName}[${index}]`
+  return field === '' ? location : `${location}.${field}`
+}
+
+const collect = <T>(items: readonly unknown[], schema: z.ZodType<T>, arrayName: string): CollectResult<T> =>
+  items.reduce<CollectResult<T>>(
+    (acc, item, index) => {
       const result = schema.safeParse(item)
       return result.success
-        ? { kept: [...acc.kept, result.data], dropped: acc.dropped }
-        : { kept: acc.kept, dropped: acc.dropped + 1 }
+        ? { kept: [...acc.kept, result.data], reasons: acc.reasons }
+        : { kept: acc.kept, reasons: [...acc.reasons, dropReason(arrayName, index, result.error)] }
     },
-    { kept: [], dropped: 0 },
+    { kept: [], reasons: [] },
   )
-}
 
 /** Parse the reviewer's agentMessage; never throws. */
 export const parseReviewFindings = (agentMessage: string | null): ReviewFindings => {
@@ -107,12 +126,14 @@ export const parseReviewFindings = (agentMessage: string | null): ReviewFindings
   const record = raw as Record<string, unknown>
   if (!Array.isArray(record.findings)) return notParsed('missing findings array')
   if (!Array.isArray(record.improvements)) return notParsed('missing improvements array')
-  const findings = collect(record.findings, findingSchema)
-  const improvements = collect(record.improvements, improvementSchema)
+  const findings = collect(record.findings, findingSchema, 'findings')
+  const improvements = collect(record.improvements, improvementSchema, 'improvements')
+  const droppedReasons = [...findings.reasons, ...improvements.reasons]
   return {
     parsed: true,
     findings: findings.kept,
     improvements: improvements.kept,
-    dropped: findings.dropped + improvements.dropped,
+    dropped: droppedReasons.length,
+    droppedReasons,
   }
 }

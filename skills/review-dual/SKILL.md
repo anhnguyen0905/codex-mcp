@@ -40,12 +40,16 @@ tool is unavailable call `mcp__codex__codex_review` directly after Claude's pass
 ## Read Codex's findings from `reviewFindings`, not prose
 
 The tool asks Codex to end with one fenced json block and parses it fail-closed into
-`reviewFindings: { parsed, findings[], improvements[], dropped, parseError? }`.
+`reviewFindings: { parsed, findings[], improvements[], dropped, droppedReasons[], parseError? }`.
 
 - `parsed: true` → `findings[]` (severity ∈ CRITICAL/HIGH/MEDIUM/LOW, file, line, summary,
   expected, observed) and `improvements[]` (IMP ids) ARE the Codex review. Never re-grade a
-  finding's severity from the surrounding prose. `dropped > 0` means Codex emitted malformed
-  entries — mention it, do not reconstruct them.
+  finding's severity from the surrounding prose.
+- `dropped > 0` means Codex emitted malformed entries and **blocks acceptance**. The reviewer must
+  read `droppedReasons` (one ordered reason per dropped entry, e.g. `findings[0].line`) and report
+  them before treating the review as complete; a review with `dropped > 0` is incomplete, so the
+  task stays not-accepted until the dropped entries are re-obtained in another reviewer round or the
+  user explicitly waives them. Never reconstruct a dropped entry from the prose.
 - `parsed: false` → say so to the user, work from the prose `agentMessage`, and mark every severity
   you assign yourself as unverified until the evidence check.
 

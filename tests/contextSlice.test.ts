@@ -117,6 +117,36 @@ function block(id: string, constraint = '—', contracts = '—') {
   return { id, constraint, contracts, anchor: 'abc123', raw: `${constraint}\n${contracts}` }
 }
 
+const SEVEN_TASK_COUNT = 7
+
+/** Seven tasks, each with one decision block scoped to its own task id and file. */
+function sevenTaskFixture({ scopeLastBlockToT7 }: { scopeLastBlockToT7: boolean }): {
+  plan: string
+  tasks: string
+} {
+  const ids = Array.from({ length: SEVEN_TASK_COUNT }, (_, index) => index + 1)
+  const decisions = ids.map((id) => {
+    const isLast = id === SEVEN_TASK_COUNT
+    const appliesTo = isLast && !scopeLastBlockToT7 ? 'src/task7.ts' : `T${id}, src/task${id}.ts`
+    return `### T${id} — Decision ${id}
+- Decision: Keep src/task${id}.ts stable.
+- Why: Task ${id} rationale.
+- Constraint for later tasks: Preserve src/task${id}.ts.
+- Contracts touched: —
+- Anchor: ${FRESH_ANCHOR}
+- Applies to: ${appliesTo}
+`
+  })
+  const tasks = ids.map((id) => `## T${id}: Task ${id}
+- Files: src/task${id}.ts
+- Status: ${id === SEVEN_TASK_COUNT ? 'pending' : 'done'}
+`)
+  return {
+    plan: `# Plan: Seven tasks\n\n## Decision log\n${decisions.join('\n')}`,
+    tasks: `# Tasks\n\n${tasks.join('\n')}`,
+  }
+}
+
 function deepFreeze<T>(value: T): Readonly<T> {
   if (value === null || typeof value !== 'object') return value
   for (const nested of Object.values(value)) deepFreeze(nested)
@@ -333,6 +363,57 @@ describe('filterBlocksForTask', () => {
 
     expect(legacyBlock).not.toHaveProperty('appliesTo')
     expect(filtered).toEqual([legacyBlock])
+  })
+
+  test('drops unrelated newest blocks when a block is explicitly scoped to the task', () => {
+    // Arrange
+    const task = { id: 'T9', files: ['src/unrelated.ts'], raw: '' }
+    const blocks = [
+      { ...block('T1'), appliesTo: 'T9, src/scoped.ts' },
+      block('T2'),
+      block('T3'),
+      block('T4'),
+      block('T5'),
+    ]
+
+    // Act
+    const filtered = filterBlocksForTask(blocks, task)
+
+    // Assert
+    expect(filtered.map((item: { id: string }) => item.id)).toEqual(['T1'])
+  })
+
+  test('keeps the supplied recency floor when a block names a longer task id', () => {
+    // Arrange
+    const task = { id: 'T1', files: ['src/unrelated.ts'], raw: '' }
+    const blocks = [
+      { ...block('T10'), appliesTo: 'T10' },
+      block('T2'),
+      block('T3'),
+      block('T4'),
+    ]
+
+    // Act
+    const filtered = filterBlocksForTask(blocks, task, { recencyFloor: 2 })
+
+    // Assert
+    expect(filtered.map((item: { id: string }) => item.id)).toEqual(['T3', 'T4'])
+  })
+
+  test('keeps the supplied recency floor when appliesTo matches only by file mention', () => {
+    // Arrange
+    const task = { id: 'T9', files: ['src/core/config.ts'], raw: '' }
+    const blocks = [
+      { ...block('T1'), appliesTo: 'config.ts' },
+      block('T2'),
+      block('T3'),
+    ]
+
+    // Act
+    const filtered = filterBlocksForTask(blocks, task, { recencyFloor: 1 })
+
+    // Assert
+    expect(filtered.map((item: { id: string }) => item.id)).toEqual(['T1', 'T3'])
   })
 
   test('returns an empty list when no relevance rule matches', () => {
@@ -992,7 +1073,9 @@ ${index === 0 ? '- Applies to: T9\n' : ''}`).join('\n')
     expect(result.markdown).toContain('T1 — Decision 1')
     expect(result.markdown).not.toContain('T4 — Decision 4')
     expect(result.dropped).not.toContain('Decision T1')
-    expect(result.dropped).toContain('Decision T4')
+    // C8: the explicit T9 scope lowers the recency floor to 0, so the newer
+    // unrelated blocks are relevance-filtered rather than budget-dropped.
+    expect(result.markdown).toContain('(dropped blocks: T2, T3, T4)')
   })
 
   test('names at most ten relevance-filtered decision ids and summarizes the remainder', () => {
@@ -1156,6 +1239,37 @@ C7 defines the unrelated contract.
     expect(result.markdown).not.toContain('### [fresh]')
     expect(unsafeComparisonCalls).toBe(0)
     expect(existsSync(targetPath)).toBe(false)
+  })
+
+  test('omits earlier-only decision blocks from a T7 slice while keeping the omitted pointer', () => {
+    // Arrange
+    const { plan, tasks } = sevenTaskFixture({ scopeLastBlockToT7: true })
+
+    // Act
+    const result = sliceForTask(plan, tasks, 'T7', { git: FAKE_GIT })
+
+    // Assert
+    expect(result.markdown).toContain('Preserve src/task7.ts')
+    for (const earlier of [1, 2, 3, 4, 5, 6]) {
+      expect(result.markdown).not.toContain(`Preserve src/task${earlier}.ts`)
+    }
+    expect(result.markdown).toMatch(
+      /- \(\+\d+ lower-priority items omitted — read \.codex-flow\/PLAN\.md [^\n]*Decision log[^\n]*\(dropped blocks: T1, T2, T3, T4, T5, T6\)/,
+    )
+  })
+
+  test('keeps the three newest decision blocks in a T7 slice when no block names the task', () => {
+    // Arrange
+    const { plan, tasks } = sevenTaskFixture({ scopeLastBlockToT7: false })
+
+    // Act
+    const result = sliceForTask(plan, tasks, 'T7', { git: FAKE_GIT })
+
+    // Assert
+    expect(result.markdown).toContain('Preserve src/task7.ts')
+    expect(result.markdown).toContain('Preserve src/task5.ts')
+    expect(result.markdown).toContain('Preserve src/task6.ts')
+    expect(result.markdown).not.toContain('Preserve src/task1.ts')
   })
 
   test('rejects an invalid token budget', () => {

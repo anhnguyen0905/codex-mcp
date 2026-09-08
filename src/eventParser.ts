@@ -16,6 +16,8 @@ export const isBenignCliNotice = (message: string): boolean => {
 interface RawEvent {
   type?: string
   thread_id?: string
+  /** Effective model for the run, when the CLI reports it on the event envelope. */
+  model?: string
   item?: RawItem
   usage?: RawUsage
   error?: { message?: string }
@@ -56,6 +58,13 @@ export interface ParsedEvents extends CodexResult {
   warnings: string[]
   /** Number of turn.started events seen (a run can span multiple turns). */
   turnCount: number
+  /**
+   * Effective model identifier as reported by the event stream, when any event carries a non-empty
+   * top-level `model`. Authoritative (it is what actually ran) but not always present: the
+   * codex-cli versions logged so far emit no model field at all, so callers must handle absence.
+   * Never inferred from prose or session archives.
+   */
+  model?: string
 }
 
 interface MutableResult {
@@ -70,6 +79,7 @@ interface MutableResult {
   sawCompletion: boolean
   warnings: string[]
   turnCount: number
+  model: string | null
 }
 
 const freshResult = (): MutableResult => ({
@@ -84,6 +94,7 @@ const freshResult = (): MutableResult => ({
   sawCompletion: false,
   warnings: [],
   turnCount: 0,
+  model: null,
 })
 
 /** Immutable snapshot of the accumulator, safe to hand to callers. */
@@ -99,6 +110,7 @@ const snapshot = (result: MutableResult): ParsedEvents => ({
   sawCompletion: result.sawCompletion,
   warnings: [...result.warnings],
   turnCount: result.turnCount,
+  ...(result.model === null ? {} : { model: result.model }),
 })
 
 const parseLine = (line: string): RawEvent | null => {
@@ -158,7 +170,19 @@ const applyItem = (result: MutableResult, item: RawItem): boolean => {
   }
 }
 
+/**
+ * Record the first non-empty top-level `model` seen. First-wins keeps the value deterministic if a
+ * stream repeats it; this deliberately does not mark the event as handled, so `unknownEvents`
+ * stays an honest canary for event types this parser does not understand.
+ */
+const applyModel = (result: MutableResult, event: RawEvent): void => {
+  if (result.model !== null || typeof event.model !== 'string') return
+  const trimmed = event.model.trim()
+  if (trimmed.length > 0) result.model = trimmed
+}
+
 const applyEvent = (result: MutableResult, event: RawEvent): boolean => {
+  applyModel(result, event)
   switch (event.type) {
     case 'thread.started':
       result.sessionId = event.thread_id ?? null

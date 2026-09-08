@@ -40,6 +40,8 @@ export const TASK_STAGES = Object.freeze([
 
 export const TASK_STATUSES = Object.freeze(['pending', 'in-progress', 'done', 'failed'])
 
+export const TERMINAL_TASK_STATUSES = Object.freeze(['done', 'failed'])
+
 export const TASK_TRANSITIONS = Object.freeze({
   pending: Object.freeze(['in-progress']),
   'in-progress': Object.freeze(['done', 'failed', 'pending']),
@@ -51,8 +53,12 @@ const STATE_KEY_SET = new Set(STATE_KEYS)
 const PHASE_SET = new Set(PHASES)
 const TASK_STAGE_SET = new Set(TASK_STAGES)
 const TASK_STATUS_SET = new Set(TASK_STATUSES)
+const TERMINAL_TASK_STATUS_SET = new Set(TERMINAL_TASK_STATUSES)
+const TASK_ID = /^T\d+$/
+const NO_SELECTOR = '-'
 const STATE_LINE = /^- ([A-Za-z][A-Za-z0-9]*):[ \t]*([^\r\n]*)(\r\n|\n|$)/gm
 const TASK_HEADING = /^##[ \t]+(T\d+):[^\r\n]*(?:\r\n|\n|$)/gm
+const STATUS_LINE = /^- Status:[ \t]*([^\r\n]*)(\r\n|\n|$)/gm
 const ISO_8601 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):?(\d{2}))$/
 
 function assertString(value, label) {
@@ -92,10 +98,10 @@ function stateValueError(key, value) {
   if (key === 'taskStage' && !TASK_STAGE_SET.has(value)) {
     return `must be one of ${TASK_STAGES.join('|')}`
   }
-  if (key === 'currentTask' && value !== '-' && !/^T\d+$/.test(value)) {
+  if (key === 'currentTask' && value !== NO_SELECTOR && !TASK_ID.test(value)) {
     return 'must be T<n> or -'
   }
-  if (key === 'wave' && value !== '-' && !/^[1-9]\d*$/.test(value)) {
+  if (key === 'wave' && value !== NO_SELECTOR && !/^[1-9]\d*$/.test(value)) {
     return 'must be a positive integer or -'
   }
   return null
@@ -147,17 +153,78 @@ export function setStateKey(text, key, value) {
   return `${text.slice(0, insertion.at)}${insertion.text}${text.slice(insertion.at)}`
 }
 
-/** Return all schema violations in canonical key order. */
-export function checkState(text) {
+function singleValueOf(lines, key) {
+  const matches = lines.filter((line) => line.key === key)
+  return matches.length === 1 ? matches[0].value : null
+}
+
+/**
+ * Relational violations across the selector keys. Each key must already be
+ * present exactly once and per-key valid, so a malformed line is reported once.
+ */
+function selectorViolations(lines) {
+  const currentTask = singleValueOf(lines, 'currentTask')
+  const taskStage = singleValueOf(lines, 'taskStage')
+  const wave = singleValueOf(lines, 'wave')
+  if (taskStage === null || !TASK_STAGE_SET.has(taskStage)) return []
+  if (currentTask === null || stateValueError('currentTask', currentTask)) return []
+  if (taskStage === 'idle') {
+    return TASK_ID.test(currentTask)
+      ? [{ key: 'taskStage', reason: `currentTask ${currentTask} cannot be idle` }]
+      : []
+  }
+  if (currentTask === NO_SELECTOR && wave === NO_SELECTOR) {
+    return [{ key: 'taskStage', reason: 'non-idle taskStage requires currentTask or wave' }]
+  }
+  return []
+}
+
+/**
+ * Violations for tasks left non-terminal while the run claims to be complete.
+ * A malformed section (no Status line, or more than one) is reported as its own
+ * `tasks` violation so every later task is still validated.
+ */
+function terminalStatusViolations(tasksText) {
+  return taskSectionsOf(tasksText).flatMap((section) => {
+    const matches = statusMatchesOf(tasksText, section)
+    if (matches.length === 0) {
+      return [{ key: 'tasks', reason: `${section.id} has no Status line` }]
+    }
+    if (matches.length > 1) {
+      return [{ key: 'tasks', reason: `${section.id} has ${matches.length} Status lines` }]
+    }
+    const status = matches[0].value
+    if (TERMINAL_TASK_STATUS_SET.has(status)) return []
+    return [{
+      key: 'tasks',
+      reason: `phase complete requires ${section.id} status done or failed (was ${status})`,
+    }]
+  })
+}
+
+/**
+ * Return all schema violations: per-key checks in canonical key order, then the
+ * relational selector checks, then terminal task-status checks when `tasksText`
+ * is supplied. Omitting `tasksText` preserves legacy STATE.md-only validation.
+ */
+export function checkState(text, { tasksText = null } = {}) {
   assertString(text, 'text')
+  if (tasksText !== null && typeof tasksText !== 'string') {
+    throw new TypeError('tasksText must be a string or null')
+  }
   const lines = stateLinesOf(text)
-  return STATE_KEYS.flatMap((key) => {
+  const keyViolations = STATE_KEYS.flatMap((key) => {
     const matches = lines.filter((line) => line.key === key)
     if (matches.length === 0) return [{ key, reason: 'missing' }]
     if (matches.length > 1) return [{ key, reason: `appears ${matches.length} times` }]
     const reason = stateValueError(key, matches[0].value)
     return reason ? [{ key, reason }] : []
   })
+  const isComplete = singleValueOf(lines, 'phase') === 'complete'
+  const taskViolations = isComplete && tasksText !== null
+    ? terminalStatusViolations(tasksText)
+    : []
+  return [...keyViolations, ...selectorViolations(lines), ...taskViolations]
 }
 
 function taskSectionsOf(text) {
@@ -169,20 +236,23 @@ function taskSectionsOf(text) {
   }))
 }
 
-function statusLineOf(tasksText, section) {
+/** Every `- Status:` line inside one task section, with absolute offsets. */
+function statusMatchesOf(tasksText, section) {
   const block = tasksText.slice(section.start, section.end)
-  const pattern = /^- Status:[ \t]*([^\r\n]*)(\r\n|\n|$)/gm
-  const matches = [...block.matchAll(pattern)]
-  if (matches.length === 0) throw new Error(`task ${section.id} has no Status line`)
-  if (matches.length > 1) throw new Error(`task ${section.id} has duplicate Status lines`)
-  const [match] = matches
-  return {
+  return [...block.matchAll(STATUS_LINE)].map((match) => ({
     value: match[1],
     start: section.start + match.index,
     contentEnd: section.start + match.index + match[0].length - match[2].length,
     end: section.start + match.index + match[0].length,
     ending: match[2],
-  }
+  }))
+}
+
+function statusLineOf(tasksText, section) {
+  const matches = statusMatchesOf(tasksText, section)
+  if (matches.length === 0) throw new Error(`task ${section.id} has no Status line`)
+  if (matches.length > 1) throw new Error(`task ${section.id} has duplicate Status lines`)
+  return matches[0]
 }
 
 function validateTimestamp(at) {
@@ -226,7 +296,7 @@ export function setTaskStatus(tasksText, id, status, { at = new Date().toISOStri
   assertString(tasksText, 'tasksText')
   assertString(id, 'id')
   assertString(status, 'status')
-  if (!/^T\d+$/.test(id)) throw new Error(`invalid task id ${JSON.stringify(id)}`)
+  if (!TASK_ID.test(id)) throw new Error(`invalid task id ${JSON.stringify(id)}`)
   if (!TASK_STATUS_SET.has(status)) throw new Error(`unknown task status ${status}`)
   validateTimestamp(at)
 
@@ -313,8 +383,12 @@ function parseCliArgs(argv) {
     return { command, key: parsed.positionals[0], value: parsed.positionals[1], state: parsed.options['--state'] ?? '.codex-flow/STATE.md' }
   }
   if (command === 'check') {
-    const parsed = parseOptions(args, 0, new Set(['--state']))
-    return { command, state: parsed.options['--state'] ?? '.codex-flow/STATE.md' }
+    const parsed = parseOptions(args, 0, new Set(['--state', '--tasks']))
+    return {
+      command,
+      state: parsed.options['--state'] ?? '.codex-flow/STATE.md',
+      tasks: parsed.options['--tasks'] ?? null,
+    }
   }
   if (command === 'task') {
     const parsed = parseOptions(args, 2, new Set(['--tasks', '--at']))
@@ -349,7 +423,10 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd() }
     return 0
   }
   const statePath = path.resolve(cwd, config.state)
-  const violations = checkState(await fs.readFile(statePath, 'utf8'))
+  const tasksText = config.tasks
+    ? await fs.readFile(path.resolve(cwd, config.tasks), 'utf8')
+    : null
+  const violations = checkState(await fs.readFile(statePath, 'utf8'), { tasksText })
   for (const violation of violations) {
     console.error(`flow-state: violation: ${violation.key}: ${violation.reason}`)
   }

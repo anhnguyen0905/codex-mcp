@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
@@ -6,8 +6,12 @@ import {
   aggregate,
   appendMetric,
   estimateCostUsd,
+  isFailedEntry,
+  isValidMetricEntry,
   parsePricing,
   readMetrics,
+  readMetricsDetailed,
+  ROTATION_NOTICE,
   type MetricEntry,
   type ModelCostRates,
 } from '../src/metricsLog.js'
@@ -166,6 +170,72 @@ describe('aggregate', () => {
   })
 })
 
+describe('isFailedEntry (IMP-17)', () => {
+  test('counts an exit-0 entry whose only failure signal is errorKind as failed', () => {
+    // Arrange — a turn-failed classification that never carried an errorCount.
+    const classifiedOnly = entry({ exitCode: 0, errorKind: 'turn-failed' })
+
+    // Act & Assert
+    expect(isFailedEntry(classifiedOnly)).toBe(true)
+    expect(aggregate([classifiedOnly]).failed).toBe(1)
+  })
+
+  test('an empty-string errorKind is not a failure signal', () => {
+    expect(isFailedEntry(entry({ exitCode: 0, errorKind: '' }))).toBe(false)
+    expect(aggregate([entry({ exitCode: 0, errorKind: '' })]).failed).toBe(0)
+  })
+
+  test('a clean legacy entry with no error fields stays a success', () => {
+    expect(isFailedEntry(entry({ exitCode: 0 }))).toBe(false)
+  })
+
+  test.each<[string, Partial<MetricEntry>]>([
+    ['non-zero exitCode', { exitCode: 2 }],
+    ['null exitCode', { exitCode: null }],
+    ['timedOut', { exitCode: 0, timedOut: true }],
+    ['aborted', { exitCode: 0, aborted: true }],
+    ['errorCount > 0', { exitCode: 0, errorCount: 1 }],
+  ])('still counts %s as failed', (_label, overrides) => {
+    expect(isFailedEntry(entry(overrides))).toBe(true)
+  })
+})
+
+describe('aggregate byModel provenance counts (IMP-8)', () => {
+  test('counts each modelSource per model bucket', () => {
+    // Arrange
+    const entries = [
+      entry({ model: 'gpt-5.1-codex', modelSource: 'config' }),
+      entry({ model: 'gpt-5.1-codex', modelSource: 'config' }),
+      entry({ model: 'gpt-5.1-codex', modelSource: 'override' }),
+      entry({ model: 'o4-mini', modelSource: 'event' }),
+    ]
+
+    // Act
+    const agg = aggregate(entries)
+
+    // Assert
+    expect(agg.byModel['gpt-5.1-codex'].sources).toEqual({ event: 0, override: 1, config: 2 })
+    expect(agg.byModel['o4-mini'].sources).toEqual({ event: 1, override: 0, config: 0 })
+  })
+
+  test('omits sources entirely for a bucket whose entries recorded no provenance', () => {
+    const agg = aggregate([entry({ model: 'legacy-model' })])
+
+    expect(agg.byModel['legacy-model'].sources).toBeUndefined()
+    expect(Object.hasOwn(agg.byModel['legacy-model'], 'sources')).toBe(false)
+  })
+
+  test('counts only the entries that carry a provenance in a mixed bucket', () => {
+    const agg = aggregate([
+      entry({ model: 'm', modelSource: 'config' }),
+      entry({ model: 'm' }), // legacy line, no modelSource
+    ])
+
+    expect(agg.byModel.m.runs).toBe(2)
+    expect(agg.byModel.m.sources).toEqual({ event: 0, override: 0, config: 1 })
+  })
+})
+
 describe('aggregate per-model breakdown', () => {
   test('groups runs, failures, duration, and tokens by model; modelless entries stay out of byModel', () => {
     const agg = aggregate([
@@ -194,6 +264,46 @@ describe('aggregate per-model breakdown', () => {
     const agg = aggregate([entry({ model: 'm', usage: null }), entry({ model: 'm' })])
     expect(agg.byModel.m.runs).toBe(2)
     expect(agg.byModel.m.tokens.input).toBe(100)
+  })
+
+  test.each(['__proto__', 'constructor', 'prototype'])(
+    'rejects %s as a model name so it can never become a bucket key',
+    (unsafe) => {
+      expect(isValidMetricEntry({ ...entry(), model: unsafe })).toBe(false)
+    },
+  )
+
+  test('a prototype-polluting model name is counted invalid and leaves Object.prototype alone', () => {
+    // Arrange
+    const logPath = mkLog()
+    writeFileSync(
+      logPath,
+      [
+        JSON.stringify({ ...entry(), model: '__proto__' }),
+        JSON.stringify(entry({ sessionId: 'good', model: 'gpt-5.1-codex' })),
+      ].join('\n') + '\n',
+    )
+
+    // Act
+    const result = readMetricsDetailed({ logPath })
+    const agg = aggregate(result.entries)
+
+    // Assert
+    expect(result.entries.map((e) => e.sessionId)).toEqual(['good'])
+    expect(result.invalidLines).toBe(1)
+    expect(Object.keys(agg.byModel)).toEqual(['gpt-5.1-codex'])
+    expect(({} as Record<string, unknown>).runs).toBeUndefined()
+    expect(Object.prototype).not.toHaveProperty('runs')
+  })
+
+  test('aggregating a __proto__ tool name does not pollute Object.prototype', () => {
+    // Arrange — `tool` only has to be a non-empty string, so this key can reach the bucket store.
+    const agg = aggregate([entry({ tool: '__proto__' })])
+
+    // Assert
+    expect(agg.byTool['__proto__']).toMatchObject({ runs: 1 })
+    expect(({} as Record<string, unknown>).runs).toBeUndefined()
+    expect(Object.prototype).not.toHaveProperty('runs')
   })
 })
 
@@ -280,5 +390,227 @@ describe('parsePricing', () => {
       JSON.stringify({ inputPer1M: 1, cachedInputPer1M: 0.5, outputPer1M: 2, reasoningOutputPer1M: 3 }),
     )
     expect(p).toEqual({ inputPer1M: 1, cachedInputPer1M: 0.5, outputPer1M: 2, reasoningOutputPer1M: 3 })
+  })
+})
+
+describe('isValidMetricEntry', () => {
+  test('accepts a legacy line carrying only the original required fields', () => {
+    // Arrange — no errorCount/errorKind/runId/model, as written before T5 telemetry.
+    const legacy = {
+      ts: '2026-07-16T00:00:00Z',
+      tool: 'codex_execute',
+      cwd: '/w/one',
+      sessionId: 'sess-1',
+      exitCode: 0,
+      durationMs: 1000,
+      usage: null,
+    }
+
+    // Act / Assert
+    expect(isValidMetricEntry(legacy)).toBe(true)
+  })
+
+  test('accepts an entry carrying a model with each valid modelSource', () => {
+    for (const modelSource of ['event', 'override', 'config']) {
+      expect(isValidMetricEntry({ ...entry(), model: 'gpt-5.1-codex', modelSource })).toBe(true)
+    }
+  })
+
+  test.each([
+    ['non-record JSON value', 42],
+    ['array instead of object', [entry()]],
+    ['missing ts', { ...entry(), ts: undefined }],
+    ['unparseable ts', { ...entry(), ts: 'not-a-date' }],
+    ['empty tool', { ...entry(), tool: '' }],
+    ['non-string cwd', { ...entry(), cwd: 7 }],
+    ['non-integer exitCode', { ...entry(), exitCode: 1.5 }],
+    ['negative durationMs', { ...entry(), durationMs: -1 }],
+    ['non-finite durationMs', { ...entry(), durationMs: Number.POSITIVE_INFINITY }],
+    ['negative token count', { ...entry(), usage: { inputTokens: -1, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } }],
+    ['non-numeric token count', { ...entry(), usage: { inputTokens: '10', cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } }],
+    ['usage missing a token field', { ...entry(), usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 0 } }],
+    ['empty model', { ...entry(), model: '' }],
+    ['non-string model', { ...entry(), model: 3 }],
+    ['unknown modelSource', { ...entry(), model: 'gpt-5', modelSource: 'guess' }],
+    ['negative errorCount', { ...entry(), errorCount: -2 }],
+    ['non-string errorKind', { ...entry(), errorKind: 4 }],
+    ['non-boolean timedOut', { ...entry(), timedOut: 'yes' }],
+    ['non-boolean aborted', { ...entry(), aborted: 1 }],
+  ])('rejects %s', (_label, value) => {
+    expect(isValidMetricEntry(value)).toBe(false)
+  })
+})
+
+describe('readMetricsDetailed', () => {
+  test('counts invalid JSON and invalid-shape lines while keeping the valid ones', () => {
+    // Arrange
+    const logPath = mkLog()
+    writeFileSync(
+      logPath,
+      [
+        JSON.stringify(entry({ sessionId: 'good1' })),
+        '{not json',
+        '42',
+        JSON.stringify({ ...entry(), durationMs: -5 }),
+        JSON.stringify({ ...entry(), model: '' }),
+        JSON.stringify(entry({ sessionId: 'good2' })),
+        '',
+      ].join('\n'),
+    )
+
+    // Act
+    const result = readMetricsDetailed({ logPath })
+
+    // Assert
+    expect(result.entries.map((e) => e.sessionId)).toEqual(['good1', 'good2'])
+    expect(result.invalidLines).toBe(4)
+  })
+
+  test('sums invalid lines across the rotated and live files', () => {
+    const logPath = mkLog()
+    writeFileSync(`${logPath}.1`, ['nope', JSON.stringify(entry({ sessionId: 'old' }))].join('\n') + '\n')
+    writeFileSync(logPath, ['{"tool":"codex_execute"}', JSON.stringify(entry({ sessionId: 'new' }))].join('\n') + '\n')
+
+    const result = readMetricsDetailed({ logPath })
+
+    expect(result.entries.map((e) => e.sessionId)).toEqual(['old', 'new'])
+    expect(result.invalidLines).toBe(2)
+  })
+
+  test('reports the rotation notice when the .1 back-file exists', () => {
+    const logPath = mkLog()
+    writeFileSync(`${logPath}.1`, JSON.stringify(entry({ sessionId: 'rotated' })) + '\n')
+    writeFileSync(logPath, JSON.stringify(entry({ sessionId: 'live' })) + '\n')
+
+    const result = readMetricsDetailed({ logPath })
+
+    expect(result.rotationNotice).toBe('metrics: history older than one rotation is not retained')
+    expect(result.rotationNotice).toBe(ROTATION_NOTICE)
+  })
+
+  test('omits the rotation notice when no .1 back-file exists', () => {
+    const logPath = mkLog()
+    writeFileSync(logPath, JSON.stringify(entry()) + '\n')
+
+    const result = readMetricsDetailed({ logPath })
+
+    expect(result.rotationNotice).toBeUndefined()
+    expect(Object.hasOwn(result, 'rotationNotice')).toBe(false)
+  })
+
+  test('reports zero invalid lines and no notice for a missing log', () => {
+    const logPath = mkLog()
+
+    expect(readMetricsDetailed({ logPath })).toEqual({ entries: [], invalidLines: 0 })
+  })
+})
+
+describe('readMetricsDetailed read failures (IMP-9)', () => {
+  /** A path that exists but can never be read as a file: a directory (EISDIR). */
+  const mkUnreadablePath = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-metrics-unreadable-'))
+    tempDirs.push(dir)
+    return dir
+  }
+
+  test('reports an unreadable live log instead of passing it off as empty', () => {
+    // Arrange
+    const logPath = mkUnreadablePath()
+
+    // Act
+    const result = readMetricsDetailed({ logPath })
+
+    // Assert
+    expect(result.entries).toEqual([])
+    expect(result.readErrors).toHaveLength(1)
+    expect(result.readErrors?.[0]).toContain(`unable to read metrics log ${logPath}: `)
+  })
+
+  test('keeps the live entries when only the rotated file is unreadable', () => {
+    // Arrange — <dir>/rotated is the live log; <dir>/rotated.1 is a directory.
+    const dir = mkUnreadablePath()
+    const logPath = join(dir, 'rotated')
+    mkdirSync(`${logPath}.1`)
+    writeFileSync(logPath, JSON.stringify(entry({ sessionId: 'live' })) + '\n')
+
+    // Act
+    const result = readMetricsDetailed({ logPath })
+
+    // Assert
+    expect(result.entries.map((e) => e.sessionId)).toEqual(['live'])
+    expect(result.readErrors).toHaveLength(1)
+    expect(result.readErrors?.[0]).toContain(`${logPath}.1`)
+  })
+
+  test('omits readErrors entirely when every read succeeds', () => {
+    const logPath = mkLog()
+    writeFileSync(logPath, JSON.stringify(entry()) + '\n')
+
+    const result = readMetricsDetailed({ logPath })
+
+    expect(result.readErrors).toBeUndefined()
+    expect(Object.hasOwn(result, 'readErrors')).toBe(false)
+  })
+
+  test('a missing log is not a read failure', () => {
+    const result = readMetricsDetailed({ logPath: mkLog() })
+
+    expect(result.readErrors).toBeUndefined()
+  })
+
+  test('readMetrics keeps its bare-array contract on an unreadable log', () => {
+    const entries = readMetrics({ logPath: mkUnreadablePath() })
+
+    expect(entries).toEqual([])
+  })
+})
+
+describe('readMetrics backward compatibility', () => {
+  test('still returns a bare entries array, rotated file first', () => {
+    const logPath = mkLog()
+    writeFileSync(`${logPath}.1`, JSON.stringify(entry({ sessionId: 'rotated-old' })) + '\n')
+    writeFileSync(logPath, ['garbage', JSON.stringify(entry({ sessionId: 'live-new' }))].join('\n') + '\n')
+
+    const entries = readMetrics({ logPath })
+
+    expect(Array.isArray(entries)).toBe(true)
+    expect(entries.map((e) => e.sessionId)).toEqual(['rotated-old', 'live-new'])
+  })
+})
+
+describe('parsePricing rate validation', () => {
+  const withRate = (key: string, value: unknown): string =>
+    JSON.stringify({ inputPer1M: 1, cachedInputPer1M: 1, outputPer1M: 1, reasoningOutputPer1M: 1, [key]: value })
+
+  test.each(['inputPer1M', 'cachedInputPer1M', 'outputPer1M', 'reasoningOutputPer1M'])(
+    'rejects a negative %s',
+    (key) => {
+      expect(parsePricing(withRate(key, -0.5))).toBeUndefined()
+    },
+  )
+
+  test('rejects an infinite rate (JSON 1e999 parses to Infinity)', () => {
+    expect(parsePricing('{"inputPer1M":1e999,"cachedInputPer1M":1,"outputPer1M":1,"reasoningOutputPer1M":1}')).toBeUndefined()
+  })
+
+  // JSON has no NaN literal, so a NaN rate can only arrive as the bare token (invalid JSON) or as
+  // the string "NaN"; both must yield undefined rather than a NaN-poisoned cost.
+  test('rejects a NaN rate in either form it can arrive as', () => {
+    expect(parsePricing('{"inputPer1M":NaN,"cachedInputPer1M":1,"outputPer1M":1,"reasoningOutputPer1M":1}')).toBeUndefined()
+    expect(parsePricing(withRate('inputPer1M', 'NaN'))).toBeUndefined()
+  })
+
+  test('rejects a non-numeric rate', () => {
+    expect(parsePricing(withRate('outputPer1M', '2'))).toBeUndefined()
+    expect(parsePricing(withRate('outputPer1M', null))).toBeUndefined()
+  })
+
+  test('accepts zero rates', () => {
+    expect(parsePricing(withRate('cachedInputPer1M', 0))).toEqual({
+      inputPer1M: 1,
+      cachedInputPer1M: 0,
+      outputPer1M: 1,
+      reasoningOutputPer1M: 1,
+    })
   })
 })

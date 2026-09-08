@@ -15,7 +15,10 @@ Each phase names plugin skills (`codex-flow:*`) to load via the Skill tool befor
 
 **Load skill first**: `codex-flow:preflight` (health gate, resume check, workspace baseline) — it carries the detailed checklist for the steps below.
 
-Call `mcp__codex__codex_health` before anything else:
+Call `mcp__codex__codex_health` with `{ deep: true }` ONCE before anything else — the deep input
+adds a one-shot read-only `codex exec` probe and returns `execProbe`
+(`ok | quota | model | error | skipped`) plus `execProbeMessage` next to `loggedIn`. Read
+`execProbe` from that single call; never re-probe per phase or per task.
 
 - **Tool call fails / server missing** → the MCP server is not set up. Tell the user to follow the
   install steps in the codex-mcp README (or run `node scripts/doctor.mjs` in the codex-mcp repo),
@@ -25,7 +28,13 @@ Call `mcp__codex__codex_health` before anything else:
   Plus/Pro/Team, or set `OPENAI_API_KEY`), then offer the **Executor fallback**: re-check after
   login, or continue with Claude as executor. Do not interview, plan, or execute anything until
   either a re-check shows `loggedIn: true` or the user has explicitly chosen the fallback.
-- **`loggedIn: true`** → report the Codex version, keep `executor: codex`, and continue.
+- **`execProbe: quota` or `execProbe: model`** → Codex is logged in but cannot execute. Quote
+  `execProbeMessage` and offer the **Executor fallback** immediately; a `quota` or `model` probe
+  result is sufficient on its own and needs NO unhealthy health re-check to justify the fallback.
+- **`execProbe: error`** → report `execProbeMessage` verbatim, then offer the same
+  Executor-fallback choice rather than dispatching a task into a broken executor.
+- **`loggedIn: true` with `execProbe: ok` (or `skipped`)** → report the Codex version, keep
+  `executor: codex`, and continue.
 
 Exception: a failed health check or missing login does NOT block the **analysis lane** of the
 Fast-path gate below — that lane needs no Codex session and no fallback decision. Tell the user
@@ -37,7 +46,16 @@ flow require either `loggedIn: true` or an explicit Executor-fallback choice.
 resume authority: skip only phases whose approvals STATE.md records, and enter the first unapproved
 phase. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check` first: when it reports ONLY missing keys on a legacy file, add them with
 `set` (`currentTask -`, `taskStage idle`, `wave -`) and continue; any other violation is surfaced
-to the user before routing. Then route from STATE.md's recorded `phase`: for `phase: execution`, enter Phase 4 at the
+to the user before routing. When `.codex-flow/TASKS.md` exists, make that same call
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check --tasks .codex-flow/TASKS.md` so the
+terminal-status validation runs too; without the flag a `phase: complete` run with unfinished tasks
+passes unnoticed.
+
+`phase: complete` is terminal: the previous run is finished, so do NOT offer resume for it. Archive
+the run's control files to `.codex-flow/archive/<timestamp>/` and begin fresh, exactly as a restart
+would. Resume is offered only for a non-complete `phase`.
+
+Then route from STATE.md's recorded `phase`: for `phase: execution`, enter Phase 4 at the
 first task not marked done — but first route by `taskStage`, regardless of `currentTask`
 (`currentTask` names the task in sequential mode and is `-` with `wave` set in parallel mode):
 `reviewing` → resume Phase 5 for that task; `launching`/`executing` → run the in-progress
@@ -121,7 +139,10 @@ unsure, ask the user one question: fast path or full flow.
 data — and delivers the findings with a short "what I verified" note. No Codex session is
 required (this lane is exempt from the Codex health gate); use a single read-only
 `mcp__codex__codex_execute` only when an independent second opinion adds value AND Codex is
-healthy. For any data-analysis work, follow the Data tooling rules in
+healthy. When that second opinion fails, is refused by a `quota`/`model` `execProbe`, or times out,
+the analysis is delivered Claude-only and the failure is named in the "what I verified" note (for
+example "Codex second opinion unavailable: quota") — never silently drop it and never present a
+single-reviewer readout as dual-verified. For any data-analysis work, follow the Data tooling rules in
 `codex-flow:exec-deliverable` (measure input sizes first, ingest-once columnar tooling,
 sample-first iteration) — never row-by-row scripts over large raw files.
 
@@ -159,10 +180,12 @@ explicitly, between fixing Codex and letting Claude execute. The planning, appro
 reporting contract stays identical; only WHO writes the code changes.
 
 **Triggers** (any one):
-- Phase 0: `mcp__codex__codex_health` tool call fails, the server is missing, or `loggedIn: false`.
+- Phase 0: `mcp__codex__codex_health` tool call fails, the server is missing, `loggedIn: false`, or
+  the deep call's `execProbe` is `quota`, `model`, or `error`.
 - Mid-run: a `codex_execute` / `codex_continue` / `codex_review` returns `failed` or `aborted` with
   no `sessionId`, or its `errors`/`stderr` indicate authentication, quota exhaustion, or an
-  unreachable service — AND an immediate `mcp__codex__codex_health` re-check is not healthy.
+  unreachable service. No health re-check is required: an `execProbe` of `quota` or `model`, or a
+  run error carrying those signatures, is sufficient on its own to open the fallback decision.
 - Mid-run: the same task exhausts bounded auto-resume twice in a row (`attempts`/`resumeReasons`).
 
 **Decision** — use AskUserQuestion exactly once per outage with two options: **Fix Codex and
@@ -199,7 +222,7 @@ Decision log using the non-task event-block schema from `codex-flow:plan-archite
   `cost.md` reports measured Codex cost for the run's Codex tasks only and says so.
 
 **Returning to Codex** — at any task boundary, when the user says Codex is available again, re-run
-`mcp__codex__codex_health`; on `loggedIn: true` restore `executor: codex (restored <ISO 8601>)` and
+`mcp__codex__codex_health` with `{ deep: true }`; on `loggedIn: true` with `execProbe: ok` restore `executor: codex (restored <ISO 8601>)` and
 run the remaining tasks through Codex normally. Tasks completed under fallback keep their
 `claude-fallback` Session line and are never re-executed.
 
@@ -226,7 +249,7 @@ For a confirmed mid-run requirement delta, append the delta per
 `yes (delta <ISO date>)`, reset `planApproved` and `backlogApproved` to
 `no (delta <ISO date>)`, and set `phase` to `plan`. Before execution resumes, re-run Phase 2 impact
 analysis and plan approval, rebuild the affected backlog, run
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`,
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md --plan .codex-flow/PLAN.md`,
 and obtain backlog re-approval. A prior approval never survives a requirement delta.
 
 Scale interview depth to task complexity: a small, unambiguous change needs only a short
@@ -332,7 +355,7 @@ Decompose the approved plan into tasks and write `.codex-flow/TASKS.md`:
 - Requirements: <R-IDs covered>
 - Steps: <concrete, file-level steps>
 - Skills: <Phase 2 domain skills relevant to THIS task, or — >
-- Acceptance: <verifiable criteria for THIS task — tests to pass, behaviors>
+- Acceptance: <verifiable criteria for THIS task — tests to pass, behaviors>; satisfies A<n>[, A<n>]
 - Session: —
 - Status: pending
 ```
@@ -348,6 +371,9 @@ Rules for slicing (see `codex-flow:plan-backlog` for the full sizing guidance):
   PLAN.md are the earliest tasks so dependents build and review against a fixed contract.
 - **Acceptance names the exact check** the reviewer will run (test file/pattern, build command, or a
   concrete probe), not just prose.
+- **Acceptance cites the plan's A-entries**: end each `Acceptance:` field with the citation form
+  `; satisfies A<n>[, A<n>]` — every PLAN `A<n>` must be cited by at least one task, and the tokens
+  after `satisfies` must be bare `A<n>` IDs (no suffixes).
 - **File-disjoint where independent**: actively reshape task boundaries so independent tasks own
   disjoint `Files:` sets (for example, move a shared helper edit into its own earlier task and make
   the others depend on it). For multi-task backlogs, make `task-waves` width > 1 the norm, not the
@@ -382,9 +408,11 @@ Rules for slicing (see `codex-flow:plan-backlog` for the full sizing guidance):
 - Also mirror the tasks with TaskCreate so the user sees live progress.
 
 Before asking for backlog approval, run
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`.
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md --plan .codex-flow/PLAN.md`.
 Every effective R<n>.<m> must be cited by at least one task and no task may cite an unknown ID; fix
-the backlog before presenting it for approval. If the helper is unavailable in a standalone
+the backlog before presenting it for approval. Every PLAN `A<n>` acceptance entry must be cited by
+at least one task's `Acceptance:` field; treat a non-zero exit (orphan `A<n>`, unknown citation) as
+fix the backlog before presenting it. If the helper is unavailable in a standalone
 install, verify those two conditions manually. If the helper is present but exits non-zero,
 surface the error to the user and STOP; never continue to backlog approval with a failing helper.
 
@@ -482,6 +510,18 @@ once, in step 8, after the last task.
 
 0. Before reviewing, when the slice helper is available, reuse the existing `.codex-flow/CONTEXT-T<n>.md` only when its generated header's anchor equals the current `git rev-parse HEAD` and the tree is clean; otherwise run `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --task T<n>` to regenerate this task's `.codex-flow/CONTEXT-T<n>.md` slice, then re-read it and this task's entry in `.codex-flow/TASKS.md`. If the helper is unavailable in a standalone install, fall back to reading `.codex-flow/PLAN.md` directly and still read this task's TASKS.md entry. If the helper is present but exits non-zero, surface the error to the user and STOP; never use the standalone fallback for a failing helper. Treat the files read on disk as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline, not session memory (which may have been compacted across a long backlog). Outside the standalone fallback, read full `.codex-flow/PLAN.md` only when a finding disputes plan intent or the slice's omitted-pointer line points at a section the review needs.
 1. **Start the Codex-side review in the background FIRST**: `mcp__codex__codex_review` is read-only and independent of your own pass, so do not run it after your review — launch a background subagent (Agent tool, general-purpose) whose only job is to call `mcp__codex__codex_review` for THIS task with the focus block from `codex-flow:review-dual` (task id/title, acceptance criteria, `Files:` list) and return the tool result's `reviewFindings` object plus `status` verbatim, nothing else. Then do steps 2–4 yourself while it runs; collect the subagent's result in step 5. If the Agent tool is unavailable, call `mcp__codex__codex_review` directly at step 5 instead (sequential fallback).
+   **Scope trip-wire (mechanical, not judgment)** — in sequential mode, before the Claude review
+   pass, run
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/scope-check.mjs" --task T<n> --base <base sha> --tasks .codex-flow/TASKS.md`
+   with the base sha recorded on this task's `- Session:` line. Exit 0 → proceed. ANY extra path it
+   prints — lockfiles and `.codex-flow/` are already excluded — is a blocking finding routed through
+   step 5, or, when the extra path proves the PLAN declared the wrong `Files:`, the step 6 plan-drift
+   transaction; do not review the out-of-scope diff as if it were in scope and do not re-argue the
+   task's `Files:` after the fact. Exit 1 with a placeholder or empty `Files:` set is the same
+   blocker. Parallel mode gets this from the worktree boundary and `codex-flow:parallel-execution`'s
+   undeclared-file stop instead. If the helper is unavailable in a standalone install, compare the
+   changed paths against the task's `Files:` by hand; if it is present but exits 2, surface the error
+   to the user and STOP.
    Inspect what Codex did: use the `diff` field returned by the tool (git status + patch), and read changed files where the patch is not enough. For diffs over 400 lines, follow `codex-flow:context-discipline` no-raw-read rules: get a subagent summary, then read only targeted critical hunks.
 2. Review in order: conformance → quality → security, per the loaded skills.
 3. Read the tool result's `accepted` verdict first (`true` only when the run succeeded AND its
@@ -501,7 +541,11 @@ once, in step 8, after the last task.
    `parsed: true`, its `findings[]` (severity, file, line, summary, expected, observed) and
    `improvements[]` are the Codex review — do not re-derive severities from the prose; when
    `parsed: false`, tell the user, fall back to the prose `agentMessage`, and treat any severity you
-   assign yourself as unverified until checked. Compare Claude's and Codex's findings
+   assign yourself as unverified until checked. `reviewFindings.dropped > 0` blocks acceptance of
+   this task: the reviewer MUST read `reviewFindings.droppedReasons` (one ordered reason per dropped
+   entry) and report them before treating the review as complete. Re-obtain the dropped entries with
+   another reviewer round, or get an explicit user waiver — never reconstruct a dropped entry from
+   the prose and never mark the task done on a review with `dropped > 0`. Compare Claude's and Codex's findings
    per the review-dual comparison protocol: bucket agreed / unique-to-one / conflicting, and verify
    every finding with evidence. Use AskUserQuestion only for an unverifiable CRITICAL/HIGH finding
    or two mutually exclusive valid fixes. Append non-blocking suggestions from BOTH reviews to
@@ -523,7 +567,7 @@ once, in step 8, after the last task.
    with user approval → write an impact analysis listing which done and pending tasks the change
    touches → update the affected
    TASKS.md `Steps` / `Files` / `Requirements` / `Acceptance` fields → re-run
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md --plan .codex-flow/PLAN.md`
    plus the `plan-backlog` backlog sanity checks → regenerate affected slices → recompute waves →
    get backlog re-approval → only then restore
    `backlogApproved: yes (<ISO 8601 timestamp>)` and return `phase` to `execution`. Improvement
@@ -567,7 +611,7 @@ once, in step 8, after the last task.
    fix/re-review loop; repeat up to 3 rounds before delivery. Run the full test suite, AND verify the
    feature end-to-end by actually exercising the changed behavior (run the app/flow, not only unit
    tests). Re-run
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`;
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md --plan .codex-flow/PLAN.md`;
    if the helper is unavailable in a standalone install, verify coverage manually, but if it is
    present and exits non-zero, surface the error to the user and STOP. Walk the effective
    REQUIREMENTS.md set ID-by-ID, reporting met/not-met with evidence (test name, file, or
@@ -587,7 +631,8 @@ once, in step 8, after the last task.
    `backlogApproved: no (improvement tasks <ISO date>)` and `phase: backlog` in STATE.md. Slice
    approved items into new tasks appended to `.codex-flow/TASKS.md`; when each task is
    created, mark its ledger line `(approved: T<n>)`, and check it off when the task passes review.
-   Run the impact analysis, coverage lint, and backlog sanity checks, then get backlog re-approval;
+   Run the impact analysis, the coverage lint with `--plan .codex-flow/PLAN.md`, and backlog sanity
+   checks, then get backlog re-approval;
    only afterward restore `backlogApproved: yes (<ISO 8601 timestamp>)` and return `phase` to
    `execution` before scheduling the new tasks.
    Execute those tasks through the normal Phase 4 → Phase 5 loop, but do not re-trigger this

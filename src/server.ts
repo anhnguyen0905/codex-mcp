@@ -12,6 +12,7 @@ import {
   type CodexInvocation,
 } from './argsBuilder.js'
 import { runCodex } from './codexRunner.js'
+import { runExecProbe } from './healthProbe.js'
 import { createLiveView, type LiveView } from './liveView.js'
 import { createProgressNotifier, type ProgressNotifier } from './progressNotifier.js'
 import { runWithRecovery } from './runRecovery.js'
@@ -36,7 +37,7 @@ import {
 import { isErrorStatus } from './runStatus.js'
 import { parseReviewFindings, REVIEW_FINDINGS_INSTRUCTIONS } from './reviewFindings.js'
 import { listSessions, MAX_LIMIT as MAX_SESSIONS_LIMIT } from './sessionStore.js'
-import { aggregate, parsePricing, readMetrics } from './metricsLog.js'
+import { aggregate, parsePricing, readMetricsDetailed } from './metricsLog.js'
 import { REASONING_EFFORTS, SANDBOX_MODES, type RunOutcome } from './types.js'
 import {
   DEFAULT_BATCH_CONCURRENCY,
@@ -599,7 +600,9 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
               },
             ).then(({ payload, isError }) => {
               const reviewFindings = parseReviewFindings(payload.agentMessage)
-              const accepted = payload.status === 'success' && reviewFindings.parsed
+              // Fail closed: a review that silently lost entries is not acceptance evidence (R1.2).
+              const accepted =
+                payload.status === 'success' && reviewFindings.parsed && reviewFindings.dropped === 0
               return toToolResult({ ...payload, reviewFindings, accepted }, isError)
             })
           }),
@@ -642,10 +645,20 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     },
     async (input) => {
       try {
-        const entries = readMetrics()
+        const { entries, invalidLines, rotationNotice, readErrors } = readMetricsDetailed()
         const pricing = parsePricing(process.env.CODEX_MCP_PRICING)
         const agg = aggregate(entries, input, pricing)
-        return toToolResult(agg, false)
+        // Diagnostics are additive and only appear when they say something (R7.2, R7.3).
+        // `readErrors` is already absent-not-empty from readMetricsDetailed (T17).
+        return toToolResult(
+          {
+            ...agg,
+            ...(invalidLines > 0 ? { invalidLines } : {}),
+            ...(rotationNotice === undefined ? {} : { rotationNotice }),
+            ...(readErrors === undefined ? {} : { readErrors }),
+          },
+          false,
+        )
       } catch (error) {
         return errorResult(error)
       }
@@ -777,17 +790,26 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     'codex_health',
     {
       title: 'Check Codex CLI health',
-      description: 'Report installed Codex CLI version and login status.',
-      inputSchema: {},
+      description:
+        'Report installed Codex CLI version and login status. With deep=true, also run one bounded read-only Codex exec probe to detect quota/model outages that login status cannot see.',
+      inputSchema: {
+        deep: z
+          .boolean()
+          .optional()
+          .describe(
+            'Also run one bounded read-only `codex exec` probe and report execProbe/execProbeMessage (default: false)',
+          ),
+      },
       outputSchema: healthOutputShape,
     },
-    async (_input, extra) => {
+    async (input, extra) => {
       try {
         const cwd = process.cwd()
         const { signal } = extra
-        // Gate health too: each call spawns 2 codex processes; without this a burst of health
-        // calls bypasses the global cap and can exhaust process/fd limits. (No cwd lock — health
-        // is read-only and doesn't touch a workspace.)
+        // Gate health too: each call spawns 2 codex processes (3 with deep); without this a burst
+        // of health calls bypasses the global cap and can exhaust process/fd limits. The deep
+        // probe runs inside the same slot. (No cwd lock — health is read-only and doesn't touch a
+        // workspace.)
         return await withConcurrencyLimit(async () => {
           const [version, login] = await Promise.all([
             runFn(['--version'], { cwd, timeoutMs: HEALTH_TIMEOUT_MS, signal }),
@@ -796,7 +818,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
           const ok = (r: RunOutcome): boolean => r.exitCode === 0 && !r.timedOut && !(r.aborted ?? false)
           const loginText = `${login.stdout}\n${login.stderr}`
           const loginProbe = deriveLoginProbe(login, loginText)
-          const payload: HealthPayload = {
+          const basePayload: HealthPayload = {
             version: version.stdout.trim(),
             // Only claim logged-in when the login probe itself succeeded — a hung/killed
             // `codex login status` must not be reported as authenticated.
@@ -805,6 +827,12 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
             loginProbe,
             loginStatus: loginText.trim(),
           }
+          // Without `deep` the payload keeps exactly the legacy four fields and no third process
+          // is spawned (R3.1); the probe fields are appended so the JSON text stays compatible.
+          const payload: HealthPayload =
+            input.deep === true
+              ? { ...basePayload, ...(await runExecProbe(runFn, { cwd, timeoutMs: HEALTH_TIMEOUT_MS, signal })) }
+              : basePayload
           return toToolResult(payload, !ok(version))
         })
       } catch (error) {

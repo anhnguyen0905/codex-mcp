@@ -1,4 +1,13 @@
-import { existsSync, readFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
@@ -18,9 +27,36 @@ const INTERVIEW_ELICITATION_PATH = path.join(
   'interview-elicitation',
   'SKILL.md',
 )
+const SKILLS_DIR = path.join(REPO_ROOT, 'skills')
 const COMMAND_PATH = path.join(REPO_ROOT, 'commands', 'codex-flow.md')
 const CLAUDE_COMMAND_PATH = path.join(REPO_ROOT, '.claude', 'commands', 'codex-flow.md')
 const COMMAND_TOKEN_ALLOWLIST = new Set(['codex-flow:codex-flow'])
+// R6.2 detector (documented, explicit): phrases that instruct a per-task full-suite run.
+const FORBIDDEN_PER_TASK_SUITE_PHRASES = [
+  'full suite per task',
+  'full test suite per task',
+  're-run the full suite',
+  're-run the full test suite',
+  'run the full suite mid-task',
+] as const
+// R6.2 detector, layer 2 (paraphrase-tolerant): a sentence that pairs any "full suite"
+// wording with a per-task scope is a violation even when it uses none of the five literal
+// phrases above. Documented pattern families:
+//   FULL_SUITE_WORDING_PATTERN — /(full|complete|entire|whole)\s+(test\s+)?suite/i
+//   PER_TASK_SCOPE_PATTERNS    — /(per|each|every)\s+task/i and /mid-task/i
+// Both families must hit the same sentence, and the shared allowlist below still applies.
+const FULL_SUITE_WORDING_PATTERN = /\b(?:full|complete|entire|whole)\s+(?:test\s+)?suite\b/i
+const PER_TASK_SCOPE_PATTERNS = [/\b(?:per|each|every)\s+task\b/i, /\bmid-task\b/i] as const
+// Allowlisted contexts for both layers: an explicit prohibition, or the two sanctioned
+// full-suite runs (the merged wave-integration review and the whole-feature review).
+const ALLOWED_FULL_SUITE_CONTEXT_PATTERNS = [
+  /\b(?:do|does|did)\s+not\b/i,
+  /\bnever\b/i,
+  /\bno longer\b/i,
+  /once per merged/i,
+  /wave integration/i,
+  /whole-feature review/i,
+] as const
 const EXACT_FRONTMATTER_SKILLS = [
   'plan-architecture',
   'preflight',
@@ -162,6 +198,90 @@ function extractParameterBullet(phaseSection: string, parameter: string): string
     : bulletStart.index + bulletStart[0].length + nextBulletOffset
 
   return phaseSection.slice(bulletStart.index, bulletEnd)
+}
+
+// IMP-14: discover `skills/**/SKILL.md` at any depth so a nested skill cannot dodge the guards.
+function collectSkillDocuments(rootDir: string): string[] {
+  if (!existsSync(rootDir)) {
+    throw new Error(`Skills directory does not exist: ${rootDir}`)
+  }
+
+  const entries = readdirSync(rootDir, { withFileTypes: true })
+  const nested = entries
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => collectSkillDocuments(path.join(rootDir, entry.name)))
+  const here = entries
+    .filter((entry) => entry.isFile() && entry.name === 'SKILL.md')
+    .map((entry) => path.join(rootDir, entry.name))
+
+  return [...here, ...nested].sort()
+}
+
+function skillDocumentPaths(): string[] {
+  return collectSkillDocuments(SKILLS_DIR)
+}
+
+function collectWrittenTaskStages(markdown: string): string[] {
+  const stages = [
+    ...markdown.matchAll(/flow-state\.mjs"?[ \t]+set[ \t]+taskStage[ \t]+([a-z-]+)/g),
+  ].map((match) => match[1])
+
+  return [...new Set(stages)].sort()
+}
+
+function extractPreflightResumeRouting(preflight: string): string {
+  const start = preflight.indexOf('## Step 2')
+  const end = preflight.indexOf('## Step 3', start)
+  if (start === -1 || end === -1) {
+    throw new Error('Preflight Step 2 resume routing section is missing')
+  }
+
+  return preflight.slice(start, end).replace(/\s+/g, ' ')
+}
+
+function collectRoutedTaskStages(routingText: string): string[] {
+  const routed = [...routingText.matchAll(/`([a-z-]+)`(?: or `([a-z-]+)`)? →/g)]
+    .flatMap((match) => [match[1], match[2]])
+    .filter((stage): stage is string => Boolean(stage))
+
+  return [...new Set(routed)].sort()
+}
+
+function findUnroutedTaskStages(markdown: string, routingText: string): string[] {
+  const routed = new Set(collectRoutedTaskStages(routingText))
+
+  return collectWrittenTaskStages(markdown).filter((stage) => !routed.has(stage))
+}
+
+function collectSentences(markdown: string): string[] {
+  return markdown
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.;:])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 0)
+}
+
+function findPerTaskFullSuiteInstructions(label: string, markdown: string): string[] {
+  const violations: string[] = []
+  for (const sentence of collectSentences(markdown)) {
+    if (ALLOWED_FULL_SUITE_CONTEXT_PATTERNS.some((pattern) => pattern.test(sentence))) continue
+
+    const lowered = sentence.toLowerCase()
+    const phrase = FORBIDDEN_PER_TASK_SUITE_PHRASES.find((candidate) => lowered.includes(candidate))
+    if (phrase) {
+      violations.push(`${label}: matched "${phrase}" in "${sentence}"`)
+      continue
+    }
+
+    if (!FULL_SUITE_WORDING_PATTERN.test(sentence)) continue
+    const scope = PER_TASK_SCOPE_PATTERNS.find((pattern) => pattern.test(sentence))
+    if (!scope) continue
+    violations.push(
+      `${label}: matched /${FULL_SUITE_WORDING_PATTERN.source}/ + /${scope.source}/ in "${sentence}"`,
+    )
+  }
+
+  return violations
 }
 
 describe('skill frontmatter contracts', () => {
@@ -396,7 +516,7 @@ describe('plan-backlog task lineage contract', () => {
     const taskTemplate = extractFencedCodeBlockContaining(skill, 'markdown', '## T1:')
 
     expect(taskTemplate).toMatch(
-      /- Acceptance: <[^\n]+>\r?\n- Session: —\r?\n- Status: pending/,
+      /- Acceptance: <[^\n]+>; satisfies A<n>\[, A<n>\]\r?\n- Session: —\r?\n- Status: pending/,
     )
     expect(skill).toContain(
       '`Session` and the transition log beneath `Status` are execution-time fields that the orchestrator',
@@ -1273,5 +1393,389 @@ describe('durable task-loop state contract (R1.2, R1.6)', () => {
     expect(phase5).toContain('Sequential mode: set `taskStage` to `reviewing`')
     expect(phase5).toContain('Parallel mode: `taskStage` stays `executing` for the whole wave')
     expect(preflight).toContain('`merge-conflict` → surface the conflict to the user and STOP')
+  })
+})
+
+describe('fail-closed review acceptance routing (R1.3)', () => {
+  const reviewDual = readText(REVIEW_DUAL_PATH)
+  const phase5Step4 = extractNumberedStep(extractPhaseSection(readText(COMMAND_PATH), 5), 4)
+    .replace(/\s+/g, ' ')
+
+  test('command Phase 5 step 4 blocks acceptance on dropped findings and requires droppedReasons', () => {
+    expect(phase5Step4).toContain('`reviewFindings.dropped > 0` blocks acceptance of this task')
+    expect(phase5Step4).toContain(
+      'MUST read `reviewFindings.droppedReasons` (one ordered reason per dropped entry) and report them before treating the review as complete',
+    )
+    expect(phase5Step4).toContain('never mark the task done on a review with `dropped > 0`')
+  })
+
+  test('review-dual documents droppedReasons in the payload and blocks acceptance', () => {
+    const normalized = reviewDual.replace(/\s+/g, ' ')
+
+    expect(normalized).toContain(
+      '`reviewFindings: { parsed, findings[], improvements[], dropped, droppedReasons[], parseError? }`',
+    )
+    expect(normalized).toContain('`dropped > 0` means Codex emitted malformed entries and **blocks acceptance**')
+    expect(normalized).toContain(
+      'must read `droppedReasons` (one ordered reason per dropped entry, e.g. `findings[0].line`) and report them before treating the review as complete',
+    )
+    expect(normalized).toContain('the task stays not-accepted until the dropped entries are re-obtained')
+  })
+})
+
+describe('sequential scope trip-wire routing (R2.3)', () => {
+  const phase5Step1 = extractNumberedStep(extractPhaseSection(readText(COMMAND_PATH), 5), 1)
+    .replace(/\s+/g, ' ')
+
+  test('Phase 5 step 1 runs the scope-check helper before the Claude review pass', () => {
+    expect(phase5Step1).toContain('**Scope trip-wire (mechanical, not judgment)**')
+    expect(phase5Step1).toContain('in sequential mode, before the Claude review pass')
+    expect(phase5Step1).toContain(
+      'node "${CLAUDE_PLUGIN_ROOT}/scripts/scope-check.mjs" --task T<n> --base <base sha> --tasks .codex-flow/TASKS.md',
+    )
+    expect(phase5Step1).toContain("with the base sha recorded on this task's `- Session:` line")
+  })
+
+  test('any extra path becomes a blocking finding or a plan-drift transaction', () => {
+    expect(phase5Step1).toContain('ANY extra path it prints')
+    expect(phase5Step1).toContain('is a blocking finding routed through step 5')
+    expect(phase5Step1).toContain('the step 6 plan-drift transaction')
+    expect(phase5Step1).toContain('do not review the out-of-scope diff as if it were in scope')
+    expect(phase5Step1).toContain("do not re-argue the task's `Files:` after the fact")
+  })
+})
+
+describe('deep health probe and outage routing (R3.3)', () => {
+  const command = readText(COMMAND_PATH)
+  const preflight = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
+  const phase0 = extractPhaseSection(command, 0).replace(/\s+/g, ' ')
+  const fastPath = extractFastPathSection(command).replace(/\s+/g, ' ')
+  const fallbackSection = command
+    .slice(command.indexOf('## Executor fallback'), command.indexOf('## Phase 1 — Interview (Claude)'))
+    .replace(/\s+/g, ' ')
+
+  test('Phase 0 calls the deep probe once and reads execProbe', () => {
+    expect(phase0).toContain('Call `mcp__codex__codex_health` with `{ deep: true }` ONCE before anything else')
+    expect(phase0).toContain('returns `execProbe` (`ok | quota | model | error | skipped`) plus `execProbeMessage`')
+    expect(phase0).toContain('Read `execProbe` from that single call; never re-probe per phase or per task')
+    expect(phase0).toContain('**`execProbe: quota` or `execProbe: model`**')
+    expect(phase0).toContain('**`execProbe: error`**')
+  })
+
+  test('a quota or model probe alone triggers the Executor fallback with no health re-check', () => {
+    expect(phase0).toContain(
+      'a `quota` or `model` probe result is sufficient on its own and needs NO unhealthy health re-check to justify the fallback',
+    )
+    expect(fallbackSection).toContain(
+      "the deep call's `execProbe` is `quota`, `model`, or `error`",
+    )
+    expect(fallbackSection).toContain(
+      'No health re-check is required: an `execProbe` of `quota` or `model`, or a run error carrying those signatures, is sufficient on its own to open the fallback decision.',
+    )
+    expect(fallbackSection).not.toContain('AND an immediate `mcp__codex__codex_health` re-check is not healthy')
+  })
+
+  test('the analysis lane delivers a failed Codex second opinion Claude-only and names the failure', () => {
+    expect(fastPath).toContain(
+      'the analysis is delivered Claude-only and the failure is named in the "what I verified" note',
+    )
+    expect(fastPath).toContain('never present a single-reviewer readout as dual-verified')
+  })
+
+  test('the preflight health gate carries the same deep probe routing', () => {
+    expect(preflight).toContain('Call `mcp__codex__codex_health` with `{ deep: true }` ONCE before anything else')
+    expect(preflight).toContain('**`execProbe: quota` or `execProbe: model`**')
+    expect(preflight).toContain(
+      'a `quota` or `model` probe result is sufficient on its own and requires NO unhealthy health re-check',
+    )
+    expect(preflight).toContain(
+      'the analysis is delivered Claude-only with the failure named in the "what I verified" note',
+    )
+  })
+})
+
+describe('terminal phase routing and relational state check (R4.3)', () => {
+  const command = readText(COMMAND_PATH)
+  const preflight = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
+  const phase0 = extractPhaseSection(command, 0).replace(/\s+/g, ' ')
+  const helper = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs"'
+
+  test('Phase 0 archives a complete run instead of offering resume', () => {
+    expect(phase0).toContain(
+      '`phase: complete` is terminal: the previous run is finished, so do NOT offer resume for it.',
+    )
+    expect(phase0).toContain(
+      "Archive the run's control files to `.codex-flow/archive/<timestamp>/` and begin fresh, exactly as a restart would.",
+    )
+    expect(phase0).toContain('Resume is offered only for a non-complete `phase`.')
+  })
+
+  test('preflight routes phase complete to archive-and-restart', () => {
+    expect(preflight).toContain('**`phase: complete`** → terminal, not resumable.')
+    expect(preflight).toContain(
+      "archive the run's control files to `.codex-flow/archive/<timestamp>/` and begin fresh, exactly as **Restart** does",
+    )
+    expect(preflight).toContain('Resume is offered only for a non-complete `phase`.')
+    expect(preflight).toContain(
+      'Ask **resume vs restart** in every case except `phase: complete`',
+    )
+  })
+
+  test('the resume check validates terminal task statuses with --tasks', () => {
+    expect(phase0).toContain(`${helper} check --tasks .codex-flow/TASKS.md`)
+    expect(phase0).toContain('When `.codex-flow/TASKS.md` exists, make that same call')
+    expect(preflight).toContain(`${helper} check --tasks .codex-flow/TASKS.md`)
+    expect(preflight).toContain('whenever that file exists so the terminal-status validation runs')
+  })
+})
+
+describe('mechanical doc lints (R6.1, R6.2)', () => {
+  const command = readText(COMMAND_PATH)
+  const preflight = readText(PREFLIGHT_PATH)
+  const routingText = extractPreflightResumeRouting(preflight)
+
+  test('every written taskStage value is routed by name in preflight resume routing', () => {
+    // Arrange
+    const documents = [
+      { label: 'commands/codex-flow.md', markdown: command },
+      ...skillDocumentPaths().map((skillPath) => ({
+        label: path.relative(REPO_ROOT, skillPath),
+        markdown: readText(skillPath),
+      })),
+    ]
+
+    // Act
+    const unrouted = documents.flatMap(({ label, markdown }) =>
+      findUnroutedTaskStages(markdown, routingText).map((stage) => `${label}: ${stage}`),
+    )
+
+    // Assert
+    expect(collectWrittenTaskStages(command).length).toBeGreaterThan(0)
+    expect(collectWrittenTaskStages(readText(PARALLEL_EXECUTION_PATH)).length).toBeGreaterThan(0)
+    expect(unrouted).toEqual([])
+  })
+
+  test('the taskStage routing guard reports a stage the resume routing never names', () => {
+    const synthetic = 'Set it with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set taskStage bogus-stage`.'
+
+    expect(findUnroutedTaskStages(synthetic, routingText)).toEqual(['bogus-stage'])
+  })
+
+  test('preflight routes every allowed taskStage value by name', () => {
+    const allowedValues = /`taskStage` is one of\s+`([^`]+)`/.exec(preflight.replace(/\r\n/g, '\n'))
+    if (!allowedValues) throw new Error('preflight does not enumerate the allowed taskStage values')
+    const declared = allowedValues[1].split('|').map((value) => value.trim()).sort()
+
+    expect(collectRoutedTaskStages(routingText)).toEqual(declared)
+  })
+
+  test('no flow doc instructs a full-suite run per task', () => {
+    // Arrange
+    const documents = [
+      { label: 'commands/codex-flow.md', markdown: command },
+      ...skillDocumentPaths().map((skillPath) => ({
+        label: path.relative(REPO_ROOT, skillPath),
+        markdown: readText(skillPath),
+      })),
+    ]
+
+    // Act
+    const violations = documents.flatMap(({ label, markdown }) =>
+      findPerTaskFullSuiteInstructions(label, markdown),
+    )
+
+    // Assert
+    expect(violations).toEqual([])
+  })
+
+  test('the full-suite guard flags an unqualified per-task instruction', () => {
+    const synthetic = 'Then re-run the full suite per task before marking it done.'
+
+    expect(findPerTaskFullSuiteInstructions('synthetic', synthetic)).toEqual([
+      'synthetic: matched "full suite per task" in "Then re-run the full suite per task before marking it done."',
+    ])
+  })
+
+  test('the full-suite guard allows the wave-integration and whole-feature contexts', () => {
+    const waveSentence = 'The full suite runs once per merged parallel wave and once in the whole-feature review.'
+    const prohibition = 'Do NOT re-run the full suite per task.'
+
+    expect(findPerTaskFullSuiteInstructions('synthetic', waveSentence)).toEqual([])
+    expect(findPerTaskFullSuiteInstructions('synthetic', prohibition)).toEqual([])
+  })
+
+  test.each([
+    ['Execute the entire suite for each task before handing off.', '\\b(?:per|each|every)\\s+task\\b'],
+    ['Run the complete test suite mid-task to be safe.', '\\bmid-task\\b'],
+    ['The whole suite should be executed every task.', '\\b(?:per|each|every)\\s+task\\b'],
+  ])('the paraphrase-tolerant detector flags %j', (sentence, scopeSource) => {
+    // Arrange / Act
+    const violations = findPerTaskFullSuiteInstructions('synthetic', sentence)
+
+    // Assert
+    expect(violations).toEqual([
+      `synthetic: matched /${FULL_SUITE_WORDING_PATTERN.source}/ + /${scopeSource}/ in "${sentence}"`,
+    ])
+  })
+
+  test.each([
+    'Never run the entire suite for each task.',
+    'The complete test suite runs once per merged wave, not per task.',
+    'Wave integration is the only place the whole suite runs for every task in the wave.',
+    'Run the targeted tests for each task instead.',
+    'The full suite runs in the whole-feature review.',
+  ])('the paraphrase-tolerant detector leaves %j green', (sentence) => {
+    expect(findPerTaskFullSuiteInstructions('synthetic', sentence)).toEqual([])
+  })
+
+  test('a sentence matching both detector layers is reported exactly once', () => {
+    const sentence = 'Then re-run the full test suite per task before marking it done.'
+
+    expect(findPerTaskFullSuiteInstructions('synthetic', sentence)).toEqual([
+      `synthetic: matched "full test suite per task" in "${sentence}"`,
+    ])
+  })
+})
+
+describe('recursive skill discovery (R6.1, R6.2)', () => {
+  test('discovers every skills/**/SKILL.md that exists in the repository', () => {
+    // Arrange
+    const discovered = skillDocumentPaths()
+
+    // Assert
+    expect(discovered.length).toBeGreaterThan(0)
+    expect(discovered).toContain(PREFLIGHT_PATH)
+    expect(discovered).toContain(PARALLEL_EXECUTION_PATH)
+    expect(discovered.every((skillPath) => path.basename(skillPath) === 'SKILL.md')).toBe(true)
+    expect(new Set(discovered).size).toBe(discovered.length)
+  })
+
+  test('finds a SKILL.md nested more than one level below the skills root', () => {
+    // Arrange
+    const root = mkdtempSync(path.join(tmpdir(), 'flow-docs-skills-'))
+    try {
+      const nested = path.join(root, 'group', 'deep', 'nested-skill')
+      mkdirSync(nested, { recursive: true })
+      writeFileSync(path.join(nested, 'SKILL.md'), '# nested\n', 'utf8')
+      const shallow = path.join(root, 'flat-skill')
+      mkdirSync(shallow, { recursive: true })
+      writeFileSync(path.join(shallow, 'SKILL.md'), '# flat\n', 'utf8')
+      writeFileSync(path.join(root, 'README.md'), '# not a skill\n', 'utf8')
+
+      // Act
+      const discovered = collectSkillDocuments(root)
+
+      // Assert
+      expect(discovered).toEqual([
+        path.join(shallow, 'SKILL.md'),
+        path.join(nested, 'SKILL.md'),
+      ].sort())
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('rejects a missing skills root instead of silently discovering nothing', () => {
+    const missing = path.join(REPO_ROOT, 'skills', '__does_not_exist__')
+
+    expect(() => collectSkillDocuments(missing)).toThrow(/Skills directory does not exist/)
+  })
+})
+
+describe('plan acceptance citation authoring (R6.3)', () => {
+  const PLAN_LINT_COMMAND =
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md --plan .codex-flow/PLAN.md'
+  const CITATION_FORM = '`; satisfies A<n>[, A<n>]`'
+  const ORPHAN_SENTENCE =
+    "Every PLAN `A<n>` acceptance entry must be cited by at least one task's `Acceptance:` field; treat a non-zero exit (orphan `A<n>`, unknown citation) as fix the backlog before presenting it."
+  const BARE_ID_SENTENCE =
+    'every PLAN `A<n>` must be cited by at least one task, and the tokens after `satisfies` must be bare `A<n>` IDs (no suffixes)'
+
+  test('plan-backlog sanity checks run the lint with --plan and fail closed on orphans', () => {
+    // Arrange
+    const skill = readText(PLAN_BACKLOG_PATH)
+
+    // Act
+    const normalizedSkill = skill.replace(/\s+/g, ' ')
+
+    // Assert
+    expect(skill).toContain(PLAN_LINT_COMMAND)
+    expect(normalizedSkill).toContain(ORPHAN_SENTENCE)
+  })
+
+  test('plan-backlog shows the bare citation form and the bare-ID slicing rule', () => {
+    // Arrange
+    const skill = readText(PLAN_BACKLOG_PATH)
+
+    // Act
+    const taskTemplate = extractFencedCodeBlockContaining(skill, 'markdown', '## T1:')
+
+    // Assert
+    expect(taskTemplate).toContain(
+      '- Acceptance: <verifiable criteria for THIS task alone>; satisfies A<n>[, A<n>]',
+    )
+    expect(skill.replace(/\s+/g, ' ')).toContain(BARE_ID_SENTENCE)
+    expect(skill).toContain(CITATION_FORM)
+  })
+
+  test('command Phase 3 lints with a single --plan flag before backlog approval', () => {
+    // Arrange
+    const command = readText(COMMAND_PATH)
+    const phaseSection = extractPhaseSection(command, 3)
+
+    // Act
+    const lintIndex = phaseSection.indexOf(PLAN_LINT_COMMAND)
+    const approvalIndex = phaseSection.indexOf('Show the backlog to the user and get approval')
+
+    // Assert
+    expect(lintIndex).toBeGreaterThanOrEqual(0)
+    expect(lintIndex).toBeLessThan(approvalIndex)
+    expect(phaseSection.replace(/\s+/g, ' ')).toContain(ORPHAN_SENTENCE)
+  })
+
+  test('command Phase 3 task template and slicing rules require bare A-ID citations', () => {
+    // Arrange
+    const phaseSection = extractPhaseSection(readText(COMMAND_PATH), 3)
+
+    // Act
+    const taskTemplate = extractFencedCodeBlockContaining(phaseSection, 'markdown', '## T1:')
+
+    // Assert
+    expect(taskTemplate).toMatch(
+      /- Acceptance: <[^\n]+>; satisfies A<n>\[, A<n>\]\r?\n- Session: —\r?\n- Status: pending/,
+    )
+    expect(phaseSection).toContain(CITATION_FORM)
+    expect(phaseSection.replace(/\s+/g, ' ')).toContain(BARE_ID_SENTENCE)
+  })
+
+  test('every command coverage-lint invocation carries --plan exactly once', () => {
+    // Arrange
+    const command = readText(COMMAND_PATH)
+
+    // Act
+    const invocations = [...command.matchAll(/requirements-coverage\.mjs([^`]*)`/g)].map(
+      (match) => match[1],
+    )
+
+    // Assert
+    expect(invocations.length).toBeGreaterThanOrEqual(4)
+    for (const args of invocations) {
+      expect(args.match(/--plan \.codex-flow\/PLAN\.md/g)).toHaveLength(1)
+    }
+  })
+
+  test('the plan-drift and improvement-gate re-lints name the --plan flag', () => {
+    // Arrange
+    const phaseSection = extractPhaseSection(readText(COMMAND_PATH), 5)
+
+    // Act
+    const planDrift = extractNumberedStep(phaseSection, 6).replace(/\s+/g, ' ')
+    const improvementGate = extractNumberedStep(phaseSection, 9).replace(/\s+/g, ' ')
+
+    // Assert
+    expect(planDrift).toContain(PLAN_LINT_COMMAND)
+    expect(improvementGate).toContain(
+      'Run the impact analysis, the coverage lint with `--plan .codex-flow/PLAN.md`, and backlog sanity checks, then get backlog re-approval;',
+    )
   })
 })

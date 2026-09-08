@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,12 +9,17 @@ import { fileURLToPath } from 'node:url'
 import {
   aggregateEntries,
   filterEntries,
+  isFailedEntry as scriptIsFailedEntry,
   parseArgs,
   readEntries,
+  readEntriesDetailed,
   renderMarkdown,
   resolveLogPath,
   resolvePricing,
+  rotationNotice,
+  ROTATION_NOTICE,
 } from '../scripts/session-cost.mjs'
+import { isFailedEntry as serverIsFailedEntry, type MetricEntry } from '../src/metricsLog.js'
 
 interface Usage {
   inputTokens: number
@@ -459,5 +464,247 @@ describe('session-report skill cost instructions (R5.3)', () => {
     expect(skill).toContain('collect every Session id from TASKS.md')
     expect(skill).toContain('worktree runs included')
     expect(skill).toContain('only when no session ids exist')
+  })
+})
+
+describe('metric shape rules (R7.2)', () => {
+  test.each([
+    ['an empty model', { model: '' }],
+    ['a non-string model', { model: 5 }],
+    ['an unknown modelSource', { model: 'gpt-5', modelSource: 'guess' }],
+    ['an unparseable ts', { ts: 'not-a-date' }],
+    ['an empty tool', { tool: '' }],
+    ['a non-integer exitCode', { exitCode: 0.5 }],
+    ['a negative durationMs', { durationMs: -1 }],
+    ['a negative token count', { usage: { inputTokens: -1, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } }],
+  ])('readEntries skips a line with %s', (_label, overrides) => {
+    // Arrange
+    const logPath = makeTempLogPath()
+    const good = makeEntry({ sessionId: 'keep' })
+    writeFileSync(logPath, `${JSON.stringify({ ...makeEntry(), ...overrides })}\n${JSON.stringify(good)}\n`)
+
+    // Act
+    const entries = readEntries(logPath)
+
+    // Assert
+    expect(entries).toEqual([good])
+  })
+
+  test.each(['__proto__', 'constructor', 'prototype'])(
+    'readEntries skips a line whose model is %s and leaves Object.prototype alone',
+    (unsafe) => {
+      // Arrange
+      const logPath = makeTempLogPath()
+      const good = makeEntry({ sessionId: 'keep', model: 'gpt-5.1-codex' })
+      writeFileSync(logPath, `${JSON.stringify({ ...makeEntry(), model: unsafe })}\n${JSON.stringify(good)}\n`)
+
+      // Act
+      const entries = readEntries(logPath)
+      const aggregate = aggregateEntries(entries)
+
+      // Assert
+      expect(entries).toEqual([good])
+      expect(Object.keys(aggregate.byModel)).toEqual(['gpt-5.1-codex'])
+      expect(Object.prototype).not.toHaveProperty('runs')
+    },
+  )
+
+  test.each(['event', 'override', 'config'])('readEntries keeps a line whose modelSource is %s', (modelSource) => {
+    const logPath = makeTempLogPath()
+    const entry = { ...makeEntry(), modelSource }
+    writeFileSync(logPath, `${JSON.stringify(entry)}\n`)
+
+    expect(readEntries(logPath)).toEqual([entry])
+  })
+
+  test('readEntries keeps a legacy line with no model or telemetry fields', () => {
+    const logPath = makeTempLogPath()
+    const legacy = {
+      ts: '2026-07-23T10:00:00.000Z',
+      tool: 'codex_execute',
+      cwd: '/workspace/project',
+      sessionId: 'session-1',
+      exitCode: 0,
+      durationMs: 100,
+      usage: null,
+    }
+    writeFileSync(logPath, `${JSON.stringify(legacy)}\n`)
+
+    expect(readEntries(logPath)).toEqual([legacy])
+  })
+})
+
+describe('readEntriesDetailed read failures (IMP-9)', () => {
+  /** A path that exists but can never be read as a file: a directory (EISDIR). */
+  const makeUnreadablePath = (): string => {
+    const directory = mkdtempSync(join(tmpdir(), 'session-cost-unreadable-'))
+    tempDirs.push(directory)
+    return directory
+  }
+
+  test('reports an unreadable live log instead of passing it off as empty', () => {
+    // Arrange
+    const logPath = makeUnreadablePath()
+
+    // Act
+    const result = readEntriesDetailed(logPath) as { entries: unknown[]; readErrors: string[] }
+
+    // Assert
+    expect(result.entries).toEqual([])
+    expect(result.readErrors).toHaveLength(1)
+    expect(result.readErrors[0]).toContain(`unable to read metrics log ${logPath}: `)
+  })
+
+  test('keeps the live entries when only the rotated file is unreadable', () => {
+    // Arrange
+    const directory = makeUnreadablePath()
+    const logPath = join(directory, 'metrics.jsonl')
+    mkdirSync(`${logPath}.1`)
+    const entry = makeEntry()
+    writeFileSync(logPath, `${JSON.stringify(entry)}\n`)
+
+    // Act
+    const result = readEntriesDetailed(logPath) as { entries: unknown[]; readErrors: string[] }
+
+    // Assert
+    expect(result.entries).toEqual([entry])
+    expect(result.readErrors).toHaveLength(1)
+    expect(result.readErrors[0]).toContain(`${logPath}.1`)
+  })
+
+  test('reports no read errors for a missing or healthy log', () => {
+    const missing = readEntriesDetailed(makeTempLogPath()) as { readErrors: string[] }
+    const healthyPath = makeTempLogPath()
+    writeFileSync(healthyPath, `${JSON.stringify(makeEntry())}\n`)
+    const healthy = readEntriesDetailed(healthyPath) as { readErrors: string[] }
+
+    expect(missing.readErrors).toEqual([])
+    expect(healthy.readErrors).toEqual([])
+  })
+
+  test('readEntries rejects a non-string log path', () => {
+    expect(() => readEntries(42)).toThrow(TypeError)
+  })
+
+  test('CLI discloses the unreadable file on stderr and exits non-zero', () => {
+    // Arrange
+    const directory = makeUnreadablePath()
+    const logPath = join(directory, 'metrics.jsonl')
+    mkdirSync(`${logPath}.1`)
+    writeFileSync(logPath, `${JSON.stringify(makeEntry())}\n`)
+
+    // Act
+    const result = spawnSync(process.execPath, [SESSION_COST_SCRIPT, '--since', '2026-07-23', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, CODEX_MCP_METRICS_LOG: logPath },
+    })
+
+    // Assert — the partial report is still machine-readable, the gap is disclosed, exit is 1.
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain(`session-cost: unable to read metrics log ${logPath}.1: `)
+    expect((JSON.parse(result.stdout) as { totalRuns: number }).totalRuns).toBe(1)
+  })
+})
+
+/**
+ * IMP-17: the script's predicate is the reference and src/metricsLog.ts mirrors it. Both are run
+ * over one shared vector so a rule added to either side without the other fails here.
+ */
+describe('isFailedEntry parity between the script and src/metricsLog.ts (IMP-17)', () => {
+  const vector: readonly [string, Partial<Entry>, boolean][] = [
+    ['clean success', {}, false],
+    ['non-zero exitCode', { exitCode: 2 }, true],
+    ['null exitCode', { exitCode: null }, true],
+    ['timedOut on exit 0', { timedOut: true }, true],
+    ['aborted on exit 0', { aborted: true }, true],
+    ['errorKind only on exit 0', { errorKind: 'turn-failed' }, true],
+    ['empty-string errorKind', { errorKind: '' }, false],
+    ['both errorKind and non-zero exit', { exitCode: 1, errorKind: 'exit' }, true],
+    ['explicit false flags', { timedOut: false, aborted: false }, false],
+  ]
+
+  test.each(vector)('%s → failed=%s in both predicates', (_label, overrides, expected) => {
+    // Arrange
+    const entry = makeEntry({ exitCode: 0, ...overrides })
+
+    // Act & Assert
+    expect(scriptIsFailedEntry(entry)).toBe(expected)
+    expect(serverIsFailedEntry(entry as unknown as MetricEntry)).toBe(expected)
+  })
+
+  test('the script aggregate and the shared predicate agree on the failure count', () => {
+    const entries = vector.map(([, overrides]) => makeEntry({ exitCode: 0, ...overrides }))
+    const expectedFailures = vector.filter(([, , expected]) => expected).length
+
+    expect((aggregateEntries(entries) as { failed: number }).failed).toBe(expectedFailures)
+  })
+})
+
+describe('rotationNotice (R7.3)', () => {
+  test('returns the notice when the .1 rotation file exists', () => {
+    // Arrange
+    const logPath = makeTempLogPath()
+    writeFileSync(logPath, `${JSON.stringify(makeEntry())}\n`)
+    writeFileSync(`${logPath}.1`, `${JSON.stringify(makeEntry({ ts: '2026-07-23T09:00:00Z' }))}\n`)
+
+    // Act / Assert
+    expect(rotationNotice(logPath)).toBe('metrics: history older than one rotation is not retained')
+    expect(rotationNotice(logPath)).toBe(ROTATION_NOTICE)
+  })
+
+  test('returns undefined when no .1 rotation file exists', () => {
+    const logPath = makeTempLogPath()
+    writeFileSync(logPath, `${JSON.stringify(makeEntry())}\n`)
+
+    expect(rotationNotice(logPath)).toBeUndefined()
+  })
+
+  test('rejects an empty log path', () => {
+    expect(() => rotationNotice('')).toThrow(TypeError)
+  })
+
+  test('CLI prints the one-line notice on stderr and keeps --json stdout parseable', () => {
+    // Arrange
+    const logPath = makeTempLogPath()
+    writeFileSync(logPath, `${JSON.stringify(makeEntry())}\n`)
+    writeFileSync(`${logPath}.1`, `${JSON.stringify(makeEntry({ ts: '2026-07-23T09:00:00Z' }))}\n`)
+
+    // Act
+    const result = spawnSync(process.execPath, [SESSION_COST_SCRIPT, '--since', '2026-07-23', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, CODEX_MCP_METRICS_LOG: logPath },
+    })
+
+    // Assert
+    expect(result.status).toBe(0)
+    expect(result.stderr.trim()).toBe('metrics: history older than one rotation is not retained')
+    expect((JSON.parse(result.stdout) as { totalRuns: number }).totalRuns).toBe(2)
+  })
+
+  test('CLI prints the notice in Markdown mode too', () => {
+    const logPath = makeTempLogPath()
+    writeFileSync(logPath, `${JSON.stringify(makeEntry())}\n`)
+    writeFileSync(`${logPath}.1`, `${JSON.stringify(makeEntry())}\n`)
+
+    const result = spawnSync(process.execPath, [SESSION_COST_SCRIPT, '--since', '2026-07-23'], {
+      encoding: 'utf8',
+      env: { ...process.env, CODEX_MCP_METRICS_LOG: logPath },
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.stderr).toContain('metrics: history older than one rotation is not retained')
+  })
+
+  test('CLI stays silent when the rotation file is absent', () => {
+    const logPath = makeTempLogPath()
+    writeFileSync(logPath, `${JSON.stringify(makeEntry())}\n`)
+
+    const result = spawnSync(process.execPath, [SESSION_COST_SCRIPT, '--since', '2026-07-23'], {
+      encoding: 'utf8',
+      env: { ...process.env, CODEX_MCP_METRICS_LOG: logPath },
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.stderr).toBe('')
   })
 })

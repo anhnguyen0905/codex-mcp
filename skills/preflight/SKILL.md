@@ -9,7 +9,10 @@ Nothing downstream is safe until these pass. Do not interview, plan, or execute 
 
 ## Step 1 — Health gate
 
-Call `mcp__codex__codex_health` before anything else:
+Call `mcp__codex__codex_health` with `{ deep: true }` ONCE before anything else. The deep input adds
+a one-shot read-only `codex exec` probe and returns `execProbe`
+(`ok | quota | model | error | skipped`) plus `execProbeMessage` next to `loggedIn`; read
+`execProbe` from that single call instead of re-probing later phases.
 
 - **Tool call fails / server missing** → the MCP server isn't set up. Point the user to the codex-mcp
   README install steps (or `node scripts/doctor.mjs`), then offer the command's **Executor
@@ -17,8 +20,15 @@ Call `mcp__codex__codex_health` before anything else:
 - **`loggedIn: false`** → tell the user to run `codex login` (ChatGPT Plus/Pro/Team, or set
   `OPENAI_API_KEY`), then offer the same Executor fallback choice. Proceed only after a re-check
   shows `loggedIn: true` or the user explicitly chose the fallback.
-- **`loggedIn: true`** → report the Codex version, record `executor: codex`, and continue.
-- The analysis lane of the Fast-path gate needs no Codex session and no fallback decision.
+- **`execProbe: quota` or `execProbe: model`** → logged in but unable to execute. Quote
+  `execProbeMessage` and offer the Executor fallback right away; a `quota` or `model` probe result
+  is sufficient on its own and requires NO unhealthy health re-check.
+- **`execProbe: error`** → report `execProbeMessage` verbatim, then offer the same fallback choice.
+- **`loggedIn: true` with `execProbe: ok` (or `skipped`)** → report the Codex version, record
+  `executor: codex`, and continue.
+- The analysis lane of the Fast-path gate needs no Codex session and no fallback decision; when its
+  optional Codex second opinion fails, the analysis is delivered Claude-only with the failure named
+  in the "what I verified" note.
 
 ## Step 2 — Resume check (don't clobber an interrupted run)
 
@@ -35,7 +45,8 @@ not been created yet:
   non-zero, surface the error to the user and STOP; never use the standalone fallback for a failing
   helper. When either file does not exist, read only the control files that exist; do not require a
   missing TASKS.md to resume an earlier phase.
-- When TASKS.md exists, show its task Statuses. Ask **resume vs restart** in every case.
+- When TASKS.md exists, show its task Statuses. Ask **resume vs restart** in every case except
+  `phase: complete`, which archives and starts fresh without a resume offer (see below).
 - Before scheduling anything, reconcile every task whose Status is `in-progress`. Read its recorded
   Session line. The resume slice's Task statuses section carries Session content for every
   in-progress task even though it embeds the full task text only for the first unfinished task; do
@@ -48,7 +59,12 @@ not been created yet:
   review the work as-is / reset to pending**. For reset to pending, roll back through the
   checkpoint commit when `checkpointCommits` is enabled. Never blindly re-execute an in-progress
   task.
-- **Resume** → first run `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check`; when it reports only missing keys on a legacy file, add them
+- **`phase: complete`** → terminal, not resumable. Do NOT offer resume: archive the run's control
+  files to `.codex-flow/archive/<timestamp>/` and begin fresh, exactly as **Restart** does. Resume
+  is offered only for a non-complete `phase`.
+- **Resume** → first run `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check`, adding
+  `--tasks .codex-flow/TASKS.md` whenever that file exists so the terminal-status validation runs
+  (`node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check --tasks .codex-flow/TASKS.md`); when it reports only missing keys on a legacy file, add them
   with `set` (`currentTask -`, `taskStage idle`, `wave -`) and continue; any other violation is
   surfaced to the user before routing. Then skip only the phases whose approvals STATE.md records, and route from STATE.md's
   recorded `phase`. For `phase: execution`, enter Phase 4 at the first task not marked done. Before

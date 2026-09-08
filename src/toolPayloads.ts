@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { BatchTaskResult } from './batchRunner.js'
 import type { ParsedEvents } from './eventParser.js'
+import type { ExecProbeStatus } from './healthProbe.js'
 import type { ResumeReason } from './retryPolicy.js'
 import type { RunStatus } from './runStatus.js'
 import type { DiffFn, RunAttribution } from './workspaceDiff.js'
@@ -22,7 +23,8 @@ export type RunPayload = ParsedEvents & {
   status: RunStatus
   /**
    * Fail-closed delivery verdict: true only when the run succeeded AND its acceptance evidence
-   * holds (verifyCommand passed when given; for codex_review, the findings block parsed).
+   * holds (verifyCommand passed when given; for codex_review, the findings block parsed with no
+   * dropped entries).
    * Informational — never changes `status` or `isError`.
    */
   accepted: boolean
@@ -71,6 +73,10 @@ export interface HealthPayload {
   /** Whether the `codex login status` probe itself worked — a failed/timed-out probe must never read as "not logged in". */
   loginProbe: LoginProbeStatus
   loginStatus: string
+  /** Deep-probe verdict; present only when the call passed `deep: true` (R3.1). */
+  execProbe?: ExecProbeStatus
+  /** Bounded human-readable reason behind `execProbe`; present exactly when `execProbe` is. */
+  execProbeMessage?: string
 }
 
 export const summarizeBatch = (results: readonly BatchTaskResult[]): BatchSummary => ({
@@ -233,4 +239,6 @@ export const healthOutputShape = {
   loggedIn: z.boolean(),
   loginProbe: z.enum(['ok', 'failed', 'timeout']),
   loginStatus: z.string(),
+  execProbe: z.enum(['ok', 'quota', 'model', 'error', 'skipped']).optional(),
+  execProbeMessage: z.string().optional(),
 }

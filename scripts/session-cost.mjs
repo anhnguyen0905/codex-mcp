@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -10,10 +10,17 @@ const VALUE_FLAGS = new Set(['--since', '--until', '--cwd', '--log'])
 /** Repeatable value flag: each occurrence appends to `sessions`. */
 const SESSION_FLAG = '--session'
 const PRICING_KEYS = ['inputPer1M', 'cachedInputPer1M', 'outputPer1M', 'reasoningOutputPer1M']
+const MODEL_SOURCES = ['event', 'override', 'config']
+/**
+ * One-line notice emitted when a rotated back-file exists. Must stay byte-identical to
+ * ROTATION_NOTICE in src/metricsLog.ts (this script is stdlib-only and cannot import from dist).
+ */
+export const ROTATION_NOTICE = 'metrics: history older than one rotation is not retained'
 const ISO_FLAG_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2}))?$/
 
 const isRecord = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
+const isNonEmptyString = (value) => typeof value === 'string' && value.length > 0
 const isFiniteNonNegative = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0
 const isParseableDate = (value) =>
   typeof value === 'string' && value.length > 0 && Number.isFinite(Date.parse(value))
@@ -97,32 +104,52 @@ const hasValidUsage = (usage) =>
     isFiniteNonNegative(usage.outputTokens) &&
     isFiniteNonNegative(usage.reasoningOutputTokens))
 
+// A model name from the log becomes an aggregation key. These three would target
+// Object.prototype in any plain-object bucket store, so reject the line outright rather
+// than rely on every consumer using a Map. Mirrored in src/metricsLog.ts.
+const UNSAFE_KEY_NAMES = ['__proto__', 'constructor', 'prototype']
+
+const isSafeModelName = (value) => isNonEmptyString(value) && !UNSAFE_KEY_NAMES.includes(value)
+
+/**
+ * Reference shape rules for one JSONL metric line. Mirrored by `isValidMetricEntry` in
+ * src/metricsLog.ts: any rule added here must be added there in the same order.
+ */
 const isMetricEntry = (entry) =>
   isRecord(entry) &&
   isParseableDate(entry.ts) &&
-  typeof entry.tool === 'string' &&
-  entry.tool.length > 0 &&
+  isNonEmptyString(entry.tool) &&
   typeof entry.cwd === 'string' &&
   (entry.exitCode === null || Number.isInteger(entry.exitCode)) &&
   isFiniteNonNegative(entry.durationMs) &&
   hasValidUsage(entry.usage) &&
-  (entry.model === undefined || typeof entry.model === 'string') &&
+  (entry.model === undefined || isSafeModelName(entry.model)) &&
+  (entry.modelSource === undefined || MODEL_SOURCES.includes(entry.modelSource)) &&
   (entry.errorKind === undefined || typeof entry.errorKind === 'string') &&
   (entry.errorCount === undefined || isFiniteNonNegative(entry.errorCount)) &&
   (entry.timedOut === undefined || typeof entry.timedOut === 'boolean') &&
   (entry.aborted === undefined || typeof entry.aborted === 'boolean')
+
+/**
+ * Message for a failed metrics-log read, or undefined for a missing file (normal). Must stay
+ * byte-identical to `readFailureMessage` in src/metricsLog.ts.
+ */
+const readFailureMessage = (filePath, error) => {
+  if (isRecord(error) && error.code === 'ENOENT') return undefined
+  const detail = error instanceof Error ? error.message : 'unknown filesystem error'
+  return `unable to read metrics log ${filePath}: ${detail}`
+}
 
 const readEntriesFile = (filePath) => {
   let content
   try {
     content = readFileSync(filePath, 'utf8')
   } catch (error) {
-    if (isRecord(error) && error.code === 'ENOENT') return []
-    const detail = error instanceof Error ? error.message : 'unknown filesystem error'
-    throw new Error(`unable to read metrics log ${filePath}: ${detail}`)
+    const readError = readFailureMessage(filePath, error)
+    return readError === undefined ? { entries: [] } : { entries: [], readError }
   }
 
-  return content.split(/\r?\n/).flatMap((line) => {
+  const entries = content.split(/\r?\n/).flatMap((line) => {
     if (!line.trim()) return []
     try {
       const entry = JSON.parse(line)
@@ -132,14 +159,38 @@ const readEntriesFile = (filePath) => {
       return []
     }
   })
+  return { entries }
 }
 
-/** Read the rotated metrics log first, then the current log. */
-export function readEntries(logPath) {
+/**
+ * The rotation notice for a log path, or undefined when no `<path>.1` back-file exists. A missing
+ * rotation file is normal and must stay silent (R7.3).
+ */
+export function rotationNotice(logPath) {
   if (typeof logPath !== 'string' || logPath.length === 0) {
     throw new TypeError('logPath must be a non-empty string')
   }
-  return [...readEntriesFile(`${logPath}.1`), ...readEntriesFile(logPath)]
+  return existsSync(`${logPath}.1`) ? ROTATION_NOTICE : undefined
+}
+
+/**
+ * Read the rotated metrics log first, then the current log, plus one `readErrors` message per file
+ * that exists but could not be read (EACCES, EISDIR, …). A missing file is normal and never
+ * listed. Mirrors `readMetricsDetailed` in src/metricsLog.ts.
+ */
+export function readEntriesDetailed(logPath) {
+  if (typeof logPath !== 'string' || logPath.length === 0) {
+    throw new TypeError('logPath must be a non-empty string')
+  }
+  const rotated = readEntriesFile(`${logPath}.1`)
+  const live = readEntriesFile(logPath)
+  const readErrors = [rotated.readError, live.readError].filter((message) => message !== undefined)
+  return { entries: [...rotated.entries, ...live.entries], readErrors }
+}
+
+/** Read the rotated metrics log first, then the current log. Use `readEntriesDetailed` for gaps. */
+export function readEntries(logPath) {
+  return readEntriesDetailed(logPath).entries
 }
 
 const isStringArray = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string')
@@ -178,7 +229,11 @@ const addUsage = (tokens, usage) => {
   tokens.reasoningOutput += usage.reasoningOutputTokens
 }
 
-const isFailedEntry = (entry) =>
+/**
+ * Reference failure predicate. Must stay equivalent to `isFailedEntry` in src/metricsLog.ts
+ * (parity-tested on a shared vector in tests/sessionCost.test.ts).
+ */
+export const isFailedEntry = (entry) =>
   entry.exitCode !== 0 ||
   entry.timedOut === true ||
   entry.aborted === true ||
@@ -341,9 +396,17 @@ if (isDirectRun) {
   try {
     const args = parseArgs(process.argv.slice(2))
     const logPath = resolveLogPath(args, process.env)
-    const entries = filterEntries(readEntries(logPath), args)
+    const read = readEntriesDetailed(logPath)
+    const entries = filterEntries(read.entries, args)
     const aggregate = aggregateEntries(entries, resolvePricing(process.env))
     console.log(args.json ? JSON.stringify(aggregate, null, 2) : renderMarkdown(aggregate))
+    // Notices go to stderr so `--json` stdout stays machine-parseable in both modes.
+    const notice = rotationNotice(logPath)
+    if (notice !== undefined) console.error(notice)
+    // An unreadable log means the report is incomplete: disclose each gap and fail the run
+    // rather than pass off a partial total as the session's cost.
+    for (const readError of read.readErrors) console.error(`session-cost: ${readError}`)
+    if (read.readErrors.length > 0) process.exitCode = 1
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error'
     console.error(`session-cost: ${message}`)

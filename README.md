@@ -243,9 +243,13 @@ changes `status`/`isError`; read it before trusting `agentMessage`. `codex_revie
 auto-resumed: a timed-out or partial review is reported after one attempt.
 
 `codex_review` asks Codex to end its message with one fenced json block and returns it parsed
-fail-closed as `reviewFindings: { parsed, findings[], improvements[], dropped, parseError? }`
-(severity is one of CRITICAL/HIGH/MEDIUM/LOW; malformed entries are counted in `dropped`, never
-coerced). The prose `agentMessage` is still returned for the `parsed: false` case.
+fail-closed as `reviewFindings: { parsed, findings[], improvements[], dropped, droppedReasons,
+parseError? }` (severity is one of CRITICAL/HIGH/MEDIUM/LOW; malformed entries are counted in
+`dropped`, never coerced). `droppedReasons: string[]` carries one entry per dropped item, naming the
+field that failed validation (for example `findings[0].line`, or the bare locator `findings[0]` when
+the whole entry is invalid), so `dropped` is always `droppedReasons.length`. Any `dropped > 0` makes
+`accepted` false for `codex_review` — a review that lost an entry is never treated as delivered. The
+prose `agentMessage` is still returned for the `parsed: false` case.
 
 `codex_execute` / `codex_continue` accept `verifyCommand` (plus optional `verifyTimeoutMs`, default
 10 min, cap 30): after the Codex run settles, the server runs that acceptance command in `cwd`

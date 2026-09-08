@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'vitest'
 
 // @ts-expect-error — plain .mjs script, not part of the tsc build
-import { parseTasks, computeWaves, renderWaves } from '../scripts/task-waves.mjs'
+import { parseTasks, computeWaves, renderWaves, canonicalPath } from '../scripts/task-waves.mjs'
+// @ts-expect-error — plain .mjs script, not part of the tsc build
+import { canonicalPath as scopeCheckCanonicalPath } from '../scripts/scope-check.mjs'
 
 const TASKS = `# Backlog
 
@@ -394,5 +396,213 @@ describe('computeWaves — hardening', () => {
       expect(maxWidth).toBeLessThanOrEqual(10) // default cap enforced
       expect(waves.flat()).toHaveLength(12)
     }
+  })
+})
+
+describe('canonicalPath', () => {
+  test('collapses a leading ./ and redundant separators on a case-sensitive platform', () => {
+    // Arrange
+    const spellings = ['src/config.ts', './src/config.ts', 'src//config.ts', './src/./config.ts', 'src/config.ts/']
+
+    // Act
+    const canonical = spellings.map((spelling) => canonicalPath(spelling, 'linux'))
+
+    // Assert
+    expect(canonical).toEqual(Array(spellings.length).fill('src/config.ts'))
+  })
+
+  test('preserves letter case on linux but folds it on darwin and win32', () => {
+    // Arrange
+    const spelling = 'src/Config.ts'
+
+    // Act
+    const onLinux = canonicalPath(spelling, 'linux')
+    const onDarwin = canonicalPath(spelling, 'darwin')
+    const onWindows = canonicalPath('.\\src\\Config.ts', 'win32')
+
+    // Assert
+    expect(onLinux).toBe('src/Config.ts')
+    expect(onDarwin).toBe('src/config.ts')
+    expect(onWindows).toBe('src/config.ts')
+  })
+
+  test('rejects a non-string or empty path instead of returning a bogus canonical form', () => {
+    // Arrange
+    const invalid = [undefined, null, 42, '', '   ']
+
+    // Act / Assert
+    for (const value of invalid) {
+      expect(() => canonicalPath(value as unknown as string, 'linux')).toThrow(/non-empty string path/i)
+    }
+  })
+})
+
+describe('computeWaves — canonical file conflicts', () => {
+  test('serializes tasks whose paths differ only by a leading ./ or redundant separators', () => {
+    // Arrange
+    const tasks = [
+      { id: 'T1', dependsOn: [], files: ['src/config.ts'] },
+      { id: 'T2', dependsOn: [], files: ['.//src/config.ts'] },
+    ]
+
+    // Act
+    const { waves, maxWidth } = computeWaves(tasks, { platform: 'linux' })
+
+    // Assert
+    expect(waves).toEqual([['T1'], ['T2']])
+    expect(maxWidth).toBe(1)
+  })
+
+  test('serializes case-differing paths on darwin and win32 but batches them on linux', () => {
+    // Arrange
+    const tasks = [
+      { id: 'T1', dependsOn: [], files: ['src/Config.ts'] },
+      { id: 'T2', dependsOn: [], files: ['src/config.ts'] },
+    ]
+
+    // Act
+    const onDarwin = computeWaves(tasks, { platform: 'darwin' })
+    const onWindows = computeWaves(tasks, { platform: 'win32' })
+    const onLinux = computeWaves(tasks, { platform: 'linux' })
+
+    // Assert
+    expect(onDarwin.waves).toEqual([['T1'], ['T2']])
+    expect(onWindows.waves).toEqual([['T1'], ['T2']])
+    expect(onLinux.waves).toEqual([['T1', 'T2']])
+  })
+
+  test('still batches genuinely distinct paths that share a prefix', () => {
+    // Arrange
+    const tasks = [
+      { id: 'T1', dependsOn: [], files: ['./src/a.ts'] },
+      { id: 'T2', dependsOn: [], files: ['src/b.ts'] },
+    ]
+
+    // Act
+    const { waves } = computeWaves(tasks, { platform: 'darwin' })
+
+    // Assert
+    expect(waves).toEqual([['T1', 'T2']])
+  })
+})
+
+describe('computeWaves — dependency order', () => {
+  test('rejects a dependency with a greater numeric ID, naming both tasks', () => {
+    // Arrange
+    const tasks = parseTasks(`## T1: reads a later task
+- Depends on: T3
+- Files: a.ts
+
+## T3: later
+- Files: c.ts
+`)
+
+    // Act / Assert
+    expect(() => computeWaves(tasks)).toThrow(
+      'dependency order violation: T1 depends on T3; dependency must have a smaller numeric ID',
+    )
+  })
+
+  test('rejects a dependency with an equal numeric ID, naming both tasks', () => {
+    // Arrange
+    const selfDependent = [{ id: 'T2', dependsOn: ['T2'], files: ['b.ts'] }]
+
+    // Act / Assert
+    expect(() => computeWaves(selfDependent)).toThrow(
+      'dependency order violation: T2 depends on T2; dependency must have a smaller numeric ID',
+    )
+  })
+
+  test('reports the first offending task in numeric order when several point forward', () => {
+    // Arrange
+    const tasks = [
+      { id: 'T1', dependsOn: [], files: ['a.ts'] },
+      { id: 'T3', dependsOn: ['T4'], files: ['c.ts'] },
+      { id: 'T2', dependsOn: ['T4'], files: ['b.ts'] },
+      { id: 'T4', dependsOn: [], files: ['d.ts'] },
+    ]
+
+    // Act / Assert
+    expect(() => computeWaves(tasks)).toThrow(
+      'dependency order violation: T2 depends on T4; dependency must have a smaller numeric ID',
+    )
+  })
+
+  test('accepts a backlog whose dependencies all point backwards', () => {
+    // Arrange
+    const tasks = [
+      { id: 'T1', dependsOn: [], files: ['a.ts'] },
+      { id: 'T2', dependsOn: ['T1'], files: ['b.ts'] },
+    ]
+
+    // Act
+    const { waves } = computeWaves(tasks)
+
+    // Assert
+    expect(waves).toEqual([['T1'], ['T2']])
+  })
+})
+
+describe('canonicalPath — parity with scripts/scope-check.mjs', () => {
+  // Both helpers canonicalize task file paths, but for different jobs: task-waves folds
+  // plan-authored declarations (collapsing is the safe direction — two spellings of one
+  // file must never share a wave), while scope-check compares paths GIT reports against a
+  // declaration (collapsing is the unsafe direction — a folded spelling would slip past
+  // the trip-wire). The shared vector below must stay identical on every platform; the
+  // three documented divergences after it are deliberate and each carries its reason.
+  const PLATFORMS = ['linux', 'darwin', 'win32'] as const
+  const SHARED_VECTOR = [
+    './a',
+    'a//b',
+    'a/./b',
+    'a/b/',
+    'src/A.ts',
+    '/abs/x',
+    '//abs//x',
+    'C:/abs/x',
+  ]
+
+  test.each(PLATFORMS)('agrees with task-waves for every shared spelling on %s', (platform) => {
+    // Act
+    const pairs = SHARED_VECTOR.map((spelling) => ({
+      spelling,
+      taskWaves: canonicalPath(spelling, platform),
+      scopeCheck: scopeCheckCanonicalPath(spelling, platform),
+    }))
+
+    // Assert
+    for (const pair of pairs) expect(pair.scopeCheck).toBe(pair.taskWaves)
+  })
+
+  test('agrees with task-waves on a backslash spelling on win32, where `\\` is a separator', () => {
+    // Act & Assert
+    expect(scopeCheckCanonicalPath('src\\a.ts', 'win32')).toBe(canonicalPath('src\\a.ts', 'win32'))
+  })
+
+  test.each(['linux', 'darwin'])(
+    'diverges from task-waves on a POSIX backslash filename on %s (deliberate)',
+    (platform) => {
+      // Assert — on POSIX `src\a.ts` is ONE filename; scope-check must not fold it onto
+      // the declared `src/a.ts`, while task-waves treats a declaration as a path spelling.
+      expect(scopeCheckCanonicalPath('src\\a.ts', platform)).toBe('src\\a.ts')
+      expect(canonicalPath('src\\a.ts', platform)).toBe('src/a.ts')
+    },
+  )
+
+  test.each(PLATFORMS)(
+    'diverges from task-waves on a `..` component on %s (deliberate)',
+    (platform) => {
+      // Assert — task-waves resolves `a/../b` to the same file as `b` so both tasks conflict;
+      // scope-check cannot resolve it without the tree, so it stays distinct and is reported.
+      expect(scopeCheckCanonicalPath('a/../b', platform)).toBe('a/../b')
+      expect(canonicalPath('a/../b', platform)).toBe('b')
+    },
+  )
+
+  test('diverges from task-waves on surrounding whitespace (deliberate)', () => {
+    // Assert — a leading space is a legal POSIX filename character, so scope-check keeps it;
+    // task-waves trims because a declaration is split on whitespace anyway.
+    expect(scopeCheckCanonicalPath(' a.ts', 'linux')).toBe(' a.ts')
+    expect(canonicalPath(' a.ts', 'linux')).toBe('a.ts')
   })
 })

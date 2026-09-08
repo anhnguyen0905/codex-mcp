@@ -192,6 +192,8 @@ describe('codex_review structured findings', () => {
       { severity: 'HIGH', file: 'src/a.ts', line: 42, summary: 'wrong status', expected: '404', observed: '200' },
     ])
     expect(payload.reviewFindings.improvements[0].id).toBe('IMP-1')
+    expect(payload.reviewFindings.droppedReasons).toEqual([])
+    expect(payload.accepted).toBe(true)
     expect((result.structuredContent as { reviewFindings: unknown }).reviewFindings).toEqual(payload.reviewFindings)
   })
 
@@ -230,11 +232,38 @@ describe('codex_review accepted verdict and recovery policy', () => {
   const payloadOf = (result: Awaited<ReturnType<Client['callTool']>>) =>
     JSON.parse((result.content as Array<{ text: string }>)[0].text)
 
+  const withDroppedFinding =
+    '```json\n' +
+    JSON.stringify({
+      findings: [{ severity: 'HIGH', file: 'src/a.ts', summary: 'no line', expected: 'e', observed: 'o' }],
+      improvements: [],
+    }) +
+    '\n```'
+
+  test('accepted is false and droppedReasons are reported when the review dropped an entry', async () => {
+    // Arrange
+    const client = await connect(vi.fn(async () => outcomeWith(withDroppedFinding)))
+
+    // Act
+    const result = await client.callTool({ name: 'codex_review', arguments: { cwd: '/repo' } })
+    const payload = payloadOf(result)
+
+    // Assert
+    expect(result.isError).toBe(false)
+    expect(payload.status).toBe('success')
+    expect(payload.reviewFindings.parsed).toBe(true)
+    expect(payload.reviewFindings.dropped).toBe(1)
+    expect(payload.reviewFindings.droppedReasons).toEqual(['findings[0].line'])
+    expect(payload.accepted).toBe(false)
+  })
+
   test('accepted is true only when the review parsed', async () => {
     const parsed = payloadOf(await (await connect(vi.fn(async () => outcomeWith(structured)))).callTool({ name: 'codex_review', arguments: { cwd: '/repo' } }))
     const prose = payloadOf(await (await connect(vi.fn(async () => outcomeWith('looks fine')))).callTool({ name: 'codex_review', arguments: { cwd: '/repo' } }))
 
     expect(parsed.accepted).toBe(true)
+    expect(parsed.reviewFindings.dropped).toBe(0)
+    expect(parsed.reviewFindings.droppedReasons).toEqual([])
     expect(prose.status).toBe('success')
     expect(prose.accepted).toBe(false)
   })

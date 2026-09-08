@@ -16,7 +16,7 @@ Decompose the approved plan into `.codex-flow/TASKS.md`. Each task is one Codex 
 - Requirements: <R-IDs covered>
 - Steps: <concrete, file-level steps>
 - Skills: <relevant skills from PLAN.md "Skills plan" (*Skills to use* + before-execution created skills), or — >
-- Acceptance: <verifiable criteria for THIS task alone>
+- Acceptance: <verifiable criteria for THIS task alone>; satisfies A<n>[, A<n>]
 - Session: —
 - Status: pending
 ```
@@ -57,6 +57,9 @@ A task is the unit Codex builds in one run and Claude verifies in one pass — s
   (its tests pass, build stays green) — never "works after T5 lands".
 - **Acceptance names the exact check**: state the command the reviewer runs — the test file/pattern,
   `npm run build`, or a concrete manual probe — not just prose. Phase 5 runs it verbatim.
+- **Acceptance cites the plan's A-entries**: end each `Acceptance:` field with the citation form
+  `; satisfies A<n>[, A<n>]` — every PLAN `A<n>` must be cited by at least one task, and the tokens
+  after `satisfies` must be bare `A<n>` IDs (no suffixes).
 - **Vertical over horizontal** where possible: a thin end-to-end slice (one endpoint + its test)
   reviews better than "all models, then all controllers".
 - **File-disjoint where independent**: actively reshape task boundaries so independent tasks
@@ -76,9 +79,11 @@ Re-run every check below after a plan change updates affected tasks or the impro
 tasks; do not schedule the changed backlog until all checks pass.
 
 - Union of all task acceptance criteria covers every plan acceptance criterion (no orphan requirements).
-- Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`. Every effective R<n>.<m> must be cited
+- Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md --plan .codex-flow/PLAN.md`. Every effective R<n>.<m> must be cited
   by at least one task and no task may cite an unknown ID; fix the backlog before presenting it for
-  approval.
+  approval. Every PLAN `A<n>` acceptance entry must be cited by at least one task's `Acceptance:`
+  field; treat a non-zero exit (orphan `A<n>`, unknown citation) as fix the backlog before
+  presenting it.
 - No tasks that could run concurrently (in the same wave) touch the same file; dependency-ordered
   tasks may share files because they serialize (avoids Codex-vs-Codex merge conflicts).
 - First task is small — it validates the plan's assumptions cheaply before the expensive middle.

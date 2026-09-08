@@ -69,6 +69,7 @@
     "scripts/skill-match.mjs",
     "scripts/skill-eval.mjs",
     "scripts/task-waves.mjs",
+    "scripts/scope-check.mjs",
     "scripts/flow-state.mjs",
     "scripts/context-slice.mjs",
     "scripts/requirements-coverage.mjs",

@@ -23,13 +23,45 @@ const DEFAULT_TASK_STATUS = 'pending'
 const UNKNOWN_TASK_STATUS = 'unknown'
 const FAILED_LIKE_STATUSES = new Set(['failed', UNKNOWN_TASK_STATUS])
 
+// Platforms whose filesystems are case-insensitive by default: two task files that differ only
+// by letter case are the SAME file there, so they must never be scheduled in one wave.
+const CASE_INSENSITIVE_PLATFORMS = new Set(['darwin', 'win32'])
+
 const taskNum = (id) => parseInt(id.slice(1), 10)
 const isPlaceholder = (token) => token.includes('<') || token.includes('>')
 const compareTaskIds = (a, b) => taskNum(a) - taskNum(b)
+const dependencyOrderError = (dependent, dependency) =>
+  new Error(
+    `dependency order violation: ${dependent} depends on ${dependency}; dependency must have a smaller numeric ID`,
+  )
 const statusOf = (status) => {
   if (status === undefined) return DEFAULT_TASK_STATUS
   const normalized = String(status).trim().toLowerCase()
   return TASK_STATUSES.has(normalized) ? normalized : UNKNOWN_TASK_STATUS
+}
+
+/**
+ * Canonical spelling of a declared task file path, so that equivalent spellings of one file
+ * collide during wave scheduling. Converts backslashes to `/`, applies POSIX normalization,
+ * removes a leading `./` and redundant separators, and lowercases on case-insensitive platforms.
+ *
+ * @param {string} filePath declared path from a task's `Files:` line
+ * @param {NodeJS.Platform} [platform] platform whose filesystem case rules apply
+ * @returns {string} canonical path used for file-conflict comparison
+ */
+export function canonicalPath(filePath, platform = process.platform) {
+  if (typeof filePath !== 'string' || filePath.trim() === '') {
+    throw new Error(`canonicalPath requires a non-empty string path (got: ${JSON.stringify(filePath)})`)
+  }
+  const posixSpelling = path.posix.normalize(filePath.trim().replace(/\\/g, '/'))
+  // `normalize` already collapses inner `./` and duplicate separators, but keeps a bare "./"
+  // and a trailing separator — both redundant for a file path.
+  const withoutLeadingDot = posixSpelling.startsWith('./') ? posixSpelling.slice(2) : posixSpelling
+  const trimmed =
+    withoutLeadingDot.length > 1 && withoutLeadingDot.endsWith('/')
+      ? withoutLeadingDot.slice(0, -1)
+      : withoutLeadingDot
+  return CASE_INSENSITIVE_PLATFORMS.has(platform) ? trimmed.toLowerCase() : trimmed
 }
 
 /** Parse a TASKS.md into [{ id, title, dependsOn, files, requirements, status }]. */
@@ -102,9 +134,13 @@ export function parseTasks(markdown) {
 
 /**
  * Compute execution waves. Returns { waves: [[id]], maxWidth, parallelizable, blocked, inProgress }.
- * Throws on unknown dependencies or dependency cycles.
+ * File conflicts are compared on canonical paths (see `canonicalPath`).
+ * Throws on unknown dependencies, dependency cycles, or forward (equal-or-greater) dependencies.
  */
-export function computeWaves(tasks, { maxConcurrency = DEFAULT_MAX_CONCURRENCY } = {}) {
+export function computeWaves(
+  tasks,
+  { maxConcurrency = DEFAULT_MAX_CONCURRENCY, platform = process.platform } = {},
+) {
   // Validate the cap explicitly: non-numeric / <=0 must fall back to the documented default,
   // not disable the cap by silently becoming Infinity (violates the "never >10 subagents" contract).
   const cap = Number.isFinite(maxConcurrency) && maxConcurrency >= 1 ? Math.floor(maxConcurrency) : DEFAULT_MAX_CONCURRENCY
@@ -117,6 +153,9 @@ export function computeWaves(tasks, { maxConcurrency = DEFAULT_MAX_CONCURRENCY }
   for (const t of tasks) {
     for (const dep of t.dependsOn) {
       if (!byId.has(dep)) throw new Error(`${t.id} has unknown dependency ${dep}`)
+      // A self-dependency is a declaration error, not a graph cycle: report it here so the
+      // operator gets the dependency-order message naming the task instead of a cycle list.
+      if (dep === t.id) throw dependencyOrderError(t.id, dep)
     }
   }
 
@@ -151,6 +190,15 @@ export function computeWaves(tasks, { maxConcurrency = DEFAULT_MAX_CONCURRENCY }
       .filter((id) => !visited.has(id))
       .sort(compareTaskIds)
     throw new Error(`dependency cycle among: ${cyclic.join(', ')}`)
+  }
+
+  // Backlogs are authored in dependency order, so a dependency must always carry a smaller
+  // numeric ID. Checked after cycle validation (which reports the richer participant list for
+  // mutual edges) and before any scheduling, so a forward reference never reaches a wave.
+  for (const task of [...tasks].sort((a, b) => compareTaskIds(a.id, b.id))) {
+    for (const dependency of task.dependsOn) {
+      if (taskNum(dependency) >= taskNum(task.id)) throw dependencyOrderError(task.id, dependency)
+    }
   }
 
   const statuses = new Map(tasks.map((task) => [task.id, statusOf(task.status)]))
@@ -199,6 +247,9 @@ export function computeWaves(tasks, { maxConcurrency = DEFAULT_MAX_CONCURRENCY }
       .filter((task) => statuses.get(task.id) === DEFAULT_TASK_STATUS && !blockedById.has(task.id))
       .map((task) => task.id),
   )
+  const canonicalFilesById = new Map(
+    tasks.map((task) => [task.id, (task.files ?? []).map((file) => canonicalPath(file, platform))]),
+  )
   const waves = []
 
   while (remaining.size) {
@@ -216,7 +267,7 @@ export function computeWaves(tasks, { maxConcurrency = DEFAULT_MAX_CONCURRENCY }
 
     for (const id of ready) {
       if (wave.length >= cap) break // concurrency cap → rest flow to the next wave
-      const files = byId.get(id).files
+      const files = canonicalFilesById.get(id)
       if (files.length === 0) {
         // Unknown blast radius → run alone.
         if (wave.length === 0) {

@@ -1,6 +1,7 @@
-import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import type { ModelSource } from './modelSource.js'
 import type { CodexUsage } from './types.js'
 
 /**
@@ -31,6 +32,11 @@ export interface MetricEntry {
   runId?: string
   /** Model requested for the run (via --model). Absent when the CLI default was used / legacy lines. */
   model?: string
+  /**
+   * Provenance of `model` (T6): 'event' as reported by the run, 'override' as requested by this
+   * server, 'config' as read from ~/.codex/config.toml. Absent whenever `model` is absent.
+   */
+  modelSource?: ModelSource
   /** Batch task identity ("task-<index>"), codex_batch runs only. */
   taskId?: string
   /** Time spent waiting on the concurrency gate + cwd lock before the run started. */
@@ -113,6 +119,16 @@ export interface TokenTotals {
   reasoningOutput: number
 }
 
+/**
+ * How many of a model bucket's runs attributed the model to each provenance (T6 `modelSource`).
+ * Makes a config-inferred attribution visible instead of indistinguishable from a reported one.
+ */
+export interface ModelSourceCounts {
+  event: number
+  override: number
+  config: number
+}
+
 /** Per-model roll-up inside an Aggregate. */
 export interface ModelAggregate {
   runs: number
@@ -121,6 +137,11 @@ export interface ModelAggregate {
   tokens: TokenTotals
   /** Sum of per-run COST_TABLE estimates. Absent when the model has no rates. */
   estimatedCostUsd?: number
+  /**
+   * Provenance breakdown of this bucket's runs. Absent when no entry in the bucket recorded a
+   * `modelSource` (legacy logs), so an existing payload is unchanged until provenance exists.
+   */
+  sources?: ModelSourceCounts
 }
 
 export interface Aggregate {
@@ -175,21 +196,81 @@ export const isMetricsWriteSuppressed = (
 export const defaultLogPath = (): string =>
   process.env.CODEX_MCP_METRICS_LOG ?? join(homedir(), '.codex-mcp', 'metrics.jsonl')
 
-/** Parse the opt-in pricing table from CODEX_MCP_PRICING (JSON). Malformed → undefined, no throw. */
+/**
+ * Shape rules for one JSONL metric line, mirroring `isMetricEntry` in `scripts/session-cost.mjs`.
+ * The script is stdlib-only and cannot import from `dist/`, so the two predicate lists are kept
+ * literally parallel: any rule added here must be added there in the same order.
+ */
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const isFiniteNonNegative = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0
+
+const isParseableDate = (value: unknown): boolean =>
+  typeof value === 'string' && value.length > 0 && Number.isFinite(Date.parse(value))
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0
+
+const MODEL_SOURCES: readonly ModelSource[] = ['event', 'override', 'config']
+
+// A model name from the log becomes an aggregation key. These three would target
+// Object.prototype in any plain-object bucket store, so reject the line outright rather
+// than rely on every consumer using a Map. Mirrored in scripts/session-cost.mjs.
+const UNSAFE_KEY_NAMES: readonly string[] = ['__proto__', 'constructor', 'prototype']
+
+const isSafeModelName = (value: unknown): value is string =>
+  isNonEmptyString(value) && !UNSAFE_KEY_NAMES.includes(value)
+
+const hasValidUsage = (usage: unknown): boolean =>
+  usage === null ||
+  (isRecord(usage) &&
+    isFiniteNonNegative(usage.inputTokens) &&
+    isFiniteNonNegative(usage.cachedInputTokens) &&
+    isFiniteNonNegative(usage.outputTokens) &&
+    isFiniteNonNegative(usage.reasoningOutputTokens))
+
+/** True when an untrusted parsed JSONL value is a usable metric entry. Same rules as session-cost. */
+export const isValidMetricEntry = (entry: unknown): entry is MetricEntry =>
+  isRecord(entry) &&
+  isParseableDate(entry.ts) &&
+  isNonEmptyString(entry.tool) &&
+  typeof entry.cwd === 'string' &&
+  (entry.exitCode === null || Number.isInteger(entry.exitCode)) &&
+  isFiniteNonNegative(entry.durationMs) &&
+  hasValidUsage(entry.usage) &&
+  (entry.model === undefined || isSafeModelName(entry.model)) &&
+  (entry.modelSource === undefined || MODEL_SOURCES.includes(entry.modelSource as ModelSource)) &&
+  (entry.errorKind === undefined || typeof entry.errorKind === 'string') &&
+  (entry.errorCount === undefined || isFiniteNonNegative(entry.errorCount)) &&
+  (entry.timedOut === undefined || typeof entry.timedOut === 'boolean') &&
+  (entry.aborted === undefined || typeof entry.aborted === 'boolean')
+
+const PRICING_KEYS: readonly (keyof PricingTable)[] = [
+  'inputPer1M',
+  'cachedInputPer1M',
+  'outputPer1M',
+  'reasoningOutputPer1M',
+]
+
+/**
+ * Parse the opt-in pricing table from CODEX_MCP_PRICING (JSON). Malformed → undefined, no throw.
+ * A rate must be a finite non-negative number: negative, NaN and infinite rates are rejected
+ * rather than silently producing a nonsense cost (R7.2).
+ */
 export const parsePricing = (raw: string | undefined): PricingTable | undefined => {
   if (!raw) return undefined
   try {
-    const obj: unknown = JSON.parse(raw)
-    if (typeof obj !== 'object' || obj === null) return undefined
-    const p = obj as Partial<PricingTable>
-    if (
-      typeof p.inputPer1M !== 'number' ||
-      typeof p.cachedInputPer1M !== 'number' ||
-      typeof p.outputPer1M !== 'number' ||
-      typeof p.reasoningOutputPer1M !== 'number'
-    )
-      return undefined
-    return p as PricingTable
+    const parsed: unknown = JSON.parse(raw)
+    if (!isRecord(parsed)) return undefined
+    if (!PRICING_KEYS.every((key) => isFiniteNonNegative(parsed[key]))) return undefined
+    return {
+      inputPer1M: parsed.inputPer1M as number,
+      cachedInputPer1M: parsed.cachedInputPer1M as number,
+      outputPer1M: parsed.outputPer1M as number,
+      reasoningOutputPer1M: parsed.reasoningOutputPer1M as number,
+    }
   } catch {
     return undefined
   }
@@ -222,37 +303,106 @@ export const appendMetric = (entry: MetricEntry, options: MetricsLogOptions = {}
   }
 }
 
-/** Parse one file's JSONL content into entries, tolerating malformed lines (skip). [] if unreadable. */
-const readMetricsFile = (path: string): MetricEntry[] => {
+/**
+ * One-line notice emitted when a rotated back-file exists: rotation keeps exactly one, so anything
+ * older than it has already been discarded and no report can account for it (R7.3).
+ */
+export const ROTATION_NOTICE = 'metrics: history older than one rotation is not retained'
+
+/** Entries plus the read diagnostics a report needs to disclose what it could not account for. */
+export interface MetricsDiagnostics {
+  entries: MetricEntry[]
+  /** Lines skipped for invalid JSON or an invalid metric shape, across both files. */
+  invalidLines: number
+  /** Present only when the `<file>.1` rotation file exists. */
+  rotationNotice?: typeof ROTATION_NOTICE
+  /**
+   * One message per file that exists but could not be read (EACCES, EISDIR, …), rotated file
+   * first. A missing file is normal and never listed. Absent when every read succeeded, so a
+   * healthy payload is unchanged.
+   */
+  readErrors?: string[]
+}
+
+interface FileReadResult {
+  entries: MetricEntry[]
+  invalidLines: number
+  /** Set when the file exists but could not be read; the entries are then unknown, not empty. */
+  readError?: string
+}
+
+/**
+ * Message for a failed metrics-log read, or undefined for a missing file (normal). Must stay
+ * byte-identical to `readFailureMessage` in scripts/session-cost.mjs.
+ */
+const readFailureMessage = (path: string, error: unknown): string | undefined => {
+  if (isRecord(error) && error.code === 'ENOENT') return undefined
+  const detail = error instanceof Error ? error.message : 'unknown filesystem error'
+  return `unable to read metrics log ${path}: ${detail}`
+}
+
+/**
+ * Parse one file's JSONL content, skipping lines with invalid JSON or an invalid metric shape and
+ * counting them. A missing file yields no entries; a file that exists but cannot be read yields a
+ * `readError` so the caller can disclose the gap rather than report an empty log (R7.2).
+ */
+const readMetricsFile = (path: string): FileReadResult => {
   let content: string
   try {
     content = readFileSync(path, 'utf8')
-  } catch {
-    return []
+  } catch (error: unknown) {
+    const readError = readFailureMessage(path, error)
+    return readError === undefined
+      ? { entries: [], invalidLines: 0 }
+      : { entries: [], invalidLines: 0, readError }
   }
-  const out: MetricEntry[] = []
-  for (const line of content.split('\n')) {
-    const t = line.trim()
-    if (!t) continue
+  const entries: MetricEntry[] = []
+  let invalidLines = 0
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.trim()) continue
+    let parsed: unknown
     try {
-      const parsed: unknown = JSON.parse(t)
-      if (typeof parsed !== 'object' || parsed === null) continue
-      out.push(parsed as MetricEntry)
+      parsed = JSON.parse(line)
     } catch {
-      // skip malformed line
+      invalidLines += 1
+      continue
     }
+    if (!isValidMetricEntry(parsed)) {
+      invalidLines += 1
+      continue
+    }
+    entries.push(parsed)
   }
-  return out
+  return { entries, invalidLines }
+}
+
+/**
+ * Read metric entries plus diagnostics from the log and its rotated back-file (`<file>.1`),
+ * oldest first. Rotation keeps exactly one back-file (see appendMetric), so its presence means
+ * older history is already gone — reported as `rotationNotice`.
+ */
+export const readMetricsDetailed = (options: MetricsLogOptions = {}): MetricsDiagnostics => {
+  const logPath = options.logPath ?? defaultLogPath()
+  const rotatedPath = `${logPath}.1`
+  const rotated = readMetricsFile(rotatedPath)
+  const live = readMetricsFile(logPath)
+  const readErrors = [rotated.readError, live.readError].filter(
+    (message): message is string => message !== undefined,
+  )
+  const base: MetricsDiagnostics = {
+    entries: [...rotated.entries, ...live.entries],
+    invalidLines: rotated.invalidLines + live.invalidLines,
+  }
+  const diagnostics = readErrors.length > 0 ? { ...base, readErrors } : base
+  return existsSync(rotatedPath) ? { ...diagnostics, rotationNotice: ROTATION_NOTICE } : diagnostics
 }
 
 /**
  * Read metric entries from the log plus its rotated back-file (`<file>.1`), oldest first.
- * Rotation keeps exactly one back-file (see appendMetric), so reading both covers all history.
+ * Kept as an entries array for existing callers; use `readMetricsDetailed` for diagnostics.
  */
-export const readMetrics = (options: MetricsLogOptions = {}): MetricEntry[] => {
-  const logPath = options.logPath ?? defaultLogPath()
-  return [...readMetricsFile(`${logPath}.1`), ...readMetricsFile(logPath)]
-}
+export const readMetrics = (options: MetricsLogOptions = {}): MetricEntry[] =>
+  readMetricsDetailed(options).entries
 
 const inRange = (entry: MetricEntry, filters: AggregateFilters): boolean => {
   if (filters.since && entry.ts < filters.since) return false
@@ -263,12 +413,24 @@ const inRange = (entry: MetricEntry, filters: AggregateFilters): boolean => {
   return true
 }
 
-// Failure = process-level failure OR Codex-emitted errors (turn.failed etc.) despite exit 0.
-// `errorCount` is absent on legacy lines — treat as 0 so old logs aggregate unchanged.
-const isFailedEntry = (e: MetricEntry): boolean =>
-  e.exitCode !== 0 || e.timedOut === true || e.aborted === true || (e.errorCount ?? 0) > 0
+/**
+ * Failure = process-level failure OR Codex-emitted errors (turn.failed etc.) despite exit 0.
+ * `errorCount` and `errorKind` are absent on legacy lines — treated as "no error" so old logs
+ * aggregate unchanged. A recorded `errorKind` alone counts as a failure: a run classified as
+ * 'timeout'/'abort'/'turn-failed' is a failure even if the counter never made it to the line.
+ * Must stay equivalent to `isFailedEntry` in scripts/session-cost.mjs (parity-tested).
+ */
+export const isFailedEntry = (e: MetricEntry): boolean =>
+  e.exitCode !== 0 ||
+  e.timedOut === true ||
+  e.aborted === true ||
+  (e.errorCount ?? 0) > 0 ||
+  (typeof e.errorKind === 'string' && e.errorKind.length > 0)
 
 const zeroTokens = (): TokenTotals => ({ input: 0, cachedInput: 0, output: 0, reasoningOutput: 0 })
+
+/** Starting point for a bucket's provenance counts; never mutated (spread into a new object). */
+const ZERO_MODEL_SOURCES: Readonly<ModelSourceCounts> = { event: 0, override: 0, config: 0 }
 
 const addUsage = (tokens: TokenTotals, usage: CodexUsage): void => {
   tokens.input += usage.inputTokens
@@ -279,21 +441,34 @@ const addUsage = (tokens: TokenTotals, usage: CodexUsage): void => {
 
 const roundUsd = (n: number): number => Number(n.toFixed(COST_DECIMALS))
 
-/** Fold one entry into the per-model breakdown; returns the entry's cost estimate (if priceable). */
+/**
+ * Fold one entry into the per-model breakdown; returns the entry's cost estimate (if priceable).
+ * The bucket store is a Map, never a plain object: model names come from the log file, so an
+ * attacker-supplied `__proto__` would otherwise resolve to Object.prototype and pollute it.
+ */
 const applyModelEntry = (
-  byModel: Record<string, ModelAggregate>,
+  byModel: Map<string, ModelAggregate>,
   e: MetricEntry,
   costTable: Readonly<Record<string, ModelCostRates>>,
 ): number | undefined => {
   if (!e.model) return undefined
-  const bucket = byModel[e.model] ?? { runs: 0, failed: 0, totalDurationMs: 0, tokens: zeroTokens() }
+  const bucket = byModel.get(e.model) ?? {
+    runs: 0,
+    failed: 0,
+    totalDurationMs: 0,
+    tokens: zeroTokens(),
+  }
   bucket.runs++
   bucket.totalDurationMs += e.durationMs
   if (isFailedEntry(e)) bucket.failed++
   if (e.usage) addUsage(bucket.tokens, e.usage)
+  if (e.modelSource !== undefined) {
+    const sources = bucket.sources ?? ZERO_MODEL_SOURCES
+    bucket.sources = { ...sources, [e.modelSource]: sources[e.modelSource] + 1 }
+  }
   const cost = estimateCostUsd(e.model, e.usage, costTable)
   if (cost !== undefined) bucket.estimatedCostUsd = roundUsd((bucket.estimatedCostUsd ?? 0) + cost)
-  byModel[e.model] = bucket
+  byModel.set(e.model, bucket)
   return cost
 }
 
@@ -337,6 +512,11 @@ export const aggregate = (
     byModel: {},
     failed: 0,
   }
+  // Tool and model names are untrusted log content: accumulate in Maps so a `__proto__`
+  // key cannot resolve to Object.prototype, then materialize the records via
+  // Object.fromEntries, which defines own properties instead of assigning through setters.
+  const byTool = new Map<string, { runs: number; totalDurationMs: number }>()
+  const byModel = new Map<string, ModelAggregate>()
   const queueMean = createMeanTracker()
   const firstProgressMean = createMeanTracker()
   let costSum: number | undefined
@@ -346,15 +526,17 @@ export const aggregate = (
     agg.totalDurationMs += e.durationMs
     if (isFailedEntry(e)) agg.failed++
     if (e.usage) addUsage(agg.totalTokens, e.usage)
-    const bucket = agg.byTool[e.tool] ?? { runs: 0, totalDurationMs: 0 }
+    const bucket = byTool.get(e.tool) ?? { runs: 0, totalDurationMs: 0 }
     bucket.runs++
     bucket.totalDurationMs += e.durationMs
-    agg.byTool[e.tool] = bucket
+    byTool.set(e.tool, bucket)
     queueMean.add(e.queueMs)
     firstProgressMean.add(e.timeToFirstProgressMs)
-    const cost = applyModelEntry(agg.byModel, e, costTable)
+    const cost = applyModelEntry(byModel, e, costTable)
     if (cost !== undefined) costSum = (costSum ?? 0) + cost
   }
+  agg.byTool = Object.fromEntries(byTool)
+  agg.byModel = Object.fromEntries(byModel)
   agg.avgQueueMs = queueMean.value()
   agg.avgTimeToFirstProgressMs = firstProgressMean.value()
   if (costSum !== undefined) agg.estimatedCostUsd = roundUsd(costSum)

@@ -2,6 +2,7 @@ import type { RunOptions, RunOutcomeWithEvents } from './codexRunner.js'
 import { parseEvents, type ParsedEvents } from './eventParser.js'
 import type { LiveView } from './liveView.js'
 import { appendMetric, errorMessageHead, type MetricEntry } from './metricsLog.js'
+import { resolveModel, type ModelSource } from './modelSource.js'
 import { writeNotes, type NotesRequest } from './notesWriter.js'
 import { combineSinks, type ProgressNotifier, type ProgressSink } from './progressNotifier.js'
 import { deriveRunStatus, isErrorStatus, RESULT_SCHEMA_VERSION } from './runStatus.js'
@@ -42,7 +43,7 @@ export interface RunAndReportDeps {
   notes?: Omit<NotesRequest, 'sessionId' | 'parsed' | 'exitCode' | 'runId'>
   /** Which tool invoked runAndReport, so the metric log can attribute the run. */
   tool: MetricEntry['tool']
-  /** Model requested for the run (via --model). Absent → CLI default, not recorded. */
+  /** Model requested for the run (via --model). Absent → resolved from the event stream or config. */
   model?: string
   /** Batch task identity ("task-<index>"), recorded for codex_batch runs. */
   taskId?: string
@@ -160,6 +161,12 @@ interface RunTimings {
   firstStdoutAt?: number
 }
 
+/**
+ * Metric line plus the provenance of its `model` field. Additive: `modelSource` is absent whenever
+ * `model` is, so consumers of the plain MetricEntry shape are unaffected.
+ */
+export type MetricEntryWithModelSource = MetricEntry & { modelSource?: ModelSource }
+
 /** One passive JSONL metric line per completed run (T5 telemetry). */
 const buildMetricEntry = (
   deps: RunAndReportDeps,
@@ -168,27 +175,33 @@ const buildMetricEntry = (
   parsed: ParsedEvents,
   aborted: boolean,
   timings: RunTimings,
-): MetricEntry => ({
-  ts: new Date().toISOString(),
-  tool: deps.tool,
-  cwd,
-  sessionId: parsed.sessionId,
-  exitCode: outcome.exitCode,
-  durationMs: Date.now() - timings.startedAt,
-  usage: parsed.usage,
-  timedOut: outcome.timedOut,
-  aborted,
-  truncated: outcome.truncated ?? false,
-  errorCount: parsed.errors.length,
-  errorKind: deriveErrorKind(outcome, aborted, parsed.errors.length),
-  errorMessage: errorMessageHead(parsed.errors),
-  runId: deps.runId,
-  model: deps.model,
-  taskId: deps.taskId,
-  queueMs: deps.queueMs,
-  timeToFirstProgressMs:
-    timings.firstStdoutAt === undefined ? undefined : timings.firstStdoutAt - timings.spawnAt,
-})
+): MetricEntryWithModelSource => {
+  // Authority order: what the run reported > what we asked for > what the CLI is configured to
+  // default to. No source at all leaves both fields absent rather than guessing (R7.1).
+  const resolved = resolveModel(parsed.model, deps.model)
+  return {
+    ts: new Date().toISOString(),
+    tool: deps.tool,
+    cwd,
+    sessionId: parsed.sessionId,
+    exitCode: outcome.exitCode,
+    durationMs: Date.now() - timings.startedAt,
+    usage: parsed.usage,
+    timedOut: outcome.timedOut,
+    aborted,
+    truncated: outcome.truncated ?? false,
+    errorCount: parsed.errors.length,
+    errorKind: deriveErrorKind(outcome, aborted, parsed.errors.length),
+    errorMessage: errorMessageHead(parsed.errors),
+    runId: deps.runId,
+    model: resolved?.model,
+    modelSource: resolved?.source,
+    taskId: deps.taskId,
+    queueMs: deps.queueMs,
+    timeToFirstProgressMs:
+      timings.firstStdoutAt === undefined ? undefined : timings.firstStdoutAt - timings.spawnAt,
+  }
+}
 
 /** Run one Codex invocation and return the raw payload; shared by codex_execute/continue/review/batch. */
 export const runOnce = async (

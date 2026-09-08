@@ -10,6 +10,7 @@ import { parseTasks } from './task-waves.mjs'
 export const TASK_SLICE_TOKEN_BUDGET = 4000
 export const RESUME_TOKEN_BUDGET = 8000
 export const RECENCY_FLOOR_BLOCKS = 3
+export const SCOPED_RECENCY_FLOOR_BLOCKS = 0
 export const MANDATORY_TIER_CEILING = 2000
 export const CONTRACTS_INDEX_TOKEN_CAP = 600
 export const CONTRACTS_INDEX_LINE_CHAR_CAP = 160
@@ -23,6 +24,7 @@ const DECISION_FIELDS = [
   'Contracts touched',
 ]
 const APPLIES_TO_FIELD = 'Applies to'
+const APPLIES_TO_ALL_TOKEN = 'all'
 const PARSED_DECISION_FIELDS = [...DECISION_FIELDS, APPLIES_TO_FIELD, 'Anchor']
 const TASK_BLOCK_ID = /^T\d+$/
 const CONTRACT_LABEL = /\b[A-Z]+\d+\b/g
@@ -199,12 +201,28 @@ function validateFilterInput(blocks, task, recencyFloor, taskRaw) {
   }
 }
 
+/** True when `Applies to:` names this exact task ID (word-bounded) or the `all` token. */
+function hasDirectTaskScope(appliesTo, taskId) {
+  if (typeof appliesTo !== 'string' || !appliesTo.trim()) return false
+  if (hasTokenIgnoringCase(appliesTo, APPLIES_TO_ALL_TOKEN)) return true
+  if (typeof taskId !== 'string' || !taskId.trim()) return false
+  return hasTokenIgnoringCase(appliesTo, taskId)
+}
+
 function appliesToTask(appliesTo, task, labels) {
   if (typeof appliesTo !== 'string' || !appliesTo.trim()) return false
-  if (hasTokenIgnoringCase(appliesTo, 'all')) return true
-  if (hasTokenIgnoringCase(appliesTo, task.id)) return true
+  if (hasDirectTaskScope(appliesTo, task.id)) return true
   if (task.files.some((filePath) => fileIsMentioned(appliesTo, filePath))) return true
   return labels.some((label) => hasToken(appliesTo, label))
+}
+
+/**
+ * C8: an explicitly scoped decision block carries the task's own context, so the
+ * recency fallback that keeps unrelated newest blocks is no longer needed.
+ */
+function effectiveRecencyFloorOf(blocks, taskId, recencyFloor) {
+  const hasExplicitScope = blocks.some((block) => hasDirectTaskScope(block.appliesTo, taskId))
+  return hasExplicitScope ? SCOPED_RECENCY_FLOOR_BLOCKS : recencyFloor
 }
 
 function explicitlyScopedBlocksForTask(blocks, task, taskRaw) {
@@ -220,7 +238,8 @@ export function filterBlocksForTask(
 ) {
   validateFilterInput(blocks, task, recencyFloor, taskRaw)
   const labels = contractLabelsOf(task.raw ?? taskRaw ?? '')
-  const recentStart = Math.max(0, blocks.length - recencyFloor)
+  const effectiveFloor = effectiveRecencyFloorOf(blocks, task.id, recencyFloor)
+  const recentStart = Math.max(0, blocks.length - effectiveFloor)
 
   return blocks.filter((block, index) => {
     if (appliesToTask(block.appliesTo, task, labels)) return true
