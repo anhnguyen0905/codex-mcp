@@ -3,6 +3,27 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.26.0] - 2026-09-09
+
+### Added
+
+- **Fail-closed flow (R1)** — every helper call site in the command and skills carries one canonical sentence: a missing helper stops the run with a reinstall hint; no hand edits of `.codex-flow/STATE.md`/TASKS.md; guarded recursively over `skills/**` (`tests/flowDocs.test.ts`).
+- **Fast-path before health (R2)** — Phase 0 evaluates the fast-path gate before any `codex_health` call; the analysis lane never spawns Codex unless a second opinion is requested.
+- **Auth-aware model selection (R3)** — `codex_health` reports `authMode: chatgpt | apikey | unknown`; an explicit `model` under ChatGPT auth is rejected before spawn (`codex_batch`: per-task failed result); the command tells the executor to pass `model` only under `apikey`.
+- **Scope-aware review (R4)** — `codex_review` accepts `scope: { files, contract }`; findings gain `inScope`, `reviewFindings.outOfScopeCount`; out-of-scope findings route to the improvements ledger by default.
+- **Secret redaction (R5)** — `src/redaction.ts` (OpenAI/GitHub/AWS/Slack/Google keys, Bearer, JWT, PEM, `KEY=value` secrets) applied at every sink: verification tail, agentMessage before review parsing, stderr/errors, notes, live-log lines (still valid JSON); payloads carry `redactions` / batch `redactionsTotal`.
+- **Metrics history and completeness (R6)** — rotation archives the previous back-file to `~/.codex-mcp/history/metrics-<ts>.jsonl` under a lock, never deletes; `includeHistory` / `--history` readers; `completeness` block (`unpricedRuns`, `missingUsage`, `readErrors`, `historyExcluded`); `doctor` reports the history dir.
+- **PROJECT.md project context (R7)** — `scripts/project-context.mjs --generate | --refresh | --check` builds a budgeted, injection-guarded `.codex-flow/PROJECT.md` with preserved owner-notes; task slices embed a `## Project context` item; Phase 0 generates it, Phase 2 reads it, Phase 5 proposes `--refresh` on architecture changes.
+- **Command diet with byte guards (R8)** — fast-path and executor-fallback sections extracted to `codex-flow:fast-path` and `codex-flow:executor-fallback`; command 59 586 → 43 948 bytes; guards `COMMAND_MAX_BYTES 44 000`, `PHASE_SKILLS_MAX_BYTES 44 000`, `FLOW_TOTAL_MAX_BYTES 160 000`.
+- **npm smoke (R9)** — `scripts/npm-smoke.mjs` installs the packed tarball (or `--version`) and asserts the seven tools over MCP stdio; `publish.yml` runs it post-publish; `ci.yml` runs it on a 3-OS matrix.
+- **`codex-flow:exec-github-actions`** skill for workflow edits.
+
+### Changed
+
+- Closed the 0.25.0 improvements ledger (IMP-20..30): schema refinement `dropped === droppedReasons.length`, violation-ordering test, case-insensitive A-ID rule, sentence splitting on `!`/`?`, clause-scoped allowlist, model-cache eviction tests and content-hash invalidation, session-cost `sources` column, `errorCount` parity, node_modules exclusion note.
+- `ROTATION_NOTICE` replaced by `ROTATION_NOTICE_TEMPLATE` + `rotationNoticeFor(historyDir, historyFiles)` in both readers; the notice is emitted only when history files exist.
+- `aggregate()` gains a diagnostics parameter; `Aggregate.completeness` is always present.
+
 ## [0.25.0] - 2026-09-09
 
 ### Added
