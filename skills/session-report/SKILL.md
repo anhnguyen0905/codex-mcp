@@ -81,8 +81,15 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/session-cost.mjs" --since "<session-start IS
 Fall back to `--cwd "$PWD"` instead of `--session` flags only when no session ids exist (for example,
 every task ran under the Claude-executor fallback).
 
-If `${CLAUDE_PLUGIN_ROOT}` is unset in a standalone install, locate `session-cost.mjs` in the codex-mcp package or repository install; if unavailable, still write `cost.md` with the Claude qualitative section, mark measured Codex cost `unavailable`, never fabricate numbers, and never embed raw stderr.
-When the helper is available, embed its command output in `cost.md`.
+If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.
+Embed the helper's output in `cost.md` verbatim — `## Totals`, the nine-column `## Per model` table
+(Model, Runs, Failed, Duration (ms), Input, Cached input, Output, Reasoning output, Sources), `## Per
+tool`, the estimated-cost line, and `## Completeness` (Complete, Unpriced runs, Missing usage, Read
+errors, History excluded). Never fabricate numbers and never embed raw stderr.
+`Complete` is `no` whenever anything went unaccounted for: unpriced runs (usage reported without
+`CODEX_MCP_PRICING`), entries missing usage, metrics-log read errors, or archived history left out —
+re-run with `--history` to include the archives. Say in `cost.md` which of those made it `no`
+instead of presenting an incomplete roll-up as the full session cost.
 Always add Claude phase durations and the review rounds count, and mark Claude tokens explicitly as `not measurable`.
 
 ## Match the session language

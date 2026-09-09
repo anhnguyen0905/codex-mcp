@@ -31,6 +31,7 @@ jobs:
   publish:
     name: publish to npm
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write # OIDC trusted publishing + provenance attestation
@@ -88,3 +89,11 @@ jobs:
           done
           echo "::error::@anhnguyen0905/codex-mcp@${version} never became resolvable"
           exit 1
+
+      # A version that resolves but cannot boot is still a broken release: run the
+      # published package exactly as the plugin's .mcp.json does and require the
+      # seven tools. Non-zero exit fails the release (R9.2).
+      - name: smoke the published version
+        shell: bash
+        timeout-minutes: 10
+        run: node scripts/npm-smoke.mjs --version "${GITHUB_REF_NAME#v}"

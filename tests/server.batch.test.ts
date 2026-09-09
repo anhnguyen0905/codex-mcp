@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { describe, expect, test, vi } from 'vitest'
-import { createServer } from '../src/server.js'
+import { createServer, MODEL_GUARD_MESSAGE } from '../src/server.js'
 import type { RunOutcome } from '../src/types.js'
 
 const okJsonl = (id: string): string =>
@@ -382,5 +382,147 @@ describe('codex_batch tool', () => {
     const r = await client.callTool({ name: 'codex_batch', arguments: { tasks: [] } })
     expect(r.isError).toBe(true)
     expect(runFn).not.toHaveBeenCalled()
+  })
+})
+
+const versionOutcome: RunOutcome = { stdout: 'codex-cli 0.144.1', stderr: '', exitCode: 0, timedOut: false }
+
+/** Server whose auth mode is already detected as ChatGPT via one real codex_health round-trip. */
+const connectChatGptAuth = async () => {
+  const runFn = vi.fn(async (args: string[], opts: { cwd: string }) => {
+    if (args[0] === '--version') return versionOutcome
+    if (args[0] === 'login') {
+      return { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 0, timedOut: false } satisfies RunOutcome
+    }
+    return {
+      stdout: [okJsonl(`sess-${opts.cwd.slice(-1)}`), JSON.stringify({ type: 'turn.completed' })].join('\n'),
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+    } satisfies RunOutcome
+  })
+  const client = await connect(runFn as never)
+  await client.callTool({ name: 'codex_health', arguments: {} })
+  runFn.mockClear()
+  return { client, runFn }
+}
+
+describe('codex_batch model guard (R3.2, C2)', () => {
+  test('fails only the task that passed a model, without spawning it', async () => {
+    // Arrange
+    const { client, runFn } = await connectChatGptAuth()
+
+    // Act
+    const payload = parse(
+      await client.callTool({
+        name: 'codex_batch',
+        arguments: {
+          tasks: [
+            { cwd: '/w/1', prompt: 'a', model: 'gpt-5.1-codex' },
+            { cwd: '/w/2', prompt: 'b' },
+          ],
+        },
+      }),
+    )
+
+    // Assert — one spawn only (the unguarded task); the guarded task is a per-task failure.
+    expect(runFn).toHaveBeenCalledTimes(1)
+    const [guarded, allowed] = payload.tasks
+    expect(guarded.status).toBe('failed')
+    expect(guarded.isError).toBe(true)
+    expect((guarded.parsed as { errors: string[] }).errors).toEqual([MODEL_GUARD_MESSAGE])
+    expect(guarded.error).toBe(MODEL_GUARD_MESSAGE)
+    expect(allowed.status).toBe('success')
+  })
+
+  test('a guarded task does not make the batch itself an error (failFast default)', async () => {
+    // Arrange
+    const { client } = await connectChatGptAuth()
+
+    // Act
+    const result = await client.callTool({
+      name: 'codex_batch',
+      arguments: { tasks: [{ cwd: '/w/1', prompt: 'a', model: 'gpt-5.1-codex' }] },
+    })
+
+    // Assert — batch-level isError rules are unchanged: per-task status carries the failure.
+    expect(result.isError).toBeFalsy()
+    expect(parse(result).summary.failed).toBe(1)
+  })
+
+  test('failFast still surfaces a guarded task as a batch-level error', async () => {
+    // Arrange
+    const { client } = await connectChatGptAuth()
+
+    // Act
+    const result = await client.callTool({
+      name: 'codex_batch',
+      arguments: { tasks: [{ cwd: '/w/1', prompt: 'a', model: 'gpt-5.1-codex' }], failFast: true },
+    })
+
+    // Assert
+    expect(result.isError).toBe(true)
+  })
+})
+
+describe('codex_batch redactions (R5.2, C4)', () => {
+  /** A clean, completed task stream (turn.completed keeps auto-resume out of these tests). */
+  const cleanJsonl = (id: string): string =>
+    [okJsonl(id), JSON.stringify({ type: 'turn.completed' })].join('\n')
+
+  /** Task output whose agent message leaks a secret. */
+  const leakyJsonl = (id: string): string =>
+    [
+      JSON.stringify({ type: 'thread.started', thread_id: id }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: `key sk-ant-api03-${'A'.repeat(40)}` },
+      }),
+      JSON.stringify({ type: 'turn.completed' }),
+    ].join('\n')
+
+  test('forwards each task redactions and totals them on the batch payload', async () => {
+    // Arrange
+    const client = await connect(async (_args, opts) => ({
+      stdout: opts.cwd === '/w/1' ? leakyJsonl('sess-1') : cleanJsonl('sess-2'),
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+    }))
+
+    // Act
+    const payload = parse(
+      await client.callTool({
+        name: 'codex_batch',
+        arguments: { tasks: [{ cwd: '/w/1', prompt: 'a' }, { cwd: '/w/2', prompt: 'b' }] },
+      }),
+    ) as unknown as {
+      tasks: Array<{ redactions?: number; parsed: { agentMessage: string | null } }>
+      redactionsTotal?: number
+    }
+
+    // Assert — the adapter keeps the field at task level instead of folding it into `parsed`.
+    expect(payload.tasks[0].redactions).toBeGreaterThan(0)
+    expect(payload.tasks[0].parsed.agentMessage).not.toContain('sk-ant-api03-')
+    expect(payload.tasks[1].redactions).toBeUndefined()
+    expect(payload.redactionsTotal).toBe(payload.tasks[0].redactions)
+  })
+
+  test('omits redactionsTotal for a clean batch', async () => {
+    // Arrange
+    const client = await connect(async (_args, opts) => ({
+      stdout: cleanJsonl(`sess-${opts.cwd.slice(-1)}`),
+      stderr: '',
+      exitCode: 0,
+      timedOut: false,
+    }))
+
+    // Act
+    const payload = parse(
+      await client.callTool({ name: 'codex_batch', arguments: { tasks: [{ cwd: '/w/1', prompt: 'a' }] } }),
+    )
+
+    // Assert
+    expect(payload).not.toHaveProperty('redactionsTotal')
   })
 })

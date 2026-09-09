@@ -14,6 +14,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
 import { isBenignCliNotice } from './eventParser.js'
 import { LIVE_RUN_FINISHED_TYPE, type LiveRunFinishedStatus } from './progressFormatter.js'
+import { redactJsonLine } from './redaction.js'
 import { escapeDoubleQuotedShell, LINUX_TERMINALS, openTerminal, type LinuxTerminal } from './terminal.js'
 import { buildWatcherEnvExports, type TerminalCloseEnv } from './terminalCloser.js'
 
@@ -68,9 +69,8 @@ const createStreamStateTracker = () => {
 
   return {
     observeLine,
-    markerLine: (): string => {
-      return `${JSON.stringify({ type: LIVE_RUN_FINISHED_TYPE, status, sessionId, at: new Date().toISOString() })}\n`
-    },
+    markerLine: (): string =>
+      JSON.stringify({ type: LIVE_RUN_FINISHED_TYPE, status, sessionId, at: new Date().toISOString() }),
   }
 }
 
@@ -87,6 +87,14 @@ const stampEventLine = (line: string): string => {
     return line
   }
 }
+
+/**
+ * The single sink for the live log (R5.2): redact the line and terminate it. `redactJsonLine`
+ * parses and re-serializes a JSON line, so a redacted event stays valid JSON and
+ * `scripts/tail-progress.mjs` still parses it; a non-JSON line falls back to text redaction and is
+ * written through otherwise unchanged.
+ */
+const toLogLine = (line: string): string => `${redactJsonLine(line).line}\n`
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const TAIL_SCRIPT = join(HERE, '..', 'scripts', 'tail-progress.mjs')
@@ -225,7 +233,7 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
     const writeRawCarry = (): void => {
       if (carry.length === 0) return
       tracker.observeLine(carry)
-      stream.write(`${carry}\n`)
+      stream.write(toLogLine(carry))
       resetCarry()
     }
 
@@ -246,10 +254,10 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
       const firstLine = carry + (lines[0] ?? '')
       resetCarry()
       tracker.observeLine(firstLine)
-      stream.write(`${stampEventLine(firstLine)}\n`)
+      stream.write(toLogLine(stampEventLine(firstLine)))
       for (const line of lines.slice(1, -1)) {
         tracker.observeLine(line)
-        stream.write(`${stampEventLine(line)}\n`)
+        stream.write(toLogLine(stampEventLine(line)))
       }
       appendCarry(lines[lines.length - 1] ?? '')
     }
@@ -274,12 +282,12 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
         appendCarry(decoder.end())
         if (carry.length > 0) {
           tracker.observeLine(carry)
-          stream.write(`${stampEventLine(carry)}\n`)
+          stream.write(toLogLine(stampEventLine(carry)))
           resetCarry()
         }
         // Explicit end-of-run marker: lets watchers (scripts/tail-progress.mjs) detect that the
         // run settled and exit instead of following the file forever.
-        stream.end(tracker.markerLine())
+        stream.end(toLogLine(tracker.markerLine()))
       },
       logPath,
     }

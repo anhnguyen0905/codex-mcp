@@ -11,10 +11,12 @@ import {
   buildExecuteInvocation,
   type CodexInvocation,
 } from './argsBuilder.js'
+import { createAuthModeHolder, deriveAuthMode, type AuthMode, type AuthModeHolder } from './authMode.js'
 import { runCodex } from './codexRunner.js'
-import { runExecProbe } from './healthProbe.js'
+import { runExecProbe, type ExecProbe } from './healthProbe.js'
 import { createLiveView, type LiveView } from './liveView.js'
 import { createProgressNotifier, type ProgressNotifier } from './progressNotifier.js'
+import { redactSecrets } from './redaction.js'
 import { runWithRecovery } from './runRecovery.js'
 import type { RunFn } from './runReport.js'
 import {
@@ -35,13 +37,19 @@ import {
   type VerifyFn,
 } from './verification.js'
 import { isErrorStatus } from './runStatus.js'
-import { parseReviewFindings, REVIEW_FINDINGS_INSTRUCTIONS } from './reviewFindings.js'
+import {
+  annotateScope,
+  parseReviewFindings,
+  REVIEW_FINDINGS_INSTRUCTIONS,
+  type ReviewFindings,
+} from './reviewFindings.js'
 import { listSessions, MAX_LIMIT as MAX_SESSIONS_LIMIT } from './sessionStore.js'
 import { aggregate, parsePricing, readMetricsDetailed } from './metricsLog.js'
 import { REASONING_EFFORTS, SANDBOX_MODES, type RunOutcome } from './types.js'
 import {
   DEFAULT_BATCH_CONCURRENCY,
   MAX_ALLOWED_CONCURRENCY,
+  rejectedTaskResult,
   runBatch,
   type BatchTaskResult,
   type BatchTaskSpec,
@@ -54,6 +62,7 @@ import {
   summarizeBatch,
   toErrorResult,
   toToolResult,
+  type RunPayload,
   type BatchToolPayload,
   type HealthPayload,
   type LoginProbeStatus,
@@ -65,6 +74,33 @@ const MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000
 const HEALTH_TIMEOUT_MS = 30 * 1000
 
 const MAX_CONCURRENT_RUNS = parseMaxConcurrent(process.env.CODEX_MCP_MAX_CONCURRENT)
+
+/**
+ * Rejection message for an explicit `model` under ChatGPT auth (C2, R3.2). A ChatGPT-auth host
+ * answers `--model` with an API 400, so the guard fails closed before any spawn and points the
+ * caller at the override that does work.
+ */
+export const MODEL_GUARD_MESSAGE =
+  'model override is not allowed under ChatGPT auth; steer with reasoningEffort'
+
+/** True when this request must be refused before spawning Codex. `unknown` auth is permissive. */
+/**
+ * Redact the deep probe's message before it is returned (C4). Returns the probe fields to spread
+ * into the health payload (empty when no deep probe ran) plus the number of secrets replaced.
+ */
+const redactExecProbe = (
+  probe: ExecProbe | undefined,
+): { fields: Pick<HealthPayload, 'execProbe' | 'execProbeMessage'>, redactions: number } => {
+  if (probe === undefined) return { fields: {}, redactions: 0 }
+  const message = redactSecrets(probe.execProbeMessage)
+  return {
+    fields: { execProbe: probe.execProbe, execProbeMessage: message.text },
+    redactions: message.redactions,
+  }
+}
+
+const isModelOverrideBlocked = (holder: AuthModeHolder, model: string | undefined): boolean =>
+  model !== undefined && holder.get() === 'chatgpt'
 
 /** Read the package version at runtime so the MCP server-info never drifts from package.json. */
 const readVersion = (): string => {
@@ -204,6 +240,10 @@ const metricsShape = {
     .describe('Filter by which tool produced the run.'),
   cwd: z.string().optional().describe('Filter by exact cwd.'),
   sessionId: z.string().optional().describe('Filter by session id.'),
+  includeHistory: z
+    .boolean()
+    .optional()
+    .describe('Also aggregate the archived history/*.jsonl files, not just the live + rotated log (default false).'),
 }
 
 const batchTaskShape = z.object({
@@ -248,8 +288,33 @@ const batchShape = {
 const GIT_REF_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_./@{}^~-]*$/
 const MAX_REF_LENGTH = 256
 
+/** Scope limits (C3): a scope must name at least one file and stay small enough to prompt with. */
+const MAX_SCOPE_FILES = 200
+const MAX_CONTRACT_CHARS = 4000
+
+const scopeSchema = z
+  .object({
+    files: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(MAX_SCOPE_FILES)
+      .describe(`Paths the task is allowed to touch, relative to cwd (1-${MAX_SCOPE_FILES} entries).`),
+    contract: z
+      .string()
+      .max(MAX_CONTRACT_CHARS)
+      .optional()
+      .describe(`The task contract the reviewer should check conformance against (max ${MAX_CONTRACT_CHARS} chars).`),
+  })
+  .describe(
+    'Declared task scope. Findings gain `inScope` and reviewFindings gains `outOfScopeCount`; ' +
+      'nothing is dropped, so an out-of-scope defect is still reported.',
+  )
+
+type ReviewScope = z.infer<typeof scopeSchema>
+
 const reviewShape = {
   cwd: z.string().describe('Absolute path of the workspace to review'),
+  scope: scopeSchema.optional(),
   baselineRef: z
     .string()
     .min(1)
@@ -280,6 +345,26 @@ const reviewShape = {
     .boolean()
     .optional()
     .describe('Persist a markdown summary of this run to <cwd>/.codex-flow/notes/<sessionId>.md (default false).'),
+}
+
+/**
+ * Fixed-heading scope suffix (C3): contract first, then the file list, so the reviewer reads the
+ * conformance target before the blast radius. Absent scope leaves the prompt byte-identical.
+ */
+const buildScopeSuffix = (scope?: ReviewScope): string => {
+  if (scope === undefined) return ''
+  const contract = scope.contract === undefined ? '' : `\n\n## Task contract\n${scope.contract}`
+  const files = scope.files.map((file) => `- ${file}`).join('\n')
+  return `${contract}\n\n## Task files\n${files}`
+}
+
+/**
+ * Annotate parsed findings against the declared scope. Only called when the caller gave a scope,
+ * so `outOfScopeCount` stays absent (not 0) on an unscoped review.
+ */
+const withScopeAnnotation = (findings: ReviewFindings, scope: ReviewScope): ReviewFindings => {
+  const annotated = annotateScope(findings.findings, scope.files)
+  return { ...findings, findings: annotated.findings, outOfScopeCount: annotated.outOfScopeCount }
 }
 
 const buildReviewPrompt = (focus?: string, baselineRef?: string): string =>
@@ -385,6 +470,24 @@ const verifyAfterRun = async (
 
 type RunPayloadStatus = Parameters<typeof isErrorStatus>[0]
 
+/**
+ * Every secret this run redacted: the report-side fields (agentMessage/errors/stderr) plus the
+ * verification output tail, which redacts inside `runVerification` (R5.2).
+ */
+const totalRedactions = (payload: RunPayload, verification: VerificationResult | undefined): number =>
+  (payload.redactions ?? 0) + (verification?.redactions ?? 0)
+
+/** Payload + accepted verdict, with `redactions` present only when at least one secret was hit. */
+const withRedactionTotal = (
+  payload: RunPayload,
+  accepted: boolean,
+  verification: VerificationResult | undefined,
+): RunPayload => {
+  const redactions = totalRedactions(payload, verification)
+  const base: RunPayload = { ...payload, accepted, ...(redactions > 0 ? { redactions } : {}) }
+  return verification === undefined ? base : { ...base, verification }
+}
+
 /** Delivery verdict for execute/continue: success AND (no verifyCommand OR it passed). */
 const acceptedWithVerification = (status: RunPayloadStatus, verification: VerificationResult | undefined): boolean =>
   status === 'success' && (verification === undefined || verification.passed)
@@ -400,6 +503,8 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
   const liveViewFactory: LiveViewFactory = deps.liveViewFactory ?? createLiveView
   const openView = (cwd: string, requested?: boolean): LiveView =>
     terminalEnabled(requested) ? liveViewFactory(cwd) : NULL_VIEW
+  // One holder per server instance (C1): concurrent servers and tests never share an auth mode.
+  const authMode: AuthModeHolder = createAuthModeHolder()
   const withCwdLock = createCwdGuard(leaseFn)
   const withConcurrencyLimit = createConcurrencyGate(MAX_CONCURRENT_RUNS)
   const server = new McpServer({ name: 'codex-mcp', version: readVersion() })
@@ -416,6 +521,9 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     },
     async (input, extra) => {
       try {
+        if (isModelOverrideBlocked(authMode, input.model)) {
+          return errorResult(new Error(MODEL_GUARD_MESSAGE))
+        }
         // Prompt travels over stdin (`-- -`); an over-limit prompt throws here and surfaces as a
         // clean tool validation error via the catch below.
         const invocation: CodexInvocation = buildExecuteInvocation({
@@ -459,10 +567,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 payload.status,
               )
               const accepted = acceptedWithVerification(payload.status, verification)
-              return toToolResult(
-                verification === undefined ? { ...payload, accepted } : { ...payload, verification, accepted },
-                isError,
-              )
+              return toToolResult(withRedactionTotal(payload, accepted, verification), isError)
             })
           }),
         )
@@ -484,6 +589,9 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     },
     async (input, extra) => {
       try {
+        if (isModelOverrideBlocked(authMode, input.model)) {
+          return errorResult(new Error(MODEL_GUARD_MESSAGE))
+        }
         assertAbsoluteCwd(input.cwd)
         const invocation: CodexInvocation = buildContinueInvocation({
           sessionId: input.sessionId,
@@ -526,10 +634,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 payload.status,
               )
               const accepted = acceptedWithVerification(payload.status, verification)
-              return toToolResult(
-                verification === undefined ? { ...payload, accepted } : { ...payload, verification, accepted },
-                isError,
-              )
+              return toToolResult(withRedactionTotal(payload, accepted, verification), isError)
             })
           }),
         )
@@ -551,8 +656,11 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     },
     async (input, extra) => {
       try {
+        if (isModelOverrideBlocked(authMode, input.model)) {
+          return errorResult(new Error(MODEL_GUARD_MESSAGE))
+        }
         const invocation: CodexInvocation = buildExecuteInvocation({
-          prompt: buildReviewPrompt(input.focus, input.baselineRef),
+          prompt: buildReviewPrompt(input.focus, input.baselineRef) + buildScopeSuffix(input.scope),
           cwd: input.cwd,
           sandbox: 'read-only',
           model: input.model,
@@ -599,11 +707,19 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 reasoningEffort: input.reasoningEffort,
               },
             ).then(({ payload, isError }) => {
-              const reviewFindings = parseReviewFindings(payload.agentMessage)
+              // `payload.agentMessage` is already redacted by runOnce, so no secret can reach a
+              // finding's summary/expected/observed through the parser (R5.2).
+              const parsedFindings = parseReviewFindings(payload.agentMessage)
+              const reviewFindings =
+                input.scope === undefined
+                  ? parsedFindings
+                  : withScopeAnnotation(parsedFindings, input.scope)
               // Fail closed: a review that silently lost entries is not acceptance evidence (R1.2).
+              // Scope annotation never changes this verdict (R4.2).
               const accepted =
                 payload.status === 'success' && reviewFindings.parsed && reviewFindings.dropped === 0
-              return toToolResult({ ...payload, reviewFindings, accepted }, isError)
+              const withFindings: RunPayload = { ...payload, reviewFindings }
+              return toToolResult(withRedactionTotal(withFindings, accepted, undefined), isError)
             })
           }),
         )
@@ -645,17 +761,25 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
     },
     async (input) => {
       try {
-        const { entries, invalidLines, rotationNotice, readErrors } = readMetricsDetailed()
+        const { entries, invalidLines, rotationNotice, readErrors, historyFiles, historyExcluded } =
+          readMetricsDetailed({ includeHistory: input.includeHistory })
         const pricing = parsePricing(process.env.CODEX_MCP_PRICING)
-        const agg = aggregate(entries, input, pricing)
+        // The read-side facts only the reader knows, so `completeness` can say whether the numbers
+        // account for everything (R6.3). `costTable` keeps its default.
+        const agg = aggregate(entries, input, pricing, undefined, {
+          readErrors: readErrors?.length ?? 0,
+          historyExcluded,
+        })
         // Diagnostics are additive and only appear when they say something (R7.2, R7.3).
-        // `readErrors` is already absent-not-empty from readMetricsDetailed (T17).
+        // `readErrors` is already absent-not-empty from readMetricsDetailed (T17); the history
+        // pair appears together exactly when an archive exists, so a clean log is unchanged.
         return toToolResult(
           {
             ...agg,
             ...(invalidLines > 0 ? { invalidLines } : {}),
             ...(rotationNotice === undefined ? {} : { rotationNotice }),
             ...(readErrors === undefined ? {} : { readErrors }),
+            ...(historyFiles > 0 ? { historyFiles, historyExcluded } : {}),
           },
           false,
         )
@@ -684,6 +808,10 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
           taskIndex: number,
           signal: AbortSignal,
         ): Promise<BatchTaskResult> => {
+          // Per-task guard (C2): a refused task is a failed task, not a batch-level error.
+          if (isModelOverrideBlocked(authMode, spec.model)) {
+            return rejectedTaskResult(spec, taskIndex, MODEL_GUARD_MESSAGE)
+          }
           const sandbox = spec.sandbox ?? 'workspace-write'
           const invocation: CodexInvocation = buildExecuteInvocation({
             prompt: spec.prompt,
@@ -739,6 +867,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 notesPath,
                 attempts,
                 resumeReasons,
+                redactions,
                 ...parsed
               } = payload
               return {
@@ -759,6 +888,7 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
                 stderr,
                 liveLog,
                 isError,
+                ...(redactions !== undefined && redactions > 0 ? { redactions } : {}),
               }
             }),
           )
@@ -769,11 +899,13 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
         const maxConcurrency = Math.min(input.maxConcurrency ?? DEFAULT_BATCH_CONCURRENCY, MAX_CONCURRENT_RUNS)
         const failFast = input.failFast ?? false
         const results = await runBatch(tasks, runOneTask, { maxConcurrency, failFast }, extra.signal)
+        const redactionsTotal = results.reduce((sum, r) => sum + (r.redactions ?? 0), 0)
         const payload: BatchToolPayload = {
           tasks: results,
           total: results.length,
           failed: results.filter((r) => r.isError).length,
           summary: summarizeBatch(results),
+          ...(redactionsTotal > 0 ? { redactionsTotal } : {}),
         }
         // failFast=false: the batch itself executed, so the tool result is not an error — per-task
         // status/isError carries the failures. failFast=true keeps the historical contract: the
@@ -818,6 +950,16 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
           const ok = (r: RunOutcome): boolean => r.exitCode === 0 && !r.timedOut && !(r.aborted ?? false)
           const loginText = `${login.stdout}\n${login.stderr}`
           const loginProbe = deriveLoginProbe(login, loginText)
+          // Refresh the guard's view of the auth mode on EVERY health call (C1) — health is the
+          // only place the login text is read, so this is the single detection point. A probe that
+          // timed out, was aborted or exited non-zero carries no trustworthy auth signal: its
+          // partial output must read as `unknown` (permissive) instead of poisoning the model
+          // guard for later runs (R3.3).
+          const detectedAuthMode: AuthMode = loginProbe === 'ok' ? deriveAuthMode(loginText) : 'unknown'
+          authMode.set(detectedAuthMode)
+          // Every CLI-derived text field is redacted before it leaves the server (C4). Detection
+          // above reads the raw text; only the returned copy is redacted.
+          const redactedLogin = redactSecrets(loginText.trim())
           const basePayload: HealthPayload = {
             version: version.stdout.trim(),
             // Only claim logged-in when the login probe itself succeeded — a hung/killed
@@ -825,14 +967,23 @@ export const createServer = (deps: ServerDeps = {}): McpServer => {
             loggedIn:
               loginProbe === 'ok' && /logged in/i.test(loginText) && !/not logged in/i.test(loginText),
             loginProbe,
-            loginStatus: loginText.trim(),
+            loginStatus: redactedLogin.text,
+            authMode: detectedAuthMode,
           }
           // Without `deep` the payload keeps exactly the legacy four fields and no third process
           // is spawned (R3.1); the probe fields are appended so the JSON text stays compatible.
-          const payload: HealthPayload =
+          const probe: ExecProbe | undefined =
             input.deep === true
-              ? { ...basePayload, ...(await runExecProbe(runFn, { cwd, timeoutMs: HEALTH_TIMEOUT_MS, signal })) }
-              : basePayload
+              ? await runExecProbe(runFn, { cwd, timeoutMs: HEALTH_TIMEOUT_MS, signal })
+              : undefined
+          const redactedProbe = redactExecProbe(probe)
+          const redactions = redactedLogin.redactions + redactedProbe.redactions
+          const payload: HealthPayload = {
+            ...basePayload,
+            ...redactedProbe.fields,
+            // Additive: absent when nothing was redacted, so the legacy field set is unchanged.
+            ...(redactions > 0 ? { redactions } : {}),
+          }
           return toToolResult(payload, !ok(version))
         })
       } catch (error) {

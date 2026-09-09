@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, describe, expect, test, vi } from 'vitest'
 import { writeNotes, type NotesRequest } from '../src/notesWriter.js'
 import type { CodexResult } from '../src/types.js'
 
@@ -144,5 +144,130 @@ describe('writeNotes', () => {
     }
     // nothing was written for any of them
     expect(existsSync(join(cwd, '.codex-flow', 'notes'))).toBe(false)
+  })
+})
+
+describe('notes redaction (R5.2, C4)', () => {
+  test('redacts a credential carried in a command string', () => {
+    // Arrange
+    const cwd = mkCwd()
+    const leaky =
+      'curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk" https://api.example.com'
+
+    // Act
+    const path = writeNotes(
+      req(cwd, { parsed: { ...okParsed(), commands: [{ command: leaky, exitCode: 0 }] } }),
+    )
+
+    // Assert
+    const content = readFileSync(path!, 'utf8')
+    expect(content).not.toContain('eyJhbGciOiJIUzI1NiJ9')
+    expect(content).toContain('[REDACTED:jwt]')
+  })
+})
+
+describe('continue-mode append refuses a symlink at open time (TOCTOU)', () => {
+  afterEach(() => {
+    vi.doUnmock('node:fs')
+    vi.resetModules()
+  })
+
+  // O_NOFOLLOW is a POSIX flag; Windows keeps only the (racy) lstat pre-check.
+  test.skipIf(process.platform === 'win32')(
+    'refuses the append even when the lstat pre-check is defeated',
+    async () => {
+      // Arrange — a symlinked leaf that lstat reports as a plain regular file, i.e. exactly the
+      // state an attacker creates by swapping the path after the check and before the write.
+      const cwd = mkCwd()
+      const outside = mkCwd()
+      const targetFile = join(outside, 'victim.md')
+      writeFileSync(targetFile, 'precious content')
+      const notesDir = join(cwd, '.codex-flow', 'notes')
+      mkdirSync(notesDir, { recursive: true })
+      const leaf = join(notesDir, 'abc-123.md')
+      symlinkSync(targetFile, leaf)
+
+      vi.resetModules()
+      vi.doMock('node:fs', async () => {
+        const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
+        return {
+          ...actual,
+          default: actual,
+          lstatSync: (path: Parameters<typeof actual.lstatSync>[0], ...rest: unknown[]) =>
+            String(path) === leaf
+              ? ({ isSymbolicLink: () => false } as ReturnType<typeof actual.lstatSync>)
+              : (actual.lstatSync as (...args: unknown[]) => unknown)(path, ...rest),
+        }
+      })
+      const { writeNotes: writeNotesMocked } = await import('../src/notesWriter.js')
+
+      // Act + Assert
+      expect(() => writeNotesMocked(req(cwd, { mode: 'continue' }))).toThrow(/symlink/i)
+      expect(readFileSync(targetFile, 'utf8')).toBe('precious content')
+    },
+  )
+})
+
+describe('continue-mode append fails closed without O_NOFOLLOW (IMP-52)', () => {
+  afterEach(() => {
+    vi.doUnmock('node:fs')
+    vi.resetModules()
+  })
+
+  /** Mock node:fs with O_NOFOLLOW absent, plus an optional lstat override for the given leaf. */
+  const importWithoutNoFollow = async (
+    defeatedLeaf?: string,
+  ): Promise<typeof import('../src/notesWriter.js')> => {
+    vi.resetModules()
+    vi.doMock('node:fs', async () => {
+      const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
+      const constants = { ...actual.constants, O_NOFOLLOW: undefined }
+      const lstatSync = (path: Parameters<typeof actual.lstatSync>[0], ...rest: unknown[]) =>
+        defeatedLeaf !== undefined && String(path) === defeatedLeaf
+          ? ({
+              isSymbolicLink: () => false,
+              isFile: () => true,
+              dev: 1,
+              ino: 999_999,
+            } as unknown as ReturnType<typeof actual.lstatSync>)
+          : (actual.lstatSync as (...args: unknown[]) => unknown)(path, ...rest)
+      return { ...actual, default: actual, constants, lstatSync }
+    })
+    return import('../src/notesWriter.js')
+  }
+
+  test('refuses the append when the pre-open identity does not match the opened fd', async () => {
+    // Arrange — the flag cannot be requested, and the lstat pre-check is defeated exactly as an
+    // attacker would defeat it, so only the fstat dev/ino comparison can stop the write.
+    const cwd = mkCwd()
+    const outside = mkCwd()
+    const targetFile = join(outside, 'victim.md')
+    writeFileSync(targetFile, 'precious content')
+    const notesDir = join(cwd, '.codex-flow', 'notes')
+    mkdirSync(notesDir, { recursive: true })
+    const leaf = join(notesDir, 'abc-123.md')
+    symlinkSync(targetFile, leaf)
+    const { writeNotes: writeNotesMocked } = await importWithoutNoFollow(leaf)
+
+    // Act + Assert
+    // "swapped" can only come from the fstat identity check, so the assertion cannot pass via
+    // the real O_NOFOLLOW path if the constants mock ever stops taking effect.
+    expect(() => writeNotesMocked(req(cwd, { mode: 'continue' }))).toThrow(/swapped/i)
+    expect(readFileSync(targetFile, 'utf8')).toBe('precious content')
+  })
+
+  test('still appends normally to a real regular file', async () => {
+    // Arrange
+    const cwd = mkCwd()
+    const { writeNotes: writeNotesMocked } = await importWithoutNoFollow()
+    writeNotesMocked(req(cwd))
+
+    // Act
+    const path = writeNotesMocked(req(cwd, { mode: 'continue', prompt: 'second turn' }))!
+
+    // Assert
+    const content = readFileSync(path, 'utf8')
+    expect(content).toContain('# Session abc-123')
+    expect(content).toContain('second turn')
   })
 })

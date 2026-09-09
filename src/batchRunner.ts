@@ -37,6 +37,8 @@ export interface BatchTaskResult {
   isError: boolean
   /** Populated only when the orchestrator itself failed to run the task (spawn error, invalid input). */
   error?: string
+  /** Secrets redacted in this task's returned/persisted text. Absent when 0 (R5.2). */
+  redactions?: number
 }
 
 /** Runs one task and returns its payload — orchestration owns concurrency/abort, not this fn. */
@@ -83,6 +85,22 @@ const skippedResult = (task: BatchTaskSpec, taskIndex: number, error: string): B
   liveLog: null,
   isError: true,
   error,
+})
+
+/**
+ * Result for a task the server refused BEFORE spawning Codex (e.g. the C2 model guard). It is a
+ * real per-task failure — `status: 'failed'` with the reason in `parsed.errors` — so batch-level
+ * `isError` keeps following the existing failFast / per-task rules unchanged (R3.2).
+ */
+export const rejectedTaskResult = (
+  task: BatchTaskSpec,
+  taskIndex: number,
+  reason: string,
+): BatchTaskResult => ({
+  ...skippedResult(task, taskIndex, reason),
+  status: 'failed',
+  aborted: false,
+  parsed: { ...emptyParsed(), errors: [reason] },
 })
 
 /**

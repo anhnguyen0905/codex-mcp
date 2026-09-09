@@ -5,6 +5,7 @@ import { appendMetric, errorMessageHead, type MetricEntry } from './metricsLog.j
 import { resolveModel, type ModelSource } from './modelSource.js'
 import { writeNotes, type NotesRequest } from './notesWriter.js'
 import { combineSinks, type ProgressNotifier, type ProgressSink } from './progressNotifier.js'
+import { redactSecrets } from './redaction.js'
 import { deriveRunStatus, isErrorStatus, RESULT_SCHEMA_VERSION } from './runStatus.js'
 import { toToolResult, type RunPayload } from './toolPayloads.js'
 import {
@@ -122,6 +123,43 @@ const tailString = (value: string, n: number): string => {
 
 const STDERR_TAIL_CHARS = 2000
 
+/** Free-text run fields after redaction, plus how many secrets were replaced across all of them. */
+interface RedactedRunFields {
+  parsed: ParsedEvents
+  stderr: string
+  redactions: number
+}
+
+/**
+ * Single choke point for the report-side sinks (R5.2): `agentMessage`, `errors[]`,
+ * `commands[].command` and `stderr` are redacted here, BEFORE `writeNotesSafe` persists them,
+ * before the metric line quotes an error head, and before the payload leaves the server (so
+ * `parseReviewFindings` in the codex_review handler only ever sees redacted text). `stderr` is
+ * redacted before its tail is taken, so truncation can never expose the unredacted half of a
+ * secret. Command strings come straight from `command_execution` events and routinely carry
+ * credentials in flags or headers, so they pass the same choke point.
+ */
+const redactRunFields = (parsed: ParsedEvents, rawStderr: string): RedactedRunFields => {
+  const message = parsed.agentMessage === null ? null : redactSecrets(parsed.agentMessage)
+  const errors = parsed.errors.map((error) => redactSecrets(error))
+  const commands = parsed.commands.map((entry) => ({ entry, redacted: redactSecrets(entry.command) }))
+  const stderr = redactSecrets(rawStderr)
+  return {
+    parsed: {
+      ...parsed,
+      agentMessage: message === null ? null : message.text,
+      errors: errors.map((error) => error.text),
+      commands: commands.map(({ entry, redacted }) => ({ ...entry, command: redacted.text })),
+    },
+    stderr: tailString(stderr.text, STDERR_TAIL_CHARS),
+    redactions:
+      (message?.redactions ?? 0) +
+      errors.reduce((sum, error) => sum + error.redactions, 0) +
+      commands.reduce((sum, { redacted }) => sum + redacted.redactions, 0) +
+      stderr.redactions,
+  }
+}
+
 /**
  * Classify a run's primary failure kind for the metric log, by precedence:
  * abort > timeout > non-zero exit > Codex-emitted errors (turn.failed). Undefined on success.
@@ -228,7 +266,10 @@ export const runOnce = async (
     const outcome = await runFn(args, { ...options, onStdout })
     // Prefer the runner's lossless streamed parse (it saw bytes the raw stdout tail may have
     // rotated out). Fallback re-parse only covers injected fakes that return a bare RunOutcome.
-    const parsed: ParsedEvents = outcome.parsed ?? parseEvents(outcome.stdout)
+    const rawParsed: ParsedEvents = outcome.parsed ?? parseEvents(outcome.stdout)
+    // Redact before ANY sink sees the text: notes, the metric line, and the returned payload all
+    // read from `parsed`/`stderr` below (R5.2).
+    const { parsed, stderr, redactions } = redactRunFields(rawParsed, outcome.stderr)
     const aborted = outcome.aborted ?? false
     const status = deriveRunStatus(
       { exitCode: outcome.exitCode, timedOut: outcome.timedOut, aborted },
@@ -261,9 +302,11 @@ export const runOnce = async (
       // Raw-tail rotation only (informational): the streamed parse saw the full stream, so a
       // rotated raw tail never downgrades `status` by itself.
       outputTruncated: outcome.truncated ?? false,
-      stderr: tailString(outcome.stderr, STDERR_TAIL_CHARS),
+      stderr,
       liveLog: view.logPath,
       notesPath,
+      // Additive and absent-not-zero: a clean run's payload is byte-identical to before (R5.2).
+      ...(redactions > 0 ? { redactions } : {}),
     }
     // Passive metrics — one JSONL line per completed run, best-effort (never fails the run).
     appendMetric(buildMetricEntry(deps, options.cwd, outcome, parsed, aborted, { startedAt, spawnAt, firstStdoutAt }))

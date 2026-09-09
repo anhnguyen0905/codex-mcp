@@ -29,6 +29,18 @@ Then add a SEPARATE `## Improvements` section.
 Tag non-blocking suggestions IMP-1, IMP-2, ...: worthwhile refactors, better naming, missing nice-to-have tests, or documentation gaps that are not defects.
 ```
 
+## Pass the task's scope, and route out-of-scope findings to the ledger
+
+Call `mcp__codex__codex_review` with `scope: { files: <the task's `Files:` list>, contract: <the
+PLAN Contracts the task lists> }` alongside `focus`. The server appends the contract and the file
+list to the reviewer prompt and stamps each returned finding with `inScope`, counting the rest in
+`reviewFindings.outOfScopeCount`.
+
+A finding with `inScope: false` goes to the improvements ledger by default and never blocks the
+task. It blocks only when the reviewer verifies, with evidence, that it affects THIS task's
+acceptance criteria; say so explicitly when you promote one. Report `outOfScopeCount` with the
+comparison result so a reviewer that ignored the declared scope is visible instead of silent.
+
 ## Run the two reviews concurrently
 
 `mcp__codex__codex_review` is read-only and does not depend on Claude's pass, so never run the two

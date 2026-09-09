@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import { DEFAULT_PROJECT_FILE, FORBIDDEN_SUBSTRINGS } from './project-context.mjs'
 import { parseRequirements } from './requirements-coverage.mjs'
 import { parseTasks } from './task-waves.mjs'
 
@@ -14,6 +15,9 @@ export const SCOPED_RECENCY_FLOOR_BLOCKS = 0
 export const MANDATORY_TIER_CEILING = 2000
 export const CONTRACTS_INDEX_TOKEN_CAP = 600
 export const CONTRACTS_INDEX_LINE_CHAR_CAP = 160
+export const PROJECT_CONTEXT_TOKEN_CAP = 600
+export const PROJECT_CONTEXT_SECTION_COUNT = 2
+export const PROJECT_CONTEXT_TRUNCATION_MARKER = '… (truncated)'
 
 export { parseTasks }
 
@@ -33,8 +37,12 @@ const GIT_OBJECT_NAME = /^[0-9a-fA-F]{4,64}$/
 const MAX_MARKDOWN_FENCE_INDENT = 3
 const MIN_MARKDOWN_FENCE_LENGTH = 3
 const RESUME_PREAMBLE = '> Assume interruption: read this file fully before acting; treat [verify] blocks as hypotheses to re-confirm against the current code.'
+const PROJECT_CONTEXT_HEADING = '## Project context'
+const PROJECT_CONTEXT_SECTION_PATTERN = /^##[ \t]+[^\n]+$/gm
+const DELIMITER_REDACTION = '[redacted delimiter]'
 const OPTIONAL_PRIORITY = {
   SESSION_REPORT: 1,
+  PROJECT_CONTEXT: 1,
   DIGEST: 2,
   DECISION: 3,
   SCOPED_DECISION: 4,
@@ -642,6 +650,60 @@ function contractsExcerptOf(contracts, task, taskRaw) {
   }
 }
 
+/** The first `count` level-two sections of PROJECT.md, verbatim (owner-notes included). */
+function firstProjectSections(projectText, count) {
+  const normalized = projectText.replace(/\r\n/g, '\n')
+  const headings = [...normalized.matchAll(PROJECT_CONTEXT_SECTION_PATTERN)]
+  if (headings.length === 0) return null
+  const end = headings[count]?.index ?? normalized.length
+  const excerpt = normalized.slice(headings[0].index, end).trimEnd()
+  return excerpt === '' ? null : excerpt
+}
+
+/** Drop trailing paragraphs until the item plus its truncation marker fits `tokenCap`. */
+function truncateAtParagraphBoundary(markdown, tokenCap) {
+  if (tokensOf(markdown) <= tokenCap) return markdown
+  const paragraphs = markdown.split(/\n{2,}/)
+  let kept = []
+  for (const paragraph of paragraphs) {
+    const candidate = [...kept, paragraph, PROJECT_CONTEXT_TRUNCATION_MARKER].join('\n\n')
+    if (tokensOf(candidate) > tokenCap) break
+    kept = [...kept, paragraph]
+  }
+  if (kept.length === 0) return null
+  return [...kept, PROJECT_CONTEXT_TRUNCATION_MARKER].join('\n\n')
+}
+
+/**
+ * Optional `## Project context` item built from PROJECT.md. The file is operator-owned prose,
+ * so protocol delimiters are neutralized before it reaches a Codex prompt.
+ */
+function projectContextItem(projectContextText) {
+  if (projectContextText === null || projectContextText === undefined) return null
+  if (typeof projectContextText !== 'string') {
+    throw new TypeError('projectContextText must be a string, null, or undefined')
+  }
+  const excerpt = firstProjectSections(projectContextText, PROJECT_CONTEXT_SECTION_COUNT)
+  if (!excerpt) return null
+  const guarded = FORBIDDEN_SUBSTRINGS.reduce(
+    (text, forbidden) => text.split(forbidden).join(DELIMITER_REDACTION),
+    excerpt,
+  )
+  // The cap covers the whole item, heading included, so the heading is the first paragraph
+  // truncation measures: a body paragraph too large to fit leaves the heading plus the marker.
+  const markdown = truncateAtParagraphBoundary(
+    `${PROJECT_CONTEXT_HEADING}\n\n${guarded}`,
+    PROJECT_CONTEXT_TOKEN_CAP,
+  )
+  if (!markdown) return null
+  return {
+    name: 'Project context',
+    section: 'Project context',
+    markdown,
+    priority: OPTIONAL_PRIORITY.PROJECT_CONTEXT,
+  }
+}
+
 function pointerFor(droppedItems) {
   const sections = [...new Set(droppedItems.map((item) => item.section))].join(', ')
   const budgetDroppedBlockIds = droppedItems.flatMap((item) => item.blockId ? [item.blockId] : [])
@@ -833,7 +895,12 @@ export function sliceForTask(
   planText,
   tasksText,
   taskId,
-  { tokenBudget = TASK_SLICE_TOKEN_BUDGET, git = defaultGit(), requirementsText = null } = {},
+  {
+    tokenBudget = TASK_SLICE_TOKEN_BUDGET,
+    git = defaultGit(),
+    requirementsText = null,
+    projectContextText = null,
+  } = {},
 ) {
   validateSliceText(planText, tasksText)
   validateTokenBudget(tokenBudget)
@@ -853,6 +920,8 @@ export function sliceForTask(
   assertMandatoryTierWithinCeiling(mandatoryTierItems)
   const items = [...mandatoryTierItems]
   items.push(contractsIndexItem(sections.get('Contracts'), decisionBlocks, gitState))
+  const projectItem = projectContextItem(projectContextText)
+  if (projectItem) items.push(projectItem)
   const planItems = taskPlanItems(sections, decisionBlocks, task, taskRaw, gitState)
   items.push(...planItems.items)
   return fitToBudget(items, tokenBudget, gitState.headSha, planItems.omittedItems)
@@ -1053,6 +1122,16 @@ async function readRequirements(requirementsPath) {
   }
 }
 
+async function readProjectContext(projectContextPath) {
+  try {
+    return await fs.readFile(projectContextPath, 'utf8')
+  } catch (error) {
+    // An absent PROJECT.md is the normal case: the slice simply carries no project context.
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+    throw error
+  }
+}
+
 /** Execute the context-slice CLI and return the written absolute path. */
 export async function main(args = process.argv.slice(2), { cwd = process.cwd() } = {}) {
   if (typeof cwd !== 'string' || !cwd.trim()) throw new TypeError('cwd must be a non-empty string')
@@ -1070,10 +1149,13 @@ export async function main(args = process.argv.slice(2), { cwd = process.cwd() }
   await assertNotSymlink(outputDirectory, 'output directory')
   await assertNotSymlink(outputPath, 'output file')
   const requirementsText = config.resume ? null : await readRequirements(requirementsPath)
+  const projectContextText = config.resume
+    ? null
+    : await readProjectContext(path.resolve(cwd, DEFAULT_PROJECT_FILE))
   const git = defaultGit(cwd)
   const slice = config.resume
     ? sliceForResume(planText, tasksText, { git })
-    : sliceForTask(planText, tasksText, config.taskId, { git, requirementsText })
+    : sliceForTask(planText, tasksText, config.taskId, { git, requirementsText, projectContextText })
   await fs.mkdir(outputDirectory, { recursive: true })
   await assertNotSymlink(outputDirectory, 'output directory')
   await assertNotSymlink(outputPath, 'output file')

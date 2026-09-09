@@ -328,6 +328,28 @@ describe('relational state validation', () => {
     )
   })
 
+  test('orders violations per-key first, then relational selector, then tasks', () => {
+    // Arrange — one violation of each category at once: an invalid `wave` (per-key), a selected
+    // task pinned to the idle stage (selector), and a non-terminal task under a complete phase.
+    const state = stateWithSelectors({
+      phase: 'complete',
+      currentTask: 'T1',
+      taskStage: 'idle',
+      wave: 'later',
+    })
+    const tasksText = tasksWithStatuses({ T1: 'in-progress' })
+
+    // Act
+    const violations = checkState(state, { tasksText })
+
+    // Assert — `wave` precedes `taskStage` only because per-key checks run before relational ones.
+    expect(violations).toEqual([
+      { key: 'wave', reason: 'must be a positive integer or -' },
+      { key: 'taskStage', reason: 'currentTask T1 cannot be idle' },
+      { key: 'tasks', reason: 'phase complete requires T1 status done or failed (was in-progress)' },
+    ])
+  })
+
   test('reports a complete-phase task section with no Status line as a tasks violation', () => {
     // Arrange
     const state = completeState()

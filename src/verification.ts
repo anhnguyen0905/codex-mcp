@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { z } from 'zod'
+import { redactSecrets } from './redaction.js'
 
 /**
  * Server-side acceptance verification: after a Codex run settles, run the caller's acceptance
@@ -24,12 +25,19 @@ export interface VerificationResult {
   exitCode: number | null
   timedOut: boolean
   durationMs: number
-  /** Newest VERIFY_OUTPUT_TAIL_CHARS of interleaved stdout + stderr. */
+  /** Newest VERIFY_OUTPUT_TAIL_CHARS of interleaved stdout + stderr, secrets already redacted. */
   outputTail: string
   /** True exactly when the command ran to completion with exit code 0. */
   passed: boolean
   /** Set when the command was not run at all. */
   skipped?: VerificationSkipReason
+  /**
+   * Number of secrets removed from the captured output (R5.2). Present only when > 0, so a clean
+   * run's payload is unchanged. Counts every secret seen in the stream, of which `outputTail` is
+   * the newest slice — redaction runs before both the buffer trim and the tail trim, so a secret
+   * straddling either boundary can never survive as a partial credential.
+   */
+  redactions?: number
 }
 
 export interface VerificationOptions {
@@ -54,6 +62,7 @@ export const verificationSchema = z
     outputTail: z.string(),
     passed: z.boolean(),
     skipped: z.enum(['aborted', 'run-failed']).optional(),
+    redactions: z.number().optional(),
   })
   .nullable()
 
@@ -104,6 +113,7 @@ export const runVerification: VerifyFn = (command, options) => {
     })
 
     let output = ''
+    let redactions = 0
     let timedOut = false
     let settled = false
     let terminating = false
@@ -151,6 +161,7 @@ export const runVerification: VerifyFn = (command, options) => {
         durationMs: Date.now() - startedAt,
         outputTail: tailOf(output, VERIFY_OUTPUT_TAIL_CHARS),
         passed: !timedOut && exitCode === 0,
+        ...(redactions > 0 ? { redactions } : {}),
       })
     }
 
@@ -176,8 +187,15 @@ export const runVerification: VerifyFn = (command, options) => {
     const onAbort = (): void => terminate()
     signal?.addEventListener('abort', onAbort, { once: true })
 
+    // R5.2: redact BEFORE either trim. Trimming raw text first could cut a secret's recognisable
+    // prefix off and leave the rest of the credential in the buffer as plain text, whereas a
+    // placeholder cut in half is harmless. Re-scanning the retained buffer is safe and free of
+    // double counting because redaction is idempotent (a `[REDACTED:…]` token is never re-matched),
+    // and the cost is bounded by MAX_BUFFERED_CHARS rather than by the run's total output.
     const onData = (chunk: Buffer): void => {
-      output = tailOf(output + chunk.toString('utf8'), MAX_BUFFERED_CHARS)
+      const redacted = redactSecrets(output + chunk.toString('utf8'))
+      redactions += redacted.redactions
+      output = tailOf(redacted.text, MAX_BUFFERED_CHARS)
     }
     child.stdout?.on('data', onData)
     child.stderr?.on('data', onData)

@@ -31,8 +31,11 @@ behavior is defined in **markdown instruction files**, not runtime code.
   `.mcp.json` npx pin, and a `## [<version>]` heading in `CHANGELOG.md`.
 
 - **Run-state writes**: `.codex-flow/STATE.md` and task `Status` lines in `.codex-flow/TASKS.md` are
-  edited only through `node scripts/flow-state.mjs` (`set` / `check` / `task`); never hand-edit
-  them in the flow. The helper validates keys, phases, task stages, and status transitions.
+  edited only through `node scripts/flow-state.mjs` (`set` / `check` / `task`) — the helper is
+  required, never optional. It validates keys, phases, task stages, and status transitions. Never
+  hand-edit those files in the flow, and never fall back to editing them when the helper is
+  missing: a missing helper means the plugin install is broken, so the flow STOPS and the user is
+  told to reinstall it; a helper that exits non-zero surfaces its error and STOPS.
 
 - **Runtime scripts**: a new `scripts/*.mjs` helper the plugin invokes at runtime follows the
   `scripts/task-waves.mjs` idiom — Node stdlib only, pure named exports, CLI behind a

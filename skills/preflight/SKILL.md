@@ -9,7 +9,13 @@ Nothing downstream is safe until these pass. Do not interview, plan, or execute 
 
 ## Step 1 — Health gate
 
-Call `mcp__codex__codex_health` with `{ deep: true }` ONCE before anything else. The deep input adds
+The command evaluates the Fast-path gate BEFORE this call: the analysis lane makes no
+`codex_health` call at all unless the user requests a Codex second opinion (and then with
+`{ deep: true }`); the small-change lane and the full flow make it once, after the gate decision
+and the resume check.
+
+In those lanes, call `mcp__codex__codex_health` with `{ deep: true }` ONCE — after the gate
+decision and the resume check, before anything else. The deep input adds
 a one-shot read-only `codex exec` probe and returns `execProbe`
 (`ok | quota | model | error | skipped`) plus `execProbeMessage` next to `loggedIn`; read
 `execProbe` from that single call instead of re-probing later phases.
@@ -40,10 +46,8 @@ not been created yet:
   PLAN.md/TASKS.md is NOT proof of approval.
 - When both `.codex-flow/PLAN.md` and `.codex-flow/TASKS.md` exist, run
   `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --resume` and read
-  `.codex-flow/RESUME.md` instead of the raw files. If the helper is unavailable in a standalone
-  install, fall back to reading PLAN.md and TASKS.md directly. If the helper is present but exits
-  non-zero, surface the error to the user and STOP; never use the standalone fallback for a failing
-  helper. When either file does not exist, read only the control files that exist; do not require a
+  `.codex-flow/RESUME.md` instead of the raw files.
+  If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand. When either file does not exist, read only the control files that exist; do not require a
   missing TASKS.md to resume an earlier phase.
 - When TASKS.md exists, show its task Statuses. Ask **resume vs restart** in every case except
   `phase: complete`, which archives and starts fresh without a resume offer (see below).
@@ -139,7 +143,7 @@ files and offer to archive them before beginning a fresh run.
    Write STATE.md and TASKS.md status lines only through the helper:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set <key> <value>`, `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check`, and
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" task <T-id> <status>` (which appends the transition
-   line). If the helper is unavailable in a standalone install, edit the file directly; if it is present but exits non-zero, surface the error to the user and STOP.
+   line). If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.
 
    The orchestrator is the only writer. `runBaselineRef`, `knownRed`, and `dirtyBaseline` are
    written once at run start and NEVER modified on resume. A resume writes only `resumeHead` and

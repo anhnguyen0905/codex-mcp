@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
-import { createServer } from '../src/server.js'
+import { createServer, MODEL_GUARD_MESSAGE } from '../src/server.js'
 import type { RunOutcome } from '../src/types.js'
 
 const jsonlFixture = [
@@ -571,5 +571,178 @@ describe('run status model', () => {
     expect(payload.sessionId).toBe('sess-streamed')
     expect(payload.agentMessage).toBe('streamed done')
     expect(payload.status).toBe('success')
+  })
+})
+
+/** Login-status text for each auth mode, as `codex login status` prints it. */
+const LOGIN_TEXT = {
+  chatgpt: 'Logged in using ChatGPT',
+  apikey: 'Logged in using an API key',
+  unknown: 'Not logged in',
+} as const
+
+const versionOutcome: RunOutcome = { stdout: 'codex-cli 0.144.1', stderr: '', exitCode: 0, timedOut: false }
+
+/**
+ * Connect a server whose auth mode has already been detected by one real codex_health round-trip
+ * (the only place the login text is read), then hand back the client and the run mock.
+ */
+const connectWithAuthMode = async (mode: keyof typeof LOGIN_TEXT) => {
+  const runFn = vi.fn(async (args: string[]) => {
+    if (args[0] === '--version') return versionOutcome
+    if (args[0] === 'login') {
+      return { stdout: LOGIN_TEXT[mode], stderr: '', exitCode: 0, timedOut: false } satisfies RunOutcome
+    }
+    return okOutcome
+  })
+  const client = await connect(runFn as never)
+  await client.callTool({ name: 'codex_health', arguments: {} })
+  runFn.mockClear()
+  return { client, runFn }
+}
+
+describe('model guard under ChatGPT auth (R3.2, C2)', () => {
+  test.each(['codex_execute', 'codex_continue', 'codex_review'] as const)(
+    '%s rejects an explicit model without spawning Codex',
+    async (name) => {
+      // Arrange
+      const { client, runFn } = await connectWithAuthMode('chatgpt')
+      const args =
+        name === 'codex_continue'
+          ? { sessionId: 'sess-1', prompt: 'go', cwd: '/repo', model: 'gpt-5.1-codex' }
+          : { prompt: 'go', cwd: '/repo', model: 'gpt-5.1-codex' }
+
+      // Act
+      const result = await client.callTool({ name, arguments: args })
+
+      // Assert
+      expect(result.isError).toBe(true)
+      expect(parsePayload(result).error).toBe(MODEL_GUARD_MESSAGE)
+      expect(runFn).not.toHaveBeenCalled()
+    },
+  )
+
+  test('a run without an explicit model still goes through under ChatGPT auth', async () => {
+    // Arrange
+    const { client, runFn } = await connectWithAuthMode('chatgpt')
+
+    // Act
+    const result = await client.callTool({ name: 'codex_execute', arguments: { prompt: 'go', cwd: '/repo' } })
+
+    // Assert
+    expect(result.isError).toBeFalsy()
+    expect(runFn).toHaveBeenCalledTimes(1)
+  })
+
+  test.each(['apikey', 'unknown'] as const)('passes --model through under %s auth', async (mode) => {
+    // Arrange
+    const { client, runFn } = await connectWithAuthMode(mode)
+
+    // Act
+    await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'go', cwd: '/repo', model: 'gpt-5.1-codex' },
+    })
+
+    // Assert
+    const [args] = runFn.mock.calls[0] as [string[]]
+    expect(args).toContain('--model')
+    expect(args).toContain('gpt-5.1-codex')
+  })
+
+  test('an undetected auth mode (no health call yet) does not block a model override', async () => {
+    // Arrange — a fresh server starts at 'unknown', which is permissive.
+    const runFn = vi.fn(async () => okOutcome)
+    const client = await connect(runFn)
+
+    // Act
+    const result = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'go', cwd: '/repo', model: 'gpt-5.1-codex' },
+    })
+
+    // Assert
+    expect(result.isError).toBeFalsy()
+    expect(runFn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('payload redactions (R5.2, C4)', () => {
+  /** A run whose agent message and stderr both carry a secret. */
+  const leakyOutcome = (): RunOutcome => ({
+    stdout: [
+      JSON.stringify({ type: 'thread.started', thread_id: 'sess-leak' }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: 'used sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' },
+      }),
+      JSON.stringify({ type: 'turn.completed' }),
+    ].join('\n'),
+    stderr: 'export OPENAI_API_KEY=sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+    exitCode: 0,
+    timedOut: false,
+  })
+
+  test('redacts agentMessage and stderr and reports how many secrets were replaced', async () => {
+    // Arrange
+    const client = await connect(vi.fn(async () => leakyOutcome()))
+
+    // Act
+    const payload = parsePayload(
+      await client.callTool({ name: 'codex_execute', arguments: { prompt: 'go', cwd: '/repo' } }),
+    )
+
+    // Assert
+    expect(payload.agentMessage).not.toContain('sk-ant-api03-')
+    expect(payload.agentMessage).toContain('[REDACTED:')
+    expect(payload.stderr).not.toContain('sk-proj-')
+    expect(payload.redactions).toBeGreaterThan(0)
+  })
+
+  test('redacts command strings parsed from command_execution events', async () => {
+    // Arrange — a shell command carrying a bearer JWT, exactly as Codex reports it.
+    const leakyCommand =
+      'curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk" https://api.example.com'
+    const client = await connect(
+      vi.fn(async () => ({
+        stdout: [
+          JSON.stringify({ type: 'thread.started', thread_id: 'sess-cmd' }),
+          JSON.stringify({
+            type: 'item.completed',
+            item: { type: 'command_execution', command: leakyCommand, exit_code: 0 },
+          }),
+          JSON.stringify({ type: 'turn.completed' }),
+        ].join('\n'),
+        stderr: '',
+        exitCode: 0,
+        timedOut: false,
+      })) as never,
+    )
+
+    // Act
+    const payload = parsePayload(
+      await client.callTool({ name: 'codex_execute', arguments: { prompt: 'go', cwd: '/repo' } }),
+    )
+
+    // Assert
+    const commands = payload.commands as Array<{ command: string }>
+    expect(commands).toHaveLength(1)
+    expect(commands[0].command).not.toContain('eyJhbGciOiJIUzI1NiJ9')
+    expect(commands[0].command).toContain('[REDACTED:jwt]')
+    expect(commands[0].command).toContain('curl -H "Authorization: Bearer ')
+    expect(payload.redactions).toBe(1)
+  })
+
+  test('omits redactions entirely for a clean run', async () => {
+    // Arrange
+    const client = await connect(vi.fn(async () => okOutcome))
+
+    // Act
+    const payload = parsePayload(
+      await client.callTool({ name: 'codex_execute', arguments: { prompt: 'go', cwd: '/repo' } }),
+    )
+
+    // Assert — absent, not zero, so the payload stays additive.
+    expect(payload).not.toHaveProperty('redactions')
   })
 })

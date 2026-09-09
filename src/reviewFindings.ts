@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { canonicalPath } from './pathCanonical.js'
+
 /**
  * Structured review output for codex_review. The review prompt asks Codex to end its message with
  * one fenced ```json block; the server parses it fail-closed so the orchestrator reads typed
@@ -21,6 +23,12 @@ export const findingSchema = z.object({
   summary: z.string().min(1),
   expected: z.string().min(1),
   observed: z.string().min(1),
+  /**
+   * Whether `file` is inside the task's declared `scope.files`. Absent unless
+   * `annotateScope` ran — the reviewer never supplies it, and a review without a
+   * scope leaves every finding unannotated rather than guessing.
+   */
+  inScope: z.boolean().optional(),
 })
 
 export const improvementSchema = z.object({
@@ -45,18 +53,33 @@ export interface ReviewFindings {
    * whole entry is invalid, e.g. a string instead of an object).
    */
   droppedReasons: string[]
+  /**
+   * How many findings fall outside the task's declared `scope.files`. Absent unless
+   * `annotateScope` ran; findings are annotated, never dropped, so this is a counter
+   * over `findings`, not a difference in its length.
+   */
+  outOfScopeCount?: number
   /** Why `parsed` is false. */
   parseError?: string
 }
 
-export const reviewFindingsSchema = z.object({
-  parsed: z.boolean(),
-  findings: z.array(findingSchema),
-  improvements: z.array(improvementSchema),
-  dropped: z.number(),
-  droppedReasons: z.array(z.string()),
-  parseError: z.string().optional(),
-})
+/** IMP-20: `dropped` is defined as the number of drop reasons, so a mismatch is a bug, not data. */
+const DROPPED_COUNT_MISMATCH = 'dropped must equal droppedReasons.length'
+
+export const reviewFindingsSchema = z
+  .object({
+    parsed: z.boolean(),
+    findings: z.array(findingSchema),
+    improvements: z.array(improvementSchema),
+    dropped: z.number(),
+    droppedReasons: z.array(z.string()),
+    outOfScopeCount: z.number().int().nonnegative().optional(),
+    parseError: z.string().optional(),
+  })
+  .refine((value) => value.dropped === value.droppedReasons.length, {
+    message: DROPPED_COUNT_MISMATCH,
+    path: ['dropped'],
+  })
 
 export const REVIEW_FINDINGS_INSTRUCTIONS = [
   'After the prose, END your message with exactly one fenced ```json block of this shape (no other text after it):',
@@ -98,6 +121,18 @@ const dropReason = (arrayName: string, index: number, error: z.ZodError): string
   return field === '' ? location : `${location}.${field}`
 }
 
+/**
+ * IMP-32: `inScope` is produced by `annotateScope` alone. A reviewer that supplies the key (of any
+ * type) must not be able to forge the annotation, nor to get an otherwise-valid finding dropped by
+ * a type error on it — so the key is removed before validation and the finding stays unannotated.
+ */
+const withoutReviewerScope = (item: unknown): unknown => {
+  if (typeof item !== 'object' || item === null || Array.isArray(item)) return item
+  if (!('inScope' in item)) return item
+  const { inScope: _reviewerSupplied, ...rest } = item as Record<string, unknown>
+  return rest
+}
+
 const collect = <T>(items: readonly unknown[], schema: z.ZodType<T>, arrayName: string): CollectResult<T> =>
   items.reduce<CollectResult<T>>(
     (acc, item, index) => {
@@ -126,7 +161,7 @@ export const parseReviewFindings = (agentMessage: string | null): ReviewFindings
   const record = raw as Record<string, unknown>
   if (!Array.isArray(record.findings)) return notParsed('missing findings array')
   if (!Array.isArray(record.improvements)) return notParsed('missing improvements array')
-  const findings = collect(record.findings, findingSchema, 'findings')
+  const findings = collect(record.findings.map(withoutReviewerScope), findingSchema, 'findings')
   const improvements = collect(record.improvements, improvementSchema, 'improvements')
   const droppedReasons = [...findings.reasons, ...improvements.reasons]
   return {
@@ -135,5 +170,47 @@ export const parseReviewFindings = (agentMessage: string | null): ReviewFindings
     improvements: improvements.kept,
     dropped: droppedReasons.length,
     droppedReasons,
+  }
+}
+
+export interface ScopeAnnotation {
+  /** Every input finding, in order, with `inScope` set. Nothing is ever dropped. */
+  findings: ReviewFinding[]
+  outOfScopeCount: number
+}
+
+/** A finding's file counts as in scope when it is a declared path or sits under a declared directory. */
+const isWithinScope = (canonicalFile: string, canonicalScope: readonly string[]): boolean =>
+  canonicalScope.some((declared) => canonicalFile === declared || canonicalFile.startsWith(`${declared}/`))
+
+/**
+ * Annotate each finding with whether its `file` is inside the task's declared scope, using the
+ * same path folding as `scripts/scope-check.mjs`. Findings are annotated, never dropped, so the
+ * orchestrator can still see (and act on) a real defect the reviewer found outside the task.
+ *
+ * `scopeFiles` must be a non-empty list of non-empty strings: an empty scope is a caller bug
+ * (the input schema rejects it), not a signal to mark everything out of scope.
+ */
+export const annotateScope = (
+  findings: readonly ReviewFinding[],
+  scopeFiles: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): ScopeAnnotation => {
+  if (!Array.isArray(findings)) throw new TypeError('findings must be an array')
+  if (!Array.isArray(scopeFiles) || scopeFiles.length === 0) {
+    throw new TypeError('scopeFiles must be a non-empty array')
+  }
+  if (scopeFiles.some((file) => typeof file !== 'string' || file === '')) {
+    throw new TypeError('every scopeFiles entry must be a non-empty string')
+  }
+
+  const canonicalScope = scopeFiles.map((file) => canonicalPath(file, platform))
+  const annotated = findings.map((finding) => ({
+    ...finding,
+    inScope: isWithinScope(canonicalPath(finding.file, platform), canonicalScope),
+  }))
+  return {
+    findings: annotated,
+    outOfScopeCount: annotated.filter((finding) => !finding.inScope).length,
   }
 }

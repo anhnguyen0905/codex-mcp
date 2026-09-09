@@ -1,8 +1,21 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
+import type { Dirent } from 'node:fs'
+import {
+  appendFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ModelSource } from './modelSource.js'
 import type { CodexUsage } from './types.js'
+import { defaultLocksDir } from './workspaceLease.js'
 
 /**
  * Per-run metric appended to ~/.codex-mcp/metrics.jsonl (one JSONL line per completed run).
@@ -144,6 +157,31 @@ export interface ModelAggregate {
   sources?: ModelSourceCounts
 }
 
+/**
+ * What the roll-up could NOT account for (R6.3). A report renders this so an operator never
+ * mistakes a partial cost for the real one. Every counter is over the FILTERED entries.
+ */
+export interface Completeness {
+  /** True only when every counter is 0 and no history was excluded. */
+  complete: boolean
+  /** Entries that recorded usage but whose model has no rates (or no model at all). */
+  unpricedRuns: number
+  /** Entries written with `usage: null` (the run reported no token counts). */
+  missingUsage: number
+  /** Files that existed but could not be read (`MetricsDiagnostics.readErrors.length`). */
+  readErrors: number
+  /** True when archived history files exist and were not included in the read. */
+  historyExcluded: boolean
+}
+
+/** Read-side facts `aggregate` cannot derive from the entries alone. Absent fields mean "none". */
+export interface AggregateDiagnostics {
+  /** Number of unreadable files, i.e. `MetricsDiagnostics.readErrors?.length ?? 0`. */
+  readErrors?: number
+  /** `MetricsDiagnostics.historyExcluded`. */
+  historyExcluded?: boolean
+}
+
 export interface Aggregate {
   totalRuns: number
   totalDurationMs: number
@@ -159,13 +197,38 @@ export interface Aggregate {
   avgQueueMs?: number
   /** Mean timeToFirstProgressMs over entries that recorded it. Absent when none did. */
   avgTimeToFirstProgressMs?: number
+  /** What this roll-up could not account for (R6.3). Always present. */
+  completeness: Completeness
 }
 
-export interface MetricsLogOptions {
+/** Rename used by rotation; injectable so a crash between the two steps can be tested. */
+export type RenameFn = (from: string, to: string) => void
+
+export interface FileLockOptions {
+  /** Age at which a lock file counts as abandoned and may be broken. Default 5 s. */
+  staleMs?: number
+  /** Poll interval while a live holder keeps the lock. Default 25 ms. */
+  retryMs?: number
+}
+
+export interface RotateOptions {
+  /** Only rotate when the log is at least this many bytes. Default 0 (rotate whenever it exists). */
+  maxBytes?: number
+  /** Override the locks dir holding `metrics.lock` (mostly for tests). */
+  locksDir?: string
+  /** Injected rename; defaults to fs.renameSync. Used by tests to fail one of the two steps. */
+  rename?: RenameFn
+  /** Lock tuning; see `withFileLock`. */
+  lock?: FileLockOptions
+}
+
+export interface MetricsLogOptions extends RotateOptions {
   /** Override the default ~/.codex-mcp/metrics.jsonl (mostly for tests). */
   logPath?: string
   /** Cap on log file size; on next append past this, rotate to `<file>.1` and truncate. Default 10MB. */
   maxBytes?: number
+  /** Read side only: also read the archived `history/*.jsonl` files (R6.2). Default false. */
+  includeHistory?: boolean
 }
 
 export const DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024
@@ -276,6 +339,220 @@ export const parsePricing = (raw: string | undefined): PricingTable | undefined 
   }
 }
 
+/** Directory (next to the log) holding every archived back-file. Nothing is ever deleted (R6.1). */
+export const HISTORY_DIR_NAME = 'history'
+/** Lock file serializing rotation across processes, inside the server's existing locks dir. */
+export const METRICS_LOCK_FILE_NAME = 'metrics.lock'
+/** A lock file older than this is treated as abandoned (holder crashed) and may be broken. */
+export const LOCK_STALE_MS = 5_000
+const LOCK_RETRY_MS = 25
+const LOCK_FILE_MODE = 0o600
+const LOCKS_DIR_MODE = 0o700
+const HISTORY_DIR_MODE = 0o700
+const LOG_FILE_MODE = 0o600
+/** Guard against an unbounded collision-suffix scan on a corrupted history dir. */
+const MAX_ARCHIVE_COLLISIONS = 1_000
+
+/** Archive dir for a log: `<log dir>/history`. */
+export const historyDirFor = (logPath: string): string => join(dirname(logPath), HISTORY_DIR_NAME)
+
+const isErrnoCode = (error: unknown, code: string): boolean =>
+  error instanceof Error && (error as NodeJS.ErrnoException).code === code
+
+/** Best-effort unlink; an already-removed file is not an error. */
+const removeFileIfPresent = (path: string): void => {
+  try {
+    unlinkSync(path)
+  } catch (error: unknown) {
+    if (!isErrnoCode(error, 'ENOENT')) throw error
+  }
+}
+
+/**
+ * Synchronous wait. `appendMetric` is synchronous by contract (callers log inline at the end of a
+ * run), so there is no event-loop turn to await on while another process holds the lock.
+ */
+const sleepSync = (ms: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/** O_EXCL create; false only on EEXIST (someone else holds the lock). */
+const tryCreateLock = (lockPath: string): boolean => {
+  try {
+    writeFileSync(lockPath, `${process.pid}\n`, { flag: 'wx', mode: LOCK_FILE_MODE })
+    return true
+  } catch (error: unknown) {
+    if (isErrnoCode(error, 'EEXIST')) return false
+    throw error
+  }
+}
+
+/**
+ * True when the process that wrote the lock is still running. `process.kill(pid, 0)` sends no
+ * signal: it throws ESRCH when the pid is gone and EPERM when the process exists but belongs to
+ * another user — EPERM therefore counts as alive.
+ */
+const isPidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error: unknown) {
+    return isErrnoCode(error, 'EPERM')
+  }
+}
+
+/** Holder pid recorded by `tryCreateLock`, or null when the content is absent or malformed. */
+const readLockHolderPid = (lockPath: string): number | null => {
+  try {
+    const pid = Number.parseInt(readFileSync(lockPath, 'utf8').trim(), 10)
+    return Number.isInteger(pid) && pid > 0 ? pid : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * True when the lock may be broken: the file vanished between our two syscalls, or its mtime is
+ * older than `staleMs` AND its recorded holder is no longer alive. Age alone is not evidence of a
+ * crash — nothing refreshes the lock mtime, so a slow but live rotation would otherwise be
+ * unlinked and two processes would archive concurrently. Lock content with no parseable pid has no
+ * holder to check, so for it the age test decides alone (it can only come from a crashed or
+ * foreign writer).
+ */
+const isStaleLock = (lockPath: string, staleMs: number): boolean => {
+  try {
+    if (Date.now() - statSync(lockPath).mtimeMs < staleMs) return false
+  } catch (error: unknown) {
+    if (isErrnoCode(error, 'ENOENT')) return true
+    throw error
+  }
+  const pid = readLockHolderPid(lockPath)
+  if (pid === null) return true
+  return !isPidAlive(pid)
+}
+
+/**
+ * Run `fn` while holding an exclusive lock file (O_EXCL create, released in a `finally`). A lock
+ * is broken once only when it is both older than `staleMs` and its holder pid is dead, so a
+ * crashed holder cannot wedge rotation forever while a live one keeps its exclusivity however
+ * slow it is. A live holder is waited on, then given up on with a throw after twice the stale
+ * window rather than overlapping its rotation.
+ */
+export const withFileLock = <T>(lockPath: string, fn: () => T, options: FileLockOptions = {}): T => {
+  const staleMs = options.staleMs ?? LOCK_STALE_MS
+  const retryMs = options.retryMs ?? LOCK_RETRY_MS
+  mkdirSync(dirname(lockPath), { recursive: true, mode: LOCKS_DIR_MODE })
+  const deadline = Date.now() + staleMs * 2
+  for (;;) {
+    if (tryCreateLock(lockPath)) break
+    if (isStaleLock(lockPath, staleMs)) {
+      removeFileIfPresent(lockPath)
+      if (tryCreateLock(lockPath)) break
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`lock ${lockPath} is held by another process; gave up after ${staleMs * 2} ms`)
+    }
+    sleepSync(retryMs)
+  }
+  try {
+    return fn()
+  } finally {
+    removeFileIfPresent(lockPath)
+  }
+}
+
+/** `YYYYMMDD-HHMMSS` in UTC, the archive-name stamp of a back-file's last entry (R6.1). */
+export const formatArchiveStamp = (isoTs: string): string => {
+  const parsed = Date.parse(isoTs)
+  if (!Number.isFinite(parsed)) {
+    throw new TypeError(`unparseable timestamp for a metrics archive name: ${isoTs}`)
+  }
+  const iso = new Date(parsed).toISOString()
+  const date = `${iso.slice(0, 4)}${iso.slice(5, 7)}${iso.slice(8, 10)}`
+  return `${date}-${iso.slice(11, 13)}${iso.slice(14, 16)}${iso.slice(17, 19)}`
+}
+
+/**
+ * Stamp for the back-file being archived: its last valid entry's `ts`. A file with no readable
+ * entry still gets archived (nothing is ever deleted), stamped from its mtime so it keeps sorting
+ * by age.
+ */
+const archiveStampFor = (backFilePath: string): string => {
+  const last = readMetricsFile(backFilePath).entries.at(-1)
+  if (last !== undefined) return formatArchiveStamp(last.ts)
+  try {
+    return formatArchiveStamp(statSync(backFilePath).mtime.toISOString())
+  } catch {
+    // Unstattable but present (raced away, EACCES): a current stamp still orders it last.
+    return formatArchiveStamp(new Date().toISOString())
+  }
+}
+
+/** `metrics-<stamp>.jsonl`, or `-2`, `-3`, … when that name is taken (R6.1). */
+const archivePathFor = (historyDir: string, stamp: string): string => {
+  const base = join(historyDir, `metrics-${stamp}.jsonl`)
+  if (!existsSync(base)) return base
+  for (let suffix = 2; suffix <= MAX_ARCHIVE_COLLISIONS; suffix += 1) {
+    const candidate = join(historyDir, `metrics-${stamp}-${suffix}.jsonl`)
+    if (!existsSync(candidate)) return candidate
+  }
+  throw new Error(`too many metrics archives stamped ${stamp} in ${historyDir}`)
+}
+
+/** True when the log exists and is at least `maxBytes`. A missing log is never rotated. */
+const isPastCap = (logPath: string, maxBytes: number): boolean => {
+  try {
+    return statSync(logPath).size >= maxBytes
+  } catch (error: unknown) {
+    if (isErrnoCode(error, 'ENOENT')) return false
+    throw error
+  }
+}
+
+/**
+ * Two renames, in this order: archive the previous back-file into `history/`, THEN move the
+ * current log onto `<log>.1`. A crash in between leaves no `.1`, which the next call detects and
+ * skips straight to the second rename — so no line is ever lost or overwritten.
+ */
+const rotateLocked = (logPath: string, maxBytes: number, rename: RenameFn): void => {
+  // Re-checked under the lock: a process we queued behind may have rotated already.
+  if (!isPastCap(logPath, maxBytes)) return
+  const rotatedPath = `${logPath}.1`
+  if (existsSync(rotatedPath)) {
+    const historyDir = historyDirFor(logPath)
+    mkdirSync(historyDir, { recursive: true, mode: HISTORY_DIR_MODE })
+    rename(rotatedPath, archivePathFor(historyDir, archiveStampFor(rotatedPath)))
+  }
+  rename(logPath, rotatedPath)
+}
+
+/** Rotate the log under the cross-process metrics lock. Throws on a filesystem failure. */
+export const rotateMetricsLog = (logPath: string, options: RotateOptions = {}): void => {
+  const lockPath = join(options.locksDir ?? defaultLocksDir(), METRICS_LOCK_FILE_NAME)
+  const maxBytes = options.maxBytes ?? 0
+  const rename = options.rename ?? renameSync
+  withFileLock(lockPath, () => rotateLocked(logPath, maxBytes, rename), options.lock)
+}
+
+/**
+ * Rotate before appending when the log is past its cap. A rotation failure is contained here on
+ * purpose: it must never cost the caller's line, so the entry is appended to the current
+ * (oversized) log and the next append retries rotation from whatever state is on disk.
+ */
+const rotateBeforeAppend = (logPath: string, maxBytes: number, options: MetricsLogOptions): void => {
+  if (!isPastCap(logPath, maxBytes)) return
+  try {
+    rotateMetricsLog(logPath, {
+      maxBytes,
+      locksDir: options.locksDir,
+      rename: options.rename,
+      lock: options.lock,
+    })
+  } catch {
+    // Contained by design — see the doc comment above.
+  }
+}
+
 /**
  * Append one entry. Rotates the file first if it's past `maxBytes`. Errors are swallowed.
  * Returns true when a line was written, false when suppressed or the write failed.
@@ -286,16 +563,8 @@ export const appendMetric = (entry: MetricEntry, options: MetricsLogOptions = {}
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_LOG_BYTES
   try {
     mkdirSync(dirname(logPath), { recursive: true })
-    // Rotate if the file exists and exceeds the cap. Only one back-file kept (`.jsonl.1`).
-    try {
-      const size = statSync(logPath).size
-      if (size >= maxBytes) {
-        renameSync(logPath, `${logPath}.1`)
-      }
-    } catch {
-      // no file yet — first write.
-    }
-    appendFileSync(logPath, JSON.stringify(entry) + '\n', { mode: 0o600 })
+    rotateBeforeAppend(logPath, maxBytes, options)
+    appendFileSync(logPath, JSON.stringify(entry) + '\n', { mode: LOG_FILE_MODE })
     return true
   } catch {
     // best-effort — metrics logging must never fail a real run.
@@ -304,24 +573,34 @@ export const appendMetric = (entry: MetricEntry, options: MetricsLogOptions = {}
 }
 
 /**
- * One-line notice emitted when a rotated back-file exists: rotation keeps exactly one, so anything
- * older than it has already been discarded and no report can account for it (R7.3).
+ * Literal shape of the one-line notice emitted when archived history exists, kept quotable for
+ * the `scripts/session-cost.mjs` mirror. `<dir>` is the absolute history dir, `<n>` its file
+ * count; the word `files` never changes, singular included.
  */
-export const ROTATION_NOTICE = 'metrics: history older than one rotation is not retained'
+export const ROTATION_NOTICE_TEMPLATE =
+  'metrics: history older than one rotation is in <dir> (<n> files)'
+
+/** The notice for a concrete history dir. Must stay byte-identical to the session-cost mirror. */
+export const rotationNoticeFor = (historyDir: string, historyFiles: number): string =>
+  `metrics: history older than one rotation is in ${historyDir} (${historyFiles} files)`
 
 /** Entries plus the read diagnostics a report needs to disclose what it could not account for. */
 export interface MetricsDiagnostics {
   entries: MetricEntry[]
-  /** Lines skipped for invalid JSON or an invalid metric shape, across both files. */
+  /** Lines skipped for invalid JSON or an invalid metric shape, across every file read. */
   invalidLines: number
-  /** Present only when the `<file>.1` rotation file exists. */
-  rotationNotice?: typeof ROTATION_NOTICE
+  /** Present only when at least one archived history file exists; see `rotationNoticeFor`. */
+  rotationNotice?: string
   /**
-   * One message per file that exists but could not be read (EACCES, EISDIR, …), rotated file
-   * first. A missing file is normal and never listed. Absent when every read succeeded, so a
-   * healthy payload is unchanged.
+   * One message per file that exists but could not be read (EACCES, EISDIR, …), history files
+   * first (oldest first), then the rotated file, then the live log. A missing file is normal and
+   * never listed. Absent when every read succeeded, so a healthy payload is unchanged.
    */
   readErrors?: string[]
+  /** Number of `history/*.jsonl` archives on disk; 0 when the dir is absent (R6.2). */
+  historyFiles: number
+  /** True when archives exist and were NOT read because `includeHistory` was not set. */
+  historyExcluded: boolean
 }
 
 interface FileReadResult {
@@ -376,25 +655,77 @@ const readMetricsFile = (path: string): FileReadResult => {
   return { entries, invalidLines }
 }
 
+/** Archived history files, oldest first (names are timestamp-sorted), plus a listing failure. */
+interface HistoryListing {
+  files: string[]
+  /** Set when the dir exists but could not be listed; the archives are then unknown, not absent. */
+  readError?: string
+}
+
 /**
- * Read metric entries plus diagnostics from the log and its rotated back-file (`<file>.1`),
- * oldest first. Rotation keeps exactly one back-file (see appendMetric), so its presence means
- * older history is already gone — reported as `rotationNotice`.
+ * IMP-44: only regular files are archives. A `.jsonl` directory (or socket, fifo, …) would make
+ * `readMetricsFile` report an EISDIR read error and inflate `historyFiles`, so it is skipped at
+ * listing time. A symlink is skipped too, never followed: an archive must live in `history/`, so a
+ * link is a way to pull foreign entries into the totals. Only an entry whose `d_type` the platform
+ * could not report is resolved with `lstat` (which still rejects links); any stat failure skips it.
+ */
+const isRegularHistoryFile = (historyDir: string, entry: Dirent): boolean => {
+  if (entry.isFile()) return true
+  if (entry.isSymbolicLink() || entry.isDirectory()) return false
+  try {
+    return lstatSync(join(historyDir, entry.name)).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * List `<log dir>/history/*.jsonl`, sorted by name (oldest first, since names are UTC stamps).
+ * A missing dir is normal. Mirrored by `listHistoryFiles` in scripts/session-cost.mjs.
+ */
+const listHistoryFiles = (historyDir: string): HistoryListing => {
+  try {
+    const names = readdirSync(historyDir, { withFileTypes: true })
+      .filter((entry) => entry.name.endsWith('.jsonl') && isRegularHistoryFile(historyDir, entry))
+      .map((entry) => entry.name)
+      .sort()
+    return { files: names.map((name) => join(historyDir, name)) }
+  } catch (error: unknown) {
+    if (isErrnoCode(error, 'ENOENT')) return { files: [] }
+    const detail = error instanceof Error ? error.message : 'unknown filesystem error'
+    return { files: [], readError: `unable to read metrics history dir ${historyDir}: ${detail}` }
+  }
+}
+
+/**
+ * Read metric entries plus diagnostics, oldest first: archived `history/*.jsonl` (only with
+ * `includeHistory`), then the rotated back-file (`<file>.1`), then the live log. Rotation archives
+ * instead of discarding (R6.1), so archives that exist but were skipped are disclosed via
+ * `historyExcluded` and `rotationNotice` rather than silently dropped from the totals.
  */
 export const readMetricsDetailed = (options: MetricsLogOptions = {}): MetricsDiagnostics => {
   const logPath = options.logPath ?? defaultLogPath()
-  const rotatedPath = `${logPath}.1`
-  const rotated = readMetricsFile(rotatedPath)
-  const live = readMetricsFile(logPath)
-  const readErrors = [rotated.readError, live.readError].filter(
+  const historyDir = historyDirFor(logPath)
+  const history = listHistoryFiles(historyDir)
+  const includeHistory = options.includeHistory === true
+  const results: FileReadResult[] = [
+    ...(includeHistory ? history.files.map(readMetricsFile) : []),
+    readMetricsFile(`${logPath}.1`),
+    readMetricsFile(logPath),
+  ]
+  const readErrors = [history.readError, ...results.map((result) => result.readError)].filter(
     (message): message is string => message !== undefined,
   )
   const base: MetricsDiagnostics = {
-    entries: [...rotated.entries, ...live.entries],
-    invalidLines: rotated.invalidLines + live.invalidLines,
+    entries: results.flatMap((result) => result.entries),
+    invalidLines: results.reduce((sum, result) => sum + result.invalidLines, 0),
+    historyFiles: history.files.length,
+    historyExcluded: history.files.length > 0 && !includeHistory,
   }
   const diagnostics = readErrors.length > 0 ? { ...base, readErrors } : base
-  return existsSync(rotatedPath) ? { ...diagnostics, rotationNotice: ROTATION_NOTICE } : diagnostics
+  return history.files.length > 0
+    ? { ...diagnostics, rotationNotice: rotationNoticeFor(historyDir, history.files.length) }
+    : diagnostics
 }
 
 /**
@@ -497,12 +828,42 @@ const flatCostUsd = (tokens: TokenTotals, pricing: PricingTable): number =>
     ),
   )
 
-/** Roll up filtered entries. When `pricing` is set, includes an estCostUsd. */
+/** Counters for what a roll-up could not account for; folded into `Aggregate.completeness`. */
+interface CompletenessCounters {
+  unpricedRuns: number
+  missingUsage: number
+}
+
+const completenessOf = (
+  counters: CompletenessCounters,
+  diagnostics: AggregateDiagnostics,
+): Completeness => {
+  const readErrors = diagnostics.readErrors ?? 0
+  const historyExcluded = diagnostics.historyExcluded === true
+  return {
+    complete:
+      counters.unpricedRuns === 0 &&
+      counters.missingUsage === 0 &&
+      readErrors === 0 &&
+      !historyExcluded,
+    unpricedRuns: counters.unpricedRuns,
+    missingUsage: counters.missingUsage,
+    readErrors,
+    historyExcluded,
+  }
+}
+
+/**
+ * Roll up filtered entries. When `pricing` is set, includes an estCostUsd. `diagnostics` carries
+ * the read-side facts (`readErrors` count, `historyExcluded`) that only the reader knows, so the
+ * returned `completeness` can say whether the numbers account for everything (R6.3).
+ */
 export const aggregate = (
   entries: readonly MetricEntry[],
   filters: AggregateFilters = {},
   pricing?: PricingTable,
   costTable: Readonly<Record<string, ModelCostRates>> = COST_TABLE,
+  diagnostics: AggregateDiagnostics = {},
 ): Aggregate => {
   const agg: Aggregate = {
     totalRuns: 0,
@@ -511,6 +872,7 @@ export const aggregate = (
     byTool: {},
     byModel: {},
     failed: 0,
+    completeness: completenessOf({ unpricedRuns: 0, missingUsage: 0 }, diagnostics),
   }
   // Tool and model names are untrusted log content: accumulate in Maps so a `__proto__`
   // key cannot resolve to Object.prototype, then materialize the records via
@@ -520,6 +882,7 @@ export const aggregate = (
   const queueMean = createMeanTracker()
   const firstProgressMean = createMeanTracker()
   let costSum: number | undefined
+  const counters: CompletenessCounters = { unpricedRuns: 0, missingUsage: 0 }
   for (const e of entries) {
     if (!inRange(e, filters)) continue
     agg.totalRuns++
@@ -534,7 +897,11 @@ export const aggregate = (
     firstProgressMean.add(e.timeToFirstProgressMs)
     const cost = applyModelEntry(byModel, e, costTable)
     if (cost !== undefined) costSum = (costSum ?? 0) + cost
+    // A run either reported no usage at all, or reported usage no rate could price.
+    if (!e.usage) counters.missingUsage += 1
+    else if (cost === undefined) counters.unpricedRuns += 1
   }
+  agg.completeness = completenessOf(counters, diagnostics)
   agg.byTool = Object.fromEntries(byTool)
   agg.byModel = Object.fromEntries(byModel)
   agg.avgQueueMs = queueMean.value()

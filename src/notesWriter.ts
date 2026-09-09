@@ -1,6 +1,18 @@
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs'
 import { join } from 'node:path'
+import { redactSecrets } from './redaction.js'
 import type { CodexResult } from './types.js'
 
 /**
@@ -57,7 +69,76 @@ const writeFileAtomic = (filePath: string, content: string): void => {
   }
 }
 
+/**
+ * Append through a single `openSync`, so the symlink check and the write cannot be raced: with
+ * `O_NOFOLLOW` the kernel refuses a symlinked leaf at open time, and every subsequent write goes
+ * to that same fd — nothing can swap the path in between (TOCTOU). `O_CREAT` keeps the call
+ * working when the file raced away after the existence probe.
+ *
+ * IMP-52: on platforms whose Node build does not define `O_NOFOLLOW` (notably Windows) the flag
+ * cannot be requested, so the open is verified after the fact instead: the leaf is `lstat`ed
+ * before the open and the fd is `fstat`ed after it, and the write only happens when both report
+ * the same regular file (`dev`/`ino`). Opening a symlink resolves to its target, whose inode
+ * differs from the link's — so a swap, a symlink, or a vanished leaf all refuse the write
+ * (fail closed) rather than appending through the wrong path.
+ */
+interface FileIdentity {
+  dev: number
+  ino: number
+}
+
+/** The leaf's identity before the open, or undefined when it is a symlink / cannot be stat'ed. */
+const regularFileIdentity = (filePath: string): FileIdentity | undefined => {
+  try {
+    const stats = lstatSync(filePath)
+    if (!stats.isFile()) return undefined
+    return { dev: stats.dev, ino: stats.ino }
+  } catch {
+    return undefined
+  }
+}
+
+const appendViaFd = (filePath: string, label: string, content: string): void => {
+  const hasNoFollow = typeof fsConstants.O_NOFOLLOW === 'number'
+  const noFollow = hasNoFollow ? fsConstants.O_NOFOLLOW : 0
+  const flags = fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | noFollow
+  const refuse = (): never => {
+    throw new Error(`${label} is a symlink or was swapped — refusing to write notes through it`)
+  }
+  // Captured before the open so the post-open fstat has something to compare against.
+  const before = hasNoFollow ? undefined : regularFileIdentity(filePath)
+  if (!hasNoFollow && before === undefined) refuse()
+  let fd: number
+  try {
+    fd = openSync(filePath, flags, NOTES_FILE_MODE)
+  } catch (error: unknown) {
+    // O_NOFOLLOW reports a symlinked leaf as ELOOP (some platforms use EMLINK).
+    const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
+    if (code === 'ELOOP' || code === 'EMLINK') {
+      throw new Error(`${label} is a symlink — refusing to write notes through it`)
+    }
+    throw error
+  }
+  try {
+    if (before !== undefined) {
+      const opened = fstatSync(fd)
+      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) refuse()
+    }
+    writeSync(fd, content)
+  } finally {
+    closeSync(fd)
+  }
+}
+
 const nowIso = (): string => new Date().toISOString()
+
+/**
+ * The only text that reaches the notes file goes through here (R5.2). Notes embed the agent
+ * message, the commands Codex ran and the prompt, any of which can carry a credential, and the
+ * file outlives the run — so redaction happens once, at the write boundary, rather than at each
+ * of the renderers.
+ */
+const redactedForNotes = (content: string): string => redactSecrets(content).text
 
 const renderChanges = (parsed: CodexResult): string => {
   if (parsed.fileChanges.length === 0) return '_none_'
@@ -150,13 +231,17 @@ export const writeNotes = (req: NotesRequest): string | null => {
       exists = false
     }
     if (!exists) {
-      writeFileAtomic(filePath, renderInitialBody(req, completedAt))
+      writeFileAtomic(filePath, redactedForNotes(renderInitialBody(req, completedAt)))
     } else {
-      // Verified above (lstat) to be a regular file, not a symlink — appending in place is safe.
-      appendFileSync(filePath, renderContinuationBlock(req, completedAt))
+      // Re-checks the symlink condition atomically at open time — the lstat above can be raced.
+      appendViaFd(
+        filePath,
+        `.codex-flow/notes/${req.sessionId}.md`,
+        redactedForNotes(renderContinuationBlock(req, completedAt)),
+      )
     }
   } else {
-    writeFileAtomic(filePath, renderInitialBody(req, completedAt))
+    writeFileAtomic(filePath, redactedForNotes(renderInitialBody(req, completedAt)))
   }
   return filePath
 }

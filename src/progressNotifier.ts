@@ -1,5 +1,6 @@
 import { StringDecoder } from 'node:string_decoder'
 import { formatEvent } from './progressFormatter.js'
+import { redactSecrets } from './redaction.js'
 
 export type ProgressSink = (chunk: Buffer) => void
 export type ProgressSender = (message: string, progress: number) => void
@@ -78,7 +79,9 @@ export const createProgressNotifier = (
     const formatted = formatEvent(line)
     if (formatted === null) return false
     progress += 1
-    latest = { message: formatted, progress }
+    // R5.2: the formatted message is derived from untrusted Codex stdout and leaves the process as
+    // an MCP progress notification — redact before it is queued, not at the send site.
+    latest = { message: redactSecrets(formatted).text, progress }
     return true
   }
 

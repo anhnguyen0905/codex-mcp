@@ -173,11 +173,21 @@ using the chars/4 heuristic). Decision-log blocks carry a git-SHA `Anchor:`, and
 block `[fresh]` or `[verify]`; anything unverifiable — including a missing or invalid anchor or a
 git failure — degrades to `[verify]`.
 
+`scripts/project-context.mjs` writes `.codex-flow/PROJECT.md`, the durable project brief Codex
+reads on every task: `--generate` derives it from the repo (what it is, users, layout, constraints,
+quality mechanisms, known limitations, direction) and `--refresh` regenerates the generated parts
+while preserving any `<!-- owner-notes -->` blocks the team added. `/codex-flow` Phase 0 generates it
+on a fresh run when it is absent and has the user confirm or edit it in the interview; Phase 2 reads
+it before exploring; Phase 5 proposes a `--refresh` (with the diff shown for confirmation) when a
+Decision-log block records a contract deviation or an architecture change. It is a tracked project
+file, not run state — committed with the run, never archived with it — and slices carry it as a
+`## Project context` item capped at 600 tokens.
+
 Mandatory task text and task statuses are never dropped. Lower-priority content is dropped whole
 when necessary, with a restorable
 `(+N lower-priority items omitted — read .codex-flow/PLAN.md …)` pointer. Full
-`.codex-flow/PLAN.md` remains the on-disk source of truth. Standalone installs without the helper
-fall back to reading PLAN.md directly.
+`.codex-flow/PLAN.md` remains the on-disk source of truth. The slice helper is required: when it is
+missing or exits non-zero the flow stops and asks for a plugin reinstall instead of degrading.
 
 ### Run-state & requirements fidelity
 
@@ -258,12 +268,46 @@ durationMs, outputTail, passed, skipped? }`. This is deterministic evidence that
 check ran — independent of Codex's own claim. It is skipped (`skipped: "run-failed"`) when the run
 itself failed or aborted, and it never changes the run's `status`/`isError`. Termination is bounded
 (SIGTERM → tree SIGKILL → forced settle) so a hung check can never hold the workspace lock. The
-command runs with the server's environment and its raw output tail is returned unredacted — treat
-it with the same trust as Codex's own output.
+command runs with the server's environment, and its output tail passes through the same redaction
+pass as every other returned text — treat it with the same trust as Codex's own output.
 
 `codex_execute` / `codex_continue` / `codex_review` and each `codex_batch` task accept
 `reasoningEffort: minimal | low | medium | high | xhigh`, passed to Codex as
 `-c model_reasoning_effort="<value>"`.
+
+**Secret redaction.** Every returned or persisted text — `agentMessage`, `stderr`, `errors`,
+`verification.outputTail`, live-progress notifications, the raw JSONL live log, and `writeNotes`
+run notes — is redacted before it leaves the server: each known secret shape (OpenAI/GitHub/AWS/
+Slack/Google keys, bearer tokens, JWTs, PEM private keys, `SECRET`/`TOKEN`/`KEY`-style env
+assignments) is replaced by `[REDACTED:<kind>]`. `codex_execute` / `codex_continue` / `codex_review`
+report `redactions: <n>` (and each `codex_batch` task result its own `redactions`, with
+`redactionsTotal` on the batch payload) whenever the count is above zero; the fields are omitted at
+zero. Redaction is idempotent and never changes `status`, `isError`, `accepted`, or a
+`verification.passed` verdict.
+
+**Auth mode & the model guard.** `codex_health` always returns
+`authMode: "chatgpt" | "apikey" | "unknown"`, derived from the Codex CLI login output. Under
+ChatGPT auth a `model` override is refused before anything is spawned — `codex_execute` /
+`codex_continue` / `codex_review` return an error and a `codex_batch` task fails with
+`model override is not allowed under ChatGPT auth; steer with reasoningEffort` — because the
+ChatGPT-auth backend rejects arbitrary model ids. So pass `model` only when `authMode` is
+`apikey`; otherwise omit it and steer with `reasoningEffort`. `/codex-flow` Phase 4 follows the same
+rule, and a flowDocs guard checks that wording.
+
+**Review scope.** `codex_review` accepts `scope: { files: string[]; contract?: string }` (files
+non-empty, up to 200 entries; contract up to 4000 chars). The server appends the contract and the
+file list to the reviewer prompt and stamps every parsed finding with `inScope: boolean`, plus
+`reviewFindings.outOfScopeCount` for the findings outside the declared files. Out-of-scope findings
+are non-blocking by default — `/codex-flow` routes them to the improvements ledger and blocks only
+when the reviewer verifies they affect the task's acceptance.
+
+**Metrics history & completeness.** `codex_metrics` accepts `includeHistory: true` to aggregate the
+archived `history/*.jsonl` back-files alongside the live and rotated log (default `false`, with
+`historyFiles` / `historyExcluded` reported when archives exist). Every aggregate carries
+`completeness: { complete, unpricedRuns, missingUsage, readErrors, historyExcluded }` so an
+incomplete roll-up is visible instead of silent. Note that the shipped `COST_TABLE` is empty and
+`CODEX_MCP_PRICING` does not fill it, so any run that reported usage counts as unpriced:
+`completeness.complete` is never `true` for usage-bearing entries in this release.
 
 Sandbox modes: `read-only`, `workspace-write` (default), `danger-full-access`. Default execution
 timeout is 60 min (`timeoutMs` caps at 2 h). Runs into the same `cwd` are serialized; different
@@ -325,8 +369,8 @@ run still succeeds; follow the `liveLog` or the in-session progress instead.
   `read-only`; `danger-full-access` is never used unless a task explicitly needs it and the user is
   told first. Per-cwd locks serialize runs into the same workspace.
 - **Caller-defined commands.** `verifyCommand` runs the acceptance command you pass, in your
-  workspace, with the server's environment; its output tail is returned unredacted — treat it like
-  any other shell output. Third-party skills are loaded only after a content-pinned vet
+  workspace, with the server's environment; its output tail is redacted like every other returned
+  text, but treat it with the same trust as any other shell output. Third-party skills are loaded only after a content-pinned vet
   (`skill-selection`).
 - Report vulnerabilities per [SECURITY.md](SECURITY.md).
 

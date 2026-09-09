@@ -2,6 +2,7 @@
 // First-time setup check: verifies the toolchain codex-flow depends on and tells
 // the user exactly what to do for anything missing. Exits non-zero on blockers.
 import { spawnSync } from 'node:child_process'
+import { describeHistoryDir, resolveLogPath } from './session-cost.mjs'
 
 const isWindows = process.platform === 'win32'
 const MIN_NODE_MAJOR = 20
@@ -63,6 +64,11 @@ addCheck(
   claudeVersion.ok ? claudeVersion.output.split('\n')[0] : 'not found on PATH',
   'Install from https://claude.com/claude-code — then run `claude` once and log in when prompted',
 )
+
+// 5. Metrics history archive (R6.4) — informational: nothing here can block a first run.
+const history = describeHistoryDir(resolveLogPath({}, process.env))
+console.log(`ℹ️  Metrics history — ${history.dir} (${history.files} files, ${history.bytes} bytes)`)
+if (history.readError !== undefined) console.log(`   → ${history.readError}`)
 
 const blockers = checks.filter((check) => !check.passed)
 console.log('')

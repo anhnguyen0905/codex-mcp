@@ -59,7 +59,8 @@ A task is the unit Codex builds in one run and Claude verifies in one pass — s
   `npm run build`, or a concrete manual probe — not just prose. Phase 5 runs it verbatim.
 - **Acceptance cites the plan's A-entries**: end each `Acceptance:` field with the citation form
   `; satisfies A<n>[, A<n>]` — every PLAN `A<n>` must be cited by at least one task, and the tokens
-  after `satisfies` must be bare `A<n>` IDs (no suffixes).
+  after `satisfies` must be bare `A<n>` IDs (no suffixes). Citations are matched
+  case-insensitively (`a3` resolves to `A3`), but each token must still be a bare `A<n>` ID.
 - **Vertical over horizontal** where possible: a thin end-to-end slice (one endpoint + its test)
   reviews better than "all models, then all controllers".
 - **File-disjoint where independent**: actively reshape task boundaries so independent tasks

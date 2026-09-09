@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { AuthMode } from './authMode.js'
 import type { BatchTaskResult } from './batchRunner.js'
 import type { ParsedEvents } from './eventParser.js'
 import type { ExecProbeStatus } from './healthProbe.js'
@@ -44,6 +45,11 @@ export type RunPayload = ParsedEvents & {
   verification?: VerificationResult | null
   /** Typed findings parsed from the reviewer's agentMessage; codex_review only. */
   reviewFindings?: ReviewFindings
+  /**
+   * Secrets replaced with `[REDACTED:<kind>]` across this run's returned and persisted text
+   * (agentMessage, errors, stderr, plus the verification output tail). Absent when 0 (R5.2).
+   */
+  redactions?: number
 }
 
 /** Per-status roll-up over a batch's task results (T4.6). */
@@ -62,6 +68,8 @@ export interface BatchToolPayload {
   /** Count of tasks with isError=true (kept for backward compatibility; see summary). */
   failed: number
   summary: BatchSummary
+  /** Sum of every task's `redactions`. Absent when 0 (R5.2). */
+  redactionsTotal?: number
 }
 
 export type LoginProbeStatus = 'ok' | 'failed' | 'timeout'
@@ -73,10 +81,20 @@ export interface HealthPayload {
   /** Whether the `codex login status` probe itself worked — a failed/timed-out probe must never read as "not logged in". */
   loginProbe: LoginProbeStatus
   loginStatus: string
+  /**
+   * Codex auth mode derived from `loginStatus` (no extra process). Always present; gates the
+   * `model` override for execute/continue/review/batch (R3.1, R3.2).
+   */
+  authMode: AuthMode
   /** Deep-probe verdict; present only when the call passed `deep: true` (R3.1). */
   execProbe?: ExecProbeStatus
   /** Bounded human-readable reason behind `execProbe`; present exactly when `execProbe` is. */
   execProbeMessage?: string
+  /**
+   * Secrets replaced across the returned CLI-derived text (`loginStatus`, `execProbeMessage`).
+   * Absent when 0, so the legacy field set is unchanged (C4).
+   */
+  redactions?: number
 }
 
 export const summarizeBatch = (results: readonly BatchTaskResult[]): BatchSummary => ({
@@ -184,6 +202,7 @@ export const runOutputShape = {
   resumeReasons: z.array(resumeReasonSchema).optional(),
   verification: verificationSchema.optional(),
   reviewFindings: reviewFindingsSchema.optional(),
+  redactions: z.number().optional(),
 }
 
 // Skipped/never-started batch tasks carry a bare CodexResult without parser counters.
@@ -215,6 +234,7 @@ const batchTaskResultSchema = z.object({
   liveLog: z.string().nullable(),
   isError: z.boolean(),
   error: z.string().optional(),
+  redactions: z.number().optional(),
 })
 
 const batchSummarySchema = z.object({
@@ -231,6 +251,7 @@ export const batchOutputShape = {
   total: z.number(),
   failed: z.number(),
   summary: batchSummarySchema,
+  redactionsTotal: z.number().optional(),
 }
 
 /** outputSchema for codex_health results. */
@@ -239,6 +260,8 @@ export const healthOutputShape = {
   loggedIn: z.boolean(),
   loginProbe: z.enum(['ok', 'failed', 'timeout']),
   loginStatus: z.string(),
+  authMode: z.enum(['chatgpt', 'apikey', 'unknown']),
   execProbe: z.enum(['ok', 'quota', 'model', 'error', 'skipped']).optional(),
   execProbeMessage: z.string().optional(),
+  redactions: z.number().optional(),
 }

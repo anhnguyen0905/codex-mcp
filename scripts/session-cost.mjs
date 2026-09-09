@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -11,11 +11,16 @@ const VALUE_FLAGS = new Set(['--since', '--until', '--cwd', '--log'])
 const SESSION_FLAG = '--session'
 const PRICING_KEYS = ['inputPer1M', 'cachedInputPer1M', 'outputPer1M', 'reasoningOutputPer1M']
 const MODEL_SOURCES = ['event', 'override', 'config']
+/** Directory (next to the log) holding every archived back-file. Mirrors src/metricsLog.ts. */
+export const HISTORY_DIR_NAME = 'history'
 /**
- * One-line notice emitted when a rotated back-file exists. Must stay byte-identical to
- * ROTATION_NOTICE in src/metricsLog.ts (this script is stdlib-only and cannot import from dist).
+ * Literal shape of the one-line notice emitted when archived history exists. Must stay
+ * byte-identical to ROTATION_NOTICE_TEMPLATE in src/metricsLog.ts (this script is stdlib-only and
+ * cannot import from dist). `<dir>` is the absolute history dir, `<n>` its file count; the word
+ * `files` never changes, singular included.
  */
-export const ROTATION_NOTICE = 'metrics: history older than one rotation is not retained'
+export const ROTATION_NOTICE_TEMPLATE =
+  'metrics: history older than one rotation is in <dir> (<n> files)'
 const ISO_FLAG_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2}))?$/
 
@@ -65,11 +70,16 @@ export function parseArgs(argv) {
     throw new TypeError('argv must be an array of strings')
   }
 
-  let parsed = { json: false }
+  let parsed = { json: false, history: false }
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index]
     if (flag === '--json') {
       parsed = { ...parsed, json: true }
+      continue
+    }
+    // Opt-in: also read the archived history/*.jsonl back-files (R6.2).
+    if (flag === '--history') {
+      parsed = { ...parsed, history: true }
       continue
     }
     if (flag === SESSION_FLAG) {
@@ -162,35 +172,135 @@ const readEntriesFile = (filePath) => {
   return { entries }
 }
 
-/**
- * The rotation notice for a log path, or undefined when no `<path>.1` back-file exists. A missing
- * rotation file is normal and must stay silent (R7.3).
- */
-export function rotationNotice(logPath) {
+/** Archive dir for a log: `<log dir>/history`. Mirrors `historyDirFor` in src/metricsLog.ts. */
+export function historyDirFor(logPath) {
   if (typeof logPath !== 'string' || logPath.length === 0) {
     throw new TypeError('logPath must be a non-empty string')
   }
-  return existsSync(`${logPath}.1`) ? ROTATION_NOTICE : undefined
+  return path.join(path.dirname(logPath), HISTORY_DIR_NAME)
 }
 
 /**
- * Read the rotated metrics log first, then the current log, plus one `readErrors` message per file
- * that exists but could not be read (EACCES, EISDIR, …). A missing file is normal and never
- * listed. Mirrors `readMetricsDetailed` in src/metricsLog.ts.
+ * An archive entry qualifies iff it is a regular file: `isFile()` → keep; a symlink or directory
+ * → skip (symlinks are never followed, so nothing outside `history/` can enter the totals); any
+ * other `d_type` is resolved with `lstat`, and a stat failure skips the entry. Mirrors
+ * `isRegularHistoryFile` in src/metricsLog.ts byte-for-byte in behaviour.
  */
-export function readEntriesDetailed(logPath) {
+const isRegularHistoryFile = (historyDir, entry) => {
+  if (entry.isFile()) return true
+  if (entry.isSymbolicLink() || entry.isDirectory()) return false
+  try {
+    return lstatSync(path.join(historyDir, entry.name)).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * List `<log dir>/history/*.jsonl`, sorted by name (oldest first, since names are UTC stamps),
+ * skipping entries that are not regular files. A missing dir is normal. Mirrors
+ * `listHistoryFiles` in src/metricsLog.ts.
+ */
+const listHistoryFiles = (historyDir) => {
+  try {
+    const names = readdirSync(historyDir, { withFileTypes: true })
+      .filter((entry) => entry.name.endsWith('.jsonl') && isRegularHistoryFile(historyDir, entry))
+      .map((entry) => entry.name)
+      .sort()
+    return { files: names.map((name) => path.join(historyDir, name)) }
+  } catch (error) {
+    if (isRecord(error) && error.code === 'ENOENT') return { files: [] }
+    const detail = error instanceof Error ? error.message : 'unknown filesystem error'
+    return { files: [], readError: `unable to read metrics history dir ${historyDir}: ${detail}` }
+  }
+}
+
+/**
+ * The notice for a concrete history dir and file count. Must stay byte-identical to
+ * `rotationNoticeFor` in src/metricsLog.ts.
+ */
+export function rotationNoticeFor(historyDir, historyFiles) {
+  return `metrics: history older than one rotation is in ${historyDir} (${historyFiles} files)`
+}
+
+/**
+ * `{ notice, readError }` for a log path: `notice` is undefined when its `history/` dir holds no
+ * archive, `readError` is the listing failure message when the dir exists but could not be read —
+ * a caller must surface it rather than present "no archives" as the truth.
+ * Rotation archives instead of discarding (R6.1), so the notice points at the archives rather
+ * than at the `<path>.1` back-file; a log with no history at all stays silent (R7.3).
+ */
+export function rotationNotice(logPath) {
+  const historyDir = historyDirFor(logPath)
+  const { files, readError } = listHistoryFiles(historyDir)
+  return {
+    notice: files.length > 0 ? rotationNoticeFor(historyDir, files.length) : undefined,
+    readError,
+  }
+}
+
+/**
+ * Read metric entries oldest first — archived `history/*.jsonl` (only with `includeHistory`), then
+ * the rotated back-file (`<path>.1`), then the current log — plus one `readErrors` message per file
+ * or dir that exists but could not be read (EACCES, EISDIR, …). A missing file is normal and never
+ * listed. Archives that exist but were skipped are disclosed via `historyExcluded` and
+ * `rotationNotice` rather than silently dropped. Mirrors `readMetricsDetailed` in src/metricsLog.ts.
+ */
+export function readEntriesDetailed(logPath, { includeHistory = false } = {}) {
   if (typeof logPath !== 'string' || logPath.length === 0) {
     throw new TypeError('logPath must be a non-empty string')
   }
-  const rotated = readEntriesFile(`${logPath}.1`)
-  const live = readEntriesFile(logPath)
-  const readErrors = [rotated.readError, live.readError].filter((message) => message !== undefined)
-  return { entries: [...rotated.entries, ...live.entries], readErrors }
+  if (typeof includeHistory !== 'boolean') throw new TypeError('includeHistory must be a boolean')
+  const historyDir = historyDirFor(logPath)
+  const history = listHistoryFiles(historyDir)
+  const results = [
+    ...(includeHistory ? history.files.map(readEntriesFile) : []),
+    readEntriesFile(`${logPath}.1`),
+    readEntriesFile(logPath),
+  ]
+  const readErrors = [history.readError, ...results.map((result) => result.readError)].filter(
+    (message) => message !== undefined,
+  )
+  const detailed = {
+    entries: results.flatMap((result) => result.entries),
+    readErrors,
+    historyFiles: history.files.length,
+    historyExcluded: history.files.length > 0 && !includeHistory,
+  }
+  return history.files.length > 0
+    ? { ...detailed, rotationNotice: rotationNoticeFor(historyDir, history.files.length) }
+    : detailed
 }
 
 /** Read the rotated metrics log first, then the current log. Use `readEntriesDetailed` for gaps. */
-export function readEntries(logPath) {
-  return readEntriesDetailed(logPath).entries
+export function readEntries(logPath, options) {
+  return readEntriesDetailed(logPath, options).entries
+}
+
+/**
+ * Size report for a log's archive dir: absolute path, archive count, total bytes (R6.4). `bytes`
+ * counts only the archives that could be stat'ed; anything unstattable is disclosed in `readError`
+ * so `scripts/doctor.mjs` never presents a short total as the whole archive.
+ */
+export function describeHistoryDir(logPath) {
+  const dir = historyDirFor(logPath)
+  const listing = listHistoryFiles(dir)
+  if (listing.readError !== undefined) {
+    return { dir, files: 0, bytes: 0, readError: listing.readError }
+  }
+  let bytes = 0
+  let unstattable = 0
+  for (const file of listing.files) {
+    try {
+      bytes += statSync(file).size
+    } catch {
+      unstattable += 1
+    }
+  }
+  const described = { dir, files: listing.files.length, bytes }
+  return unstattable === 0
+    ? described
+    : { ...described, readError: `unable to stat ${unstattable} metrics archive(s) in ${dir}` }
 }
 
 const isStringArray = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string')
@@ -258,10 +368,43 @@ const estimateCostUsd = (tokens, pricing) => {
   )
 }
 
-/** Aggregate already-filtered metric entries. */
-export function aggregateEntries(entries, pricing) {
+/** Starting point for a model bucket's provenance counts; never mutated (spread into a new object). */
+const ZERO_MODEL_SOURCES = { event: 0, override: 0, config: 0 }
+
+/**
+ * What the roll-up could NOT account for (R6.3). Mirrors `Completeness` in src/metricsLog.ts:
+ * every counter is over the entries handed in, `readErrors`/`historyExcluded` come from the read.
+ * A run counts as unpriced when it reported usage the report could not turn into a cost — here
+ * that means no `CODEX_MCP_PRICING` table was configured, the script's only source of rates.
+ */
+const completenessOf = ({ unpricedRuns, missingUsage }, diagnostics) => {
+  const readErrors = diagnostics.readErrors ?? 0
+  const historyExcluded = diagnostics.historyExcluded === true
+  return {
+    complete: unpricedRuns === 0 && missingUsage === 0 && readErrors === 0 && !historyExcluded,
+    unpricedRuns,
+    missingUsage,
+    readErrors,
+    historyExcluded,
+  }
+}
+
+const isDiagnostics = (diagnostics) =>
+  isRecord(diagnostics) &&
+  (diagnostics.readErrors === undefined || isFiniteNonNegative(diagnostics.readErrors)) &&
+  (diagnostics.historyExcluded === undefined || typeof diagnostics.historyExcluded === 'boolean')
+
+/**
+ * Aggregate already-filtered metric entries. `diagnostics` carries the read-side facts
+ * (`readErrors` count, `historyExcluded`) only the reader knows, so `completeness` can say whether
+ * the numbers account for everything (R6.3).
+ */
+export function aggregateEntries(entries, pricing, diagnostics = {}) {
   if (!Array.isArray(entries)) throw new TypeError('entries must be an array')
   if (pricing !== undefined && !isPricing(pricing)) throw new TypeError('pricing must contain four non-negative rates')
+  if (!isDiagnostics(diagnostics)) {
+    throw new TypeError('diagnostics must be { readErrors?: number, historyExcluded?: boolean }')
+  }
   for (const entry of entries) {
     if (!isMetricEntry(entry)) throw new TypeError('entries must contain valid metric entries')
   }
@@ -269,6 +412,8 @@ export function aggregateEntries(entries, pricing) {
   let totalRuns = 0
   let failed = 0
   let totalDurationMs = 0
+  let unpricedRuns = 0
+  let missingUsage = 0
   const totalTokens = zeroTokens()
   const byModel = new Map()
   const byTool = new Map()
@@ -278,6 +423,9 @@ export function aggregateEntries(entries, pricing) {
     failed += Number(isFailed)
     totalDurationMs += entry.durationMs
     addUsage(totalTokens, entry.usage)
+    // A run either reported no usage at all, or reported usage no rate could price.
+    if (!entry.usage) missingUsage += 1
+    else if (pricing === undefined) unpricedRuns += 1
 
     const tool = byTool.get(entry.tool) ?? { runs: 0 }
     tool.runs += 1
@@ -289,6 +437,11 @@ export function aggregateEntries(entries, pricing) {
     model.failed += Number(isFailed)
     model.totalDurationMs += entry.durationMs
     addUsage(model.tokens, entry.usage)
+    // IMP-26: provenance stays absent on legacy logs, so an existing report is unchanged.
+    if (entry.modelSource !== undefined) {
+      const sources = model.sources ?? ZERO_MODEL_SOURCES
+      model.sources = { ...sources, [entry.modelSource]: sources[entry.modelSource] + 1 }
+    }
     byModel.set(entry.model, model)
   }
   const aggregate = {
@@ -298,25 +451,40 @@ export function aggregateEntries(entries, pricing) {
     totalTokens,
     byModel: Object.fromEntries(byModel),
     byTool: Object.fromEntries(byTool),
+    completeness: completenessOf({ unpricedRuns, missingUsage }, diagnostics),
   }
   return pricing === undefined
     ? aggregate
     : { ...aggregate, estimatedCostUsd: estimateCostUsd(aggregate.totalTokens, pricing) }
 }
 
+/** Table cell for "no model-attribution provenance recorded" (legacy logs). */
+const NO_SOURCES_CELL = '—'
+
+const renderFlag = (value) => (value === true ? 'yes' : 'no')
+
 const escapeCell = (value) =>
   String(value)
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replaceAll('|', '\\|')
+
+/** Model-attribution provenance as `event=2 config=1`, or `—` when the log recorded none. */
+const renderSourcesCell = (sources) => {
+  if (!isRecord(sources)) return NO_SOURCES_CELL
+  const parts = MODEL_SOURCES.filter((source) => sources[source] > 0).map(
+    (source) => `${source}=${sources[source]}`,
+  )
+  return parts.length > 0 ? parts.join(' ') : NO_SOURCES_CELL
+}
 
 const renderModelRows = (byModel) => {
   const rows = Object.entries(byModel)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(
       ([model, value]) =>
-        `| ${escapeCell(model)} | ${value.runs} | ${value.failed} | ${value.totalDurationMs} | ${value.tokens.input} | ${value.tokens.cachedInput} | ${value.tokens.output} | ${value.tokens.reasoningOutput} |`,
+        `| ${escapeCell(model)} | ${value.runs} | ${value.failed} | ${value.totalDurationMs} | ${value.tokens.input} | ${value.tokens.cachedInput} | ${value.tokens.output} | ${value.tokens.reasoningOutput} | ${renderSourcesCell(value.sources)} |`,
     )
-  return rows.length > 0 ? rows : ['| _None_ | 0 | 0 | 0 | 0 | 0 | 0 | 0 |']
+  return rows.length > 0 ? rows : [`| _None_ | 0 | 0 | 0 | 0 | 0 | 0 | 0 | ${NO_SOURCES_CELL} |`]
 }
 
 const renderToolRows = (byTool) => {
@@ -326,9 +494,17 @@ const renderToolRows = (byTool) => {
   return rows.length > 0 ? rows : ['| _None_ | 0 |']
 }
 
+const renderCompletenessRows = (completeness) => [
+  `| Complete | ${renderFlag(completeness.complete)} |`,
+  `| Unpriced runs | ${completeness.unpricedRuns} |`,
+  `| Missing usage | ${completeness.missingUsage} |`,
+  `| Read errors | ${completeness.readErrors} |`,
+  `| History excluded | ${renderFlag(completeness.historyExcluded)} |`,
+]
+
 /** Render a session aggregate as Markdown. */
 export function renderMarkdown(aggregate) {
-  if (!isRecord(aggregate) || !isRecord(aggregate.totalTokens)) {
+  if (!isRecord(aggregate) || !isRecord(aggregate.totalTokens) || !isRecord(aggregate.completeness)) {
     throw new TypeError('aggregate must be a session-cost aggregate')
   }
   const costLine = Object.hasOwn(aggregate, 'estimatedCostUsd')
@@ -351,8 +527,8 @@ export function renderMarkdown(aggregate) {
     '',
     '## Per model',
     '',
-    '| Model | Runs | Failed | Duration (ms) | Input | Cached input | Output | Reasoning output |',
-    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    '| Model | Runs | Failed | Duration (ms) | Input | Cached input | Output | Reasoning output | Sources |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
     ...renderModelRows(aggregate.byModel),
     '',
     '## Per tool',
@@ -362,6 +538,12 @@ export function renderMarkdown(aggregate) {
     ...renderToolRows(aggregate.byTool),
     '',
     costLine,
+    '',
+    '## Completeness',
+    '',
+    '| Check | Value |',
+    '| --- | ---: |',
+    ...renderCompletenessRows(aggregate.completeness),
   ].join('\n')
 }
 
@@ -396,13 +578,15 @@ if (isDirectRun) {
   try {
     const args = parseArgs(process.argv.slice(2))
     const logPath = resolveLogPath(args, process.env)
-    const read = readEntriesDetailed(logPath)
+    const read = readEntriesDetailed(logPath, { includeHistory: args.history })
     const entries = filterEntries(read.entries, args)
-    const aggregate = aggregateEntries(entries, resolvePricing(process.env))
+    const aggregate = aggregateEntries(entries, resolvePricing(process.env), {
+      readErrors: read.readErrors.length,
+      historyExcluded: read.historyExcluded,
+    })
     console.log(args.json ? JSON.stringify(aggregate, null, 2) : renderMarkdown(aggregate))
     // Notices go to stderr so `--json` stdout stays machine-parseable in both modes.
-    const notice = rotationNotice(logPath)
-    if (notice !== undefined) console.error(notice)
+    if (read.rotationNotice !== undefined) console.error(read.rotationNotice)
     // An unreadable log means the report is incomplete: disclose each gap and fail the run
     // rather than pass off a partial total as the session's cost.
     for (const readError of read.readErrors) console.error(`session-cost: ${readError}`)

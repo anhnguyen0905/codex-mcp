@@ -33,8 +33,8 @@ run position from current durable state; do not re-read control files solely for
   `.codex-flow/CONTEXT-T<n>.md` (≤ 4000 estimated tokens using the chars/4 heuristic) for each task
   and `.codex-flow/RESUME.md` (≤ 8000 estimated tokens using the chars/4 heuristic) on resume.
 - Keep full `.codex-flow/PLAN.md` as the durable source of truth on disk. Read it in full only to
-  resolve a disputed finding, follow a slice's omitted-pointer line to a needed section, or as the
-  standalone fallback when the slice helper is unavailable.
+  resolve a disputed finding or to follow a slice's omitted-pointer line to a needed section — the
+  generated slice is never optional. If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.
 - Treat derived slice files as generated views. Regenerate them; never hand-edit them.
 - Check the generation anchor recorded in each slice header. Re-check every `[verify]`-stamped
   block against the current code before relying on it.

@@ -27,6 +27,7 @@ const parse = (r: Awaited<ReturnType<Client['callTool']>>) =>
     loggedIn: boolean
     loginProbe: string
     loginStatus: string
+    authMode: string
     execProbe?: ExecProbeStatus
     execProbeMessage?: string
   }
@@ -144,7 +145,13 @@ describe('codex_health deep exec probe (R3.1, R3.2)', () => {
 
     const payload = parse(await client.callTool({ name: 'codex_health', arguments: {} }))
 
-    expect(Object.keys(payload)).toEqual(['version', 'loggedIn', 'loginProbe', 'loginStatus'])
+    expect(Object.keys(payload)).toEqual([
+      'version',
+      'loggedIn',
+      'loginProbe',
+      'loginStatus',
+      'authMode',
+    ])
     expect(runFn).toHaveBeenCalledTimes(2)
   })
 
@@ -154,7 +161,13 @@ describe('codex_health deep exec probe (R3.1, R3.2)', () => {
 
     const payload = parse(await client.callTool({ name: 'codex_health', arguments: { deep: false } }))
 
-    expect(Object.keys(payload)).toEqual(['version', 'loggedIn', 'loginProbe', 'loginStatus'])
+    expect(Object.keys(payload)).toEqual([
+      'version',
+      'loggedIn',
+      'loginProbe',
+      'loginStatus',
+      'authMode',
+    ])
     expect(runFn).toHaveBeenCalledTimes(2)
   })
 
@@ -330,5 +343,219 @@ describe('codex_health deep exec probe (R3.1, R3.2)', () => {
     const result = await runExecProbe(runProbe as never, { cwd: process.cwd(), timeoutMs: 1000 })
 
     expect(result).toEqual({ execProbe: 'error', execProbeMessage: 'spawn codex ENOENT' })
+  })
+})
+
+describe('codex_health authMode (R3.1, C1)', () => {
+  const loginOutcome = (stdout: string): RunOutcome => ({
+    stdout,
+    stderr: '',
+    exitCode: 0,
+    timedOut: false,
+  })
+
+  const healthPayload = async (loginStdout: string) => {
+    const runFn = vi
+      .fn()
+      .mockResolvedValueOnce(versionOutcome)
+      .mockResolvedValueOnce(loginOutcome(loginStdout))
+    const client = await connect(runFn as never)
+    return parse(await client.callTool({ name: 'codex_health', arguments: {} }))
+  }
+
+  test('reports chatgpt for a ChatGPT login without spawning an extra process', async () => {
+    // Arrange
+    const runFn = vi
+      .fn()
+      .mockResolvedValueOnce(versionOutcome)
+      .mockResolvedValueOnce(loginOutcome('Logged in using ChatGPT'))
+    const client = await connect(runFn as never)
+
+    // Act
+    const payload = parse(await client.callTool({ name: 'codex_health', arguments: {} }))
+
+    // Assert — still exactly two spawns: --version and login status.
+    expect(payload.authMode).toBe('chatgpt')
+    expect(runFn).toHaveBeenCalledTimes(2)
+  })
+
+  test('reports apikey for an API-key login', async () => {
+    // Arrange / Act
+    const payload = await healthPayload('Logged in using an API key')
+
+    // Assert
+    expect(payload.authMode).toBe('apikey')
+  })
+
+  test('reports unknown for unrecognised login text', async () => {
+    // Arrange / Act
+    const payload = await healthPayload('Not logged in')
+
+    // Assert
+    expect(payload.authMode).toBe('unknown')
+  })
+
+  test('re-detects the mode on every call, so a re-login is picked up', async () => {
+    // Arrange — one server, two health calls with different login text.
+    const runFn = vi
+      .fn()
+      .mockResolvedValueOnce(versionOutcome)
+      .mockResolvedValueOnce(loginOutcome('Logged in using ChatGPT'))
+      .mockResolvedValueOnce(versionOutcome)
+      .mockResolvedValueOnce(loginOutcome('Logged in using an API key'))
+    const client = await connect(runFn as never)
+
+    // Act
+    const first = parse(await client.callTool({ name: 'codex_health', arguments: {} }))
+    const second = parse(await client.callTool({ name: 'codex_health', arguments: {} }))
+
+    // Assert
+    expect(first.authMode).toBe('chatgpt')
+    expect(second.authMode).toBe('apikey')
+  })
+})
+
+describe('codex_health authMode when the login probe itself failed (R3.3)', () => {
+  const CHATGPT_TEXT = 'Logged in using ChatGPT'
+  const RUN_JSONL = [
+    JSON.stringify({ type: 'thread.started', thread_id: 'sess-1' }),
+    JSON.stringify({ type: 'turn.completed' }),
+  ].join('\n')
+
+  /** One health round-trip with a broken login probe, then a `model` override on codex_execute. */
+  const healthThenOverride = async (login: RunOutcome) => {
+    const runFn = vi.fn(async (args: string[]) => {
+      if (args[0] === '--version') return versionOutcome
+      if (args[0] === 'login') return login
+      return { stdout: RUN_JSONL, stderr: '', exitCode: 0, timedOut: false } satisfies RunOutcome
+    })
+    const client = await connect(runFn as never)
+    const health = parse(await client.callTool({ name: 'codex_health', arguments: {} }))
+    const run = await client.callTool({
+      name: 'codex_execute',
+      arguments: { prompt: 'go', cwd: '/repo', model: 'gpt-5.1-codex' },
+    })
+    return { health, run }
+  }
+
+  test('a timed-out probe whose text looks like ChatGPT reports unknown and does not block model', async () => {
+    // Arrange / Act
+    const { health, run } = await healthThenOverride({
+      stdout: CHATGPT_TEXT,
+      stderr: '',
+      exitCode: null,
+      timedOut: true,
+    })
+
+    // Assert — unknown is permissive: the override must reach Codex.
+    expect(health.loginProbe).toBe('timeout')
+    expect(health.authMode).toBe('unknown')
+    expect(run.isError ?? false).toBe(false)
+  })
+
+  test('an aborted probe whose text looks like ChatGPT reports unknown and does not block model', async () => {
+    // Arrange / Act
+    const { health, run } = await healthThenOverride({
+      stdout: CHATGPT_TEXT,
+      stderr: '',
+      exitCode: null,
+      timedOut: false,
+      aborted: true,
+    })
+
+    // Assert
+    expect(health.loginProbe).toBe('failed')
+    expect(health.authMode).toBe('unknown')
+    expect(run.isError ?? false).toBe(false)
+  })
+
+  test('a non-zero probe with no recognizable answer reports unknown', async () => {
+    // Arrange
+    const runFn = vi
+      .fn()
+      .mockResolvedValueOnce(versionOutcome)
+      .mockResolvedValueOnce({ stdout: CHATGPT_TEXT, stderr: 'boom', exitCode: 3, timedOut: false })
+    const client = await connect(runFn as never)
+
+    // Act
+    const payload = parse(await client.callTool({ name: 'codex_health', arguments: {} }))
+
+    // Assert
+    expect(payload.loginProbe).toBe('failed')
+    expect(payload.authMode).toBe('unknown')
+  })
+})
+
+describe('codex_health redacts returned CLI text (C4)', () => {
+  const SECRET = 'sk-live-abcdefghijklmnop0123456789'
+
+  test('loginStatus is redacted and the count is reported', async () => {
+    // Arrange
+    const runFn = vi
+      .fn()
+      .mockResolvedValueOnce(versionOutcome)
+      .mockResolvedValueOnce({
+        stdout: `Logged in using an API key ${SECRET}`,
+        stderr: '',
+        exitCode: 0,
+        timedOut: false,
+      })
+    const client = await connect(runFn as never)
+
+    // Act
+    const payload = parse(await client.callTool({ name: 'codex_health', arguments: {} })) as {
+      loginStatus: string
+      authMode: string
+      redactions?: number
+    }
+
+    // Assert
+    expect(payload.loginStatus).not.toContain(SECRET)
+    expect(payload.loginStatus).toContain('[REDACTED:openai-key]')
+    expect(payload.authMode).toBe('apikey')
+    expect(payload.redactions).toBe(1)
+  })
+
+  test('execProbeMessage is redacted too', async () => {
+    // Arrange
+    const runFn = vi
+      .fn()
+      .mockResolvedValueOnce(versionOutcome)
+      .mockResolvedValueOnce({ stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 0, timedOut: false })
+      .mockResolvedValueOnce({
+        stdout: '',
+        stderr: `stream error: usage limit reached for ${SECRET}`,
+        exitCode: 1,
+        timedOut: false,
+      })
+    const client = await connect(runFn as never)
+
+    // Act
+    const payload = parse(await client.callTool({ name: 'codex_health', arguments: { deep: true } })) as {
+      execProbeMessage?: string
+      redactions?: number
+    }
+
+    // Assert
+    expect(payload.execProbeMessage).not.toContain(SECRET)
+    expect(payload.execProbeMessage).toContain('[REDACTED:openai-key]')
+    expect(payload.redactions).toBe(1)
+  })
+
+  test('clean health text carries no redactions field', async () => {
+    // Arrange
+    const runFn = vi
+      .fn()
+      .mockResolvedValueOnce(versionOutcome)
+      .mockResolvedValueOnce({ stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 0, timedOut: false })
+    const client = await connect(runFn as never)
+
+    // Act
+    const payload = parse(await client.callTool({ name: 'codex_health', arguments: {} })) as {
+      redactions?: number
+    }
+
+    // Assert
+    expect(payload.redactions).toBeUndefined()
   })
 })

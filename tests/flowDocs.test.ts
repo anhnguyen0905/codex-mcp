@@ -27,8 +27,12 @@ const INTERVIEW_ELICITATION_PATH = path.join(
   'interview-elicitation',
   'SKILL.md',
 )
+const FAST_PATH_PATH = path.join(REPO_ROOT, 'skills', 'fast-path', 'SKILL.md')
+const EXECUTOR_FALLBACK_PATH = path.join(REPO_ROOT, 'skills', 'executor-fallback', 'SKILL.md')
+const SESSION_REPORT_PATH = path.join(REPO_ROOT, 'skills', 'session-report', 'SKILL.md')
 const SKILLS_DIR = path.join(REPO_ROOT, 'skills')
 const COMMAND_PATH = path.join(REPO_ROOT, 'commands', 'codex-flow.md')
+const README_PATH = path.join(REPO_ROOT, 'README.md')
 const CLAUDE_COMMAND_PATH = path.join(REPO_ROOT, '.claude', 'commands', 'codex-flow.md')
 const COMMAND_TOKEN_ALLOWLIST = new Set(['codex-flow:codex-flow'])
 // R6.2 detector (documented, explicit): phrases that instruct a per-task full-suite run.
@@ -56,6 +60,90 @@ const ALLOWED_FULL_SUITE_CONTEXT_PATTERNS = [
   /once per merged/i,
   /wave integration/i,
   /whole-feature review/i,
+] as const
+// R1.2 detector: silent-degradation wording. Any of these in the command or in a SKILL.md means
+// the flow is told to keep going without the helper instead of failing closed. The `unavailable |
+// unset` alternation is one documented family, not two phrases: both spellings describe the same
+// standalone-install escape hatch.
+const FORBIDDEN_FALLBACK_PATTERNS = [
+  /edit the file directly/i,
+  /standalone fallback/i,
+  /(?:unavailable|unset) in a standalone install/i,
+  /fall back to reading/i,
+] as const
+// Prohibition-aware allowlist (IMP-24: matched against the CLAUSE that carries the match, never
+// the whole sentence, so a trailing "never …" cannot launder an instruction earlier in the line).
+const ALLOWED_FALLBACK_CONTEXT_PATTERNS = [
+  /\bnever\b/i,
+  /\bno\b[^,;—]*\bfallback\b/i,
+] as const
+// R1.2/C9: the fail-closed sentence, verbatim.
+const CANONICAL_FAIL_CLOSED_SENTENCE =
+  'If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin '
+  + '(its scripts/ directory is required); if it is present but exits non-zero, surface the error '
+  + 'to the user and STOP. Never edit control files by hand.'
+// R8.2 / C7 (as amended by the plan-drift block after T8) — per-run overhead budgets in bytes.
+// Staged target, restated as per-run cost: 0.26.0 command + Phase-0 skills ≈ 58 KB (from ≈ 67 KB);
+// 0.27.0 goal is ≤ 15k tokens at the phase peak. Do NOT tighten these inside 0.26.0.
+const COMMAND_MAX_BYTES = 44_000
+// Measured phase sets at this commit (bytes, sum of the phase's SKILL.md files):
+//   Phase 0: 20 510 · Phase 1: 5 947 · Phase 2: 42 129 · Phase 3: 5 711
+//   Phase 4: 23 253 (TS as the language skill) · Phase 5: 26 581
+// Largest = Phase 2 (42 129) rounded up to the next 4 000 → 44 000, under the 48 000 cap.
+const PHASE_SKILLS_MAX_BYTES = 44_000
+// Growth guard, not a diet target: measured command + the 20 flow skills = 153 021 bytes here.
+const FLOW_TOTAL_MAX_BYTES = 160_000
+// C7 phase → skills map. The union of these lists is the "flow skills" set FLOW_TOTAL_MAX_BYTES
+// covers; Phase 4 counts exactly one exec-<lang> skill (TypeScript, this project's language).
+const PHASE_SKILL_MAP: ReadonlyArray<{ phase: string, skills: readonly string[] }> = [
+  { phase: 'Phase 0', skills: ['preflight', 'fast-path', 'executor-fallback'] },
+  { phase: 'Phase 1', skills: ['interview-elicitation', 'interview-ask-back'] },
+  {
+    phase: 'Phase 2',
+    skills: [
+      'plan-research-first',
+      'plan-architecture',
+      'skill-selection',
+      'context-discipline',
+      'session-report',
+    ],
+  },
+  { phase: 'Phase 3', skills: ['plan-backlog'] },
+  {
+    phase: 'Phase 4',
+    skills: [
+      'exec-coding-standards',
+      'exec-self-testing',
+      'exec-typescript',
+      'context-discipline',
+      'parallel-execution',
+    ],
+  },
+  {
+    phase: 'Phase 5',
+    skills: [
+      'review-conformance',
+      'review-quality',
+      'review-security',
+      'review-feedback',
+      'review-dual',
+      'context-discipline',
+      'session-report',
+    ],
+  },
+]
+// R8.3: distinctive sentences T8 moved out of the command. Each must survive verbatim in exactly
+// one document, so the move neither lost a rule nor left a duplicate behind.
+const MOVED_PARAGRAPH_SENTENCES = [
+  // skills/fast-path
+  'the deliverable is an answer, report, or data readout; no tracked project\n  file is created or modified.',
+  'No Codex session is\nrequired (this lane is exempt from the Codex health gate)',
+  'ANY extra changed\nfile — excluding generated lockfiles — triggers the escalation rule automatically; do not review\nthe oversized diff in-lane and do not re-argue eligibility after the fact.',
+  'A wrong up-front size estimate is not a failure;\nstretching the lane to avoid the restart is.',
+  // skills/executor-fallback
+  '**Phase 5 under fallback** — Claude must not grade its own homework alone:',
+  'apply\n  the loaded `exec-coding-standards`, `exec-self-testing`, language, deliverable, and distilled\n  domain-skill blocks to your own work — they bind Claude the same way they bind Codex.',
+  'Tasks completed under fallback keep their\n`claude-fallback` Session line and are never re-executed.',
 ] as const
 const EXACT_FRONTMATTER_SKILLS = [
   'plan-architecture',
@@ -253,32 +341,70 @@ function findUnroutedTaskStages(markdown: string, routingText: string): string[]
   return collectWrittenTaskStages(markdown).filter((stage) => !routed.has(stage))
 }
 
+// IMP-23: `!` and `?` end a sentence too, so a violation phrased as an exclamation or a question
+// can no longer hide inside its neighbour's allowlisted context.
 function collectSentences(markdown: string): string[] {
   return markdown
     .replace(/\s+/g, ' ')
-    .split(/(?<=[.;:])\s+/)
+    .split(/(?<=[.;:!?])\s+/)
     .map((sentence) => sentence.trim())
     .filter((sentence) => sentence.length > 0)
+}
+
+// IMP-24: split a sentence into clauses so an allowlisted context only excuses the clause it sits
+// in. "Run the full suite per task, but never on a dirty tree" must still be a violation.
+function collectClauses(sentence: string): string[] {
+  return sentence
+    .split(/[,;—]|\s+(?:but|however|though|although|except)\s+/i)
+    .map((clause) => clause.trim())
+    .filter((clause) => clause.length > 0)
+}
+
+function findClauseContaining(sentence: string, predicate: (clause: string) => boolean): string {
+  return collectClauses(sentence).find(predicate) ?? sentence
+}
+
+function isAllowedFullSuiteClause(clause: string): boolean {
+  return ALLOWED_FULL_SUITE_CONTEXT_PATTERNS.some((pattern) => pattern.test(clause))
 }
 
 function findPerTaskFullSuiteInstructions(label: string, markdown: string): string[] {
   const violations: string[] = []
   for (const sentence of collectSentences(markdown)) {
-    if (ALLOWED_FULL_SUITE_CONTEXT_PATTERNS.some((pattern) => pattern.test(sentence))) continue
-
     const lowered = sentence.toLowerCase()
     const phrase = FORBIDDEN_PER_TASK_SUITE_PHRASES.find((candidate) => lowered.includes(candidate))
     if (phrase) {
-      violations.push(`${label}: matched "${phrase}" in "${sentence}"`)
+      const clause = findClauseContaining(sentence, (candidate) =>
+        candidate.toLowerCase().includes(phrase))
+      if (isAllowedFullSuiteClause(clause)) continue
+      violations.push(`${label}: matched "${phrase}" in "${clause}"`)
       continue
     }
 
     if (!FULL_SUITE_WORDING_PATTERN.test(sentence)) continue
     const scope = PER_TASK_SCOPE_PATTERNS.find((pattern) => pattern.test(sentence))
     if (!scope) continue
+    const clause = findClauseContaining(sentence, (candidate) =>
+      FULL_SUITE_WORDING_PATTERN.test(candidate))
+    if (isAllowedFullSuiteClause(clause)) continue
     violations.push(
-      `${label}: matched /${FULL_SUITE_WORDING_PATTERN.source}/ + /${scope.source}/ in "${sentence}"`,
+      `${label}: matched /${FULL_SUITE_WORDING_PATTERN.source}/ + /${scope.source}/ in "${clause}"`,
     )
+  }
+
+  return violations
+}
+
+// R1.2: prohibition-aware silent-degradation guard. The allowlist is clause-scoped (IMP-24).
+function findFallbackWordingViolations(label: string, markdown: string): string[] {
+  const violations: string[] = []
+  for (const sentence of collectSentences(markdown)) {
+    for (const pattern of FORBIDDEN_FALLBACK_PATTERNS) {
+      if (!pattern.test(sentence)) continue
+      const clause = findClauseContaining(sentence, (candidate) => pattern.test(candidate))
+      if (ALLOWED_FALLBACK_CONTEXT_PATTERNS.some((allowed) => allowed.test(clause))) continue
+      violations.push(`${label}: matched /${pattern.source}/ in "${clause}"`)
+    }
   }
 
   return violations
@@ -358,7 +484,10 @@ describe('context-discipline skill documentation', () => {
     expect(skill).toMatch(/CONTEXT-T<n>\.md` \(≤ 4000 estimated tokens using the chars\/4 heuristic\)/)
     expect(skill).toMatch(/RESUME\.md` \(≤ 8000 estimated tokens using the chars\/4 heuristic\)/)
     expect(skill).toContain("slice's omitted-pointer line")
-    expect(skill).toContain('standalone fallback when the slice helper is unavailable')
+    // T9 retarget: the standalone-fallback wording is forbidden by R1.2; the slice helper now
+    // fails closed with the canonical C9 sentence instead.
+    expect(skill).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
+    expect(skill).toContain('the\n  generated slice is never optional')
     expect(skill).toContain('generation anchor')
     expect(skill).toContain('`[verify]`-stamped')
   })
@@ -418,15 +547,17 @@ describe('plan-architecture Decision log schema', () => {
 })
 
 describe('preflight resume protocol', () => {
-  test('uses the budgeted resume slice with fallback and trust-but-verify guidance', () => {
+  test('uses the budgeted resume slice with fail-closed and trust-but-verify guidance', () => {
     const skill = readText(PREFLIGHT_PATH)
     const normalizedSkill = skill.replace(/\s+/g, ' ')
 
     expect(skill).toContain('node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --resume')
     expect(skill).toContain('`.codex-flow/RESUME.md`')
-    expect(skill).toMatch(/helper is unavailable in a standalone\s+install, fall back/)
+    // T9 retarget: the standalone fallback is gone (R1.2). The helper fails closed, and a missing
+    // control file only narrows what is read.
+    expect(skill).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
     expect(normalizedSkill).toContain(
-      'helper is present but exits non-zero, surface the error to the user and STOP; never use the standalone fallback for a failing helper',
+      'When either file does not exist, read only the control files that exist; do not require a missing TASKS.md to resume an earlier phase.',
     )
     expect(skill).toContain('`[verify]` block as a hypothesis')
     expect(skill).toContain('`git diff`')
@@ -776,14 +907,17 @@ describe('sufficiency check and brief-grounded authoring contract', () => {
 
     expect(step).toContain('INSUFFICIENT → AUTHOR (gap: R<n>.<m>, …)')
     expect(step).toContain('skill-brief.mjs')
-    expect(step).toContain(
-      'node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-brief.mjs" --facet <facet> --rids <gap R-IDs>',
-    )
     expect(step).toContain('skill-lint.mjs')
     expect(step).toContain('one batched AskUserQuestion')
     expect(step).toContain('loaded-but-insufficient is never a silent pass')
-    expect(step).toContain('brief → author → lint → one batched approval')
     expect(step).toContain('quarantine/authored')
+    // T9 retarget: the literal CLI invocation and the short-form order live in the skill T8
+    // routes Phase 2 to, not in the command.
+    const skillSelection = readText(SKILL_SELECTION_PATH)
+    expect(skillSelection).toContain(
+      'node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-brief.mjs" --facet <facet> --rids <gap R-IDs>',
+    )
+    expect(skillSelection).toContain('brief → author → lint → one batched approval')
   })
 
   test('requires brief-first authoring before Phase 3 execution', () => {
@@ -794,15 +928,18 @@ describe('sufficiency check and brief-grounded authoring contract', () => {
 
     expect(phaseStart).toBeGreaterThanOrEqual(0)
     expect(phaseEnd).toBeGreaterThan(phaseStart)
-    expect(phaseSection).toContain('Creation is brief-first')
-    expect(phaseSection).toContain('skill-brief.mjs')
+    // T9 retarget: Phase 3 no longer restates the authoring procedure; it routes a backlog-time
+    // gap through the same Step 7 order, and the skill owns that order.
+    expect(phaseSection).toContain('INSUFFICIENT → AUTHOR (gap: R<n>.<m>, …)')
     expect(phaseSection).toContain(
-      'node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-brief.mjs" --facet <facet> --rids <gap R-IDs>',
+      'its skill is created through the same `codex-flow:skill-selection` Step 7 procedure Phase 2 uses, in that same fixed order, before the task may enter Phase 4',
     )
-    expect(phaseSection).toContain('skill-lint.mjs')
-    expect(phaseSection).toContain('one batched AskUserQuestion')
-    expect(phaseSection).toContain('brief → author → lint → one batched approval')
-    expect(phaseSection).toContain('quarantine/authored')
+    const skillSelection = readText(SKILL_SELECTION_PATH).replace(/\s+/g, ' ')
+    expect(skillSelection).toContain('skill-brief.mjs')
+    expect(skillSelection).toContain('skill-lint.mjs')
+    expect(skillSelection).toContain('one batched AskUserQuestion')
+    expect(skillSelection).toContain('brief → author → lint → one batched approval')
+    expect(skillSelection).toContain('quarantine/authored')
   })
 })
 
@@ -816,9 +953,20 @@ function extractFastPathSection(command: string): string {
   return command.slice(start, end)
 }
 
+// T9 retarget: T8 moved the gate's content into skills/fast-path/SKILL.md; the command keeps only
+// the router. Content assertions read the skill, and one test guards the router itself.
 describe('fast-path gate contract', () => {
+  test('the command routes the gate to the fast-path skill at the right point', () => {
+    const section = extractFastPathSection(readText(COMMAND_PATH)).replace(/\s+/g, ' ')
+
+    expect(section).toContain('**Load skill**: `codex-flow:fast-path`')
+    expect(section).toContain(
+      'after the resume check, before the `codex_health` call and before any control file is written',
+    )
+  })
+
   test('defines both lanes with exclusions and a full-flow escalation', () => {
-    const section = extractFastPathSection(readText(COMMAND_PATH))
+    const section = readText(FAST_PATH_PATH)
 
     expect(section).toContain('**Analysis lane**')
     expect(section).toContain('**Small-change lane**')
@@ -830,10 +978,10 @@ describe('fast-path gate contract', () => {
   test('exempts the analysis lane from the Codex health gate', () => {
     const command = readText(COMMAND_PATH)
     const phaseZero = extractPhaseSection(command, 0).replace(/\s+/g, ' ')
-    const section = extractFastPathSection(command).replace(/\s+/g, ' ')
+    const section = readText(FAST_PATH_PATH).replace(/\s+/g, ' ')
 
     expect(phaseZero).toContain(
-      'a failed health check or missing login does NOT block the **analysis lane**',
+      'The **analysis lane** of the Fast-path gate never reaches this gate: it needs no Codex session and no fallback decision, so a failed health check or missing login does NOT block it.',
     )
     expect(section).toContain('this lane is exempt from the Codex health gate')
     expect(phaseZero).toContain(
@@ -842,7 +990,7 @@ describe('fast-path gate contract', () => {
   })
 
   test('enforces a mechanical scope trip-wire on the small-change lane', () => {
-    const section = extractFastPathSection(readText(COMMAND_PATH)).replace(/\s+/g, ' ')
+    const section = readText(FAST_PATH_PATH).replace(/\s+/g, ' ')
 
     expect(section).toContain('**Scope trip-wire (mechanical, not judgment)**')
     expect(section).toContain('ANY extra changed file — excluding generated lockfiles — triggers the escalation rule automatically')
@@ -850,7 +998,7 @@ describe('fast-path gate contract', () => {
   })
 
   test('gives the small-change lane its own known-red baseline', () => {
-    const section = extractFastPathSection(readText(COMMAND_PATH)).replace(/\s+/g, ' ')
+    const section = readText(FAST_PATH_PATH).replace(/\s+/g, ' ')
 
     expect(section).toContain(
       "first run the project's test command once and note any pre-existing failures as the lane's known-red list",
@@ -859,7 +1007,7 @@ describe('fast-path gate contract', () => {
   })
 
   test('logs every fast-path run to the durable fastpath log', () => {
-    const section = extractFastPathSection(readText(COMMAND_PATH)).replace(/\s+/g, ' ')
+    const section = readText(FAST_PATH_PATH).replace(/\s+/g, ' ')
 
     expect(section).toContain('`.codex-flow/notes/fastpath.log`')
     expect(section).toContain('session=<sessionId or ->')
@@ -870,7 +1018,7 @@ describe('fast-path gate contract', () => {
   test('skips control files and baseline steps 2-5 in Phase 0 for fast-path runs', () => {
     const phaseZero = extractPhaseSection(readText(COMMAND_PATH), 0).replace(/\s+/g, ' ')
 
-    expect(phaseZero).toContain('evaluate the **Fast-path gate** (next section)')
+    expect(phaseZero).toContain('evaluate the **Fast-path gate** (section below)')
     expect(phaseZero).toContain('skip steps 2–5')
     expect(phaseZero).toContain('a fast-path run writes no `.codex-flow/` control files')
   })
@@ -938,7 +1086,7 @@ describe('codex-flow command structure', () => {
     expect(missingSkills).toEqual([])
   })
 
-  test('generates and reads the resume slice in Phase 0 with a standalone fallback', () => {
+  test('generates and reads the resume slice in Phase 0 and fails closed on the helper', () => {
     const phaseSection = extractPhaseSection(readText(COMMAND_PATH), 0)
     const normalizedPhase = phaseSection.replace(/\s+/g, ' ')
 
@@ -946,20 +1094,25 @@ describe('codex-flow command structure', () => {
       'node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --resume',
     )
     expect(phaseSection).toContain('`.codex-flow/RESUME.md`')
-    expect(phaseSection).toMatch(
-      /fall\s+back to reading `\.codex-flow\/PLAN\.md` and `\.codex-flow\/TASKS\.md` directly/,
+    // T9 retarget: R1.2 forbids the raw-file fallback; a missing control file only narrows the read
+    // and the helper itself fails closed.
+    expect(normalizedPhase).toContain(
+      'when either file is missing, read only the control files that exist',
     )
+    expect(phaseSection).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
     expect(phaseSection).toContain('if `.codex-flow/STATE.md` exists')
-    expect(phaseSection).toContain('even when PLAN.md or TASKS.md has not been created yet')
+    expect(normalizedPhase).toContain('even when PLAN.md or TASKS.md has not been created yet')
     expect(phaseSection).toContain('skip only phases whose approvals STATE.md records')
     expect(normalizedPhase).not.toContain('skip Phases 1–3')
-    expect(phaseSection).toMatch(
-      /On resume,\s+reuse the report dir recorded under `## Session report`/,
-    )
     expect(normalizedPhase).toContain(
-      'for `phase: review`, resume Phase 5 completion work. When all tasks are done but `phase` is not `complete`, resume Phase 5',
+      'on resume, reuse the report dir recorded under `## Session report` in the existing PLAN.md',
     )
-    expect(normalizedPhase).toContain(
+    // T9 retarget: the per-`phase` resume routing is stated once, in preflight Step 2.
+    const preflight = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
+    expect(preflight).toContain(
+      'For `phase: review`, resume Phase 5 completion work; when all tasks are done but `phase` is not `complete`, also resume Phase 5',
+    )
+    expect(preflight).toContain(
       'final dual review, requirement ID-walk, improvement gate, cost/report delivery gates, and completion write',
     )
   })
@@ -1032,9 +1185,8 @@ describe('codex-flow command structure', () => {
     expect(lintIndex).toBeGreaterThanOrEqual(0)
     expect(lintIndex).toBeLessThan(approvalIndex)
     expect(lintIndex).toBeLessThan(phaseEnd)
-    expect(command.slice(phaseStart, phaseEnd).replace(/\s+/g, ' ')).toContain(
-      'If the helper is present but exits non-zero, surface the error to the user and STOP; never continue to backlog approval with a failing helper.',
-    )
+    // T9 retarget: the bespoke Phase 3 helper-failure sentence is now the canonical C9 sentence.
+    expect(command.slice(phaseStart, phaseEnd)).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
   })
 
   test('generates a task slice before each Phase 4 execution and uses it in the prompt', () => {
@@ -1046,12 +1198,11 @@ describe('codex-flow command structure', () => {
     expect(phaseSection).toContain(promptBullet)
     expect(phaseSection.indexOf(sliceCommand)).toBeLessThan(phaseSection.indexOf(promptBullet))
     expect(phaseSection).toContain('Read .codex-flow/CONTEXT-T<n>.md for context')
-    expect(phaseSection).toContain('Read .codex-flow/PLAN.md for context.')
     expect(phaseSection).toContain('its header records the generation anchor')
     expect(phaseSection).toContain('blocks marked [verify] must be re-checked')
-    expect(phaseSection).toMatch(
-      /when the slice was generated, or "Read \.codex-flow\/PLAN\.md for context\." when the helper is unavailable/,
-    )
+    // T9 dropped: the alternate "Read .codex-flow/PLAN.md for context." opener existed only for the
+    // now-forbidden standalone fallback (R1.2); the slice is mandatory and the helper fails closed.
+    expect(phaseSection).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
     expect(phaseSection).toContain(
       '`Run position: phase execution — task T<n> <title> — next gate: <gate>`',
     )
@@ -1066,7 +1217,7 @@ describe('codex-flow command structure', () => {
       .toContain('(if not already loaded this session)')
   })
 
-  test('omits duplicate task text from generated-slice prompts but keeps it in the fallback', () => {
+  test('omits duplicate task text from the generated-slice prompt', () => {
     const phaseSection = extractPhaseSection(readText(COMMAND_PATH), 4)
 
     const promptInstruction = extractParameterBullet(phaseSection, 'prompt').replace(/\s+/g, ' ')
@@ -1075,11 +1226,10 @@ describe('codex-flow command structure', () => {
       'do not append the full task text because the slice already embeds it as mandatory content.',
     )
     expect(promptInstruction).toMatch(
-      /When the slice was generated, append .* \+ the standards, testing, and language blocks .* \+ a distilled ≤ 30-line rules block/,
+      /Then append .* \+ the standards, testing, and language blocks .* \+ a distilled ≤ 30-line rules block/,
     )
-    expect(promptInstruction).toMatch(
-      /In the standalone fallback, append the same directive \+ the full task text \+ those same standards\/testing\/language, deliverable, and distilled skill blocks/,
-    )
+    // T9 dropped: the standalone-fallback prompt variant is forbidden by R1.2 — there is now one
+    // prompt shape, built on the mandatory slice.
   })
 
   test('defaults to fresh task sessions and caps eligible cross-task reuse', () => {
@@ -1191,10 +1341,11 @@ describe('codex-flow command structure', () => {
 
     expect(stepZero).toContain(sliceCommand)
     expect(stepZero.indexOf(sliceCommand)).toBeLessThan(stepZero.indexOf('then re-read it'))
-    expect(stepZero).toContain('`.codex-flow/CONTEXT-T<n>.md` slice')
+    // T9 retarget: step 0 now names the slice through the regenerate instruction, and the
+    // standalone fallback it used to describe is forbidden by R1.2.
+    expect(stepZero).toContain("regenerate this task's slice")
     expect(stepZero).toContain("this task's entry in `.codex-flow/TASKS.md`")
-    expect(stepZero).toContain('helper is unavailable in a standalone install')
-    expect(stepZero).toContain('fall back to reading `.codex-flow/PLAN.md` directly')
+    expect(stepZero).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
     expect(stepZero).toContain('finding disputes plan intent')
     expect(stepZero).toContain("slice's omitted-pointer line")
     expect(stepZero).toContain(
@@ -1231,11 +1382,10 @@ describe('codex-flow command structure', () => {
 
   test('stops on present helper failures and splits mandatory-over-budget tasks', () => {
     const command = readText(COMMAND_PATH)
-    const helperFailure = 'If the helper is present but exits non-zero, surface the error to the user and STOP; never use the standalone fallback for a failing helper.'
-
+    // T9 retarget: one canonical C9 sentence replaces the old per-site helper-failure wording.
     for (const phaseNumber of [0, 4, 5]) {
-      const normalizedPhase = extractPhaseSection(command, phaseNumber).replace(/\s+/g, ' ')
-      expect(normalizedPhase).toContain(helperFailure)
+      const phase = extractPhaseSection(command, phaseNumber)
+      expect(phase).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
     }
     expect(extractPhaseSection(command, 4).replace(/\s+/g, ' ')).toContain(
       '`mandatory slice content exceeds tokenBudget`, split the oversized task in the backlog before continuing; never raise the slice budget.',
@@ -1282,7 +1432,10 @@ describe('executor fallback contract', () => {
   const sessionReport = readText(path.join(REPO_ROOT, 'skills', 'session-report', 'SKILL.md'))
   const sectionStart = command.indexOf('## Executor fallback')
   const sectionEnd = command.indexOf('## Phase 1 — Interview (Claude)')
-  const section = command.slice(sectionStart, sectionEnd).replace(/\s+/g, ' ')
+  const routerSection = command.slice(sectionStart, sectionEnd).replace(/\s+/g, ' ')
+  // T9 retarget: T8 moved this contract into skills/executor-fallback/SKILL.md; the command section
+  // is now only the router, so the content assertions below read the skill.
+  const section = readText(EXECUTOR_FALLBACK_PATH).replace(/\s+/g, ' ')
 
   test('Phase 0 offers the fallback instead of a hard STOP when Codex is missing or logged out', () => {
     const phase0 = command.slice(command.indexOf('## Phase 0'), command.indexOf('## Fast-path gate')).replace(/\s+/g, ' ')
@@ -1311,6 +1464,11 @@ describe('executor fallback contract', () => {
     expect(section).toContain('independent review by a fresh subagent')
     expect(section).toContain('keep the 3-round cap')
     expect(command).toContain('Never switch executors silently or mid-task')
+  })
+
+  test('the command section routes the fallback to its skill', () => {
+    expect(routerSection).toContain('**Load skill**: `codex-flow:executor-fallback`')
+    expect(routerSection).toContain('Offer the fallback from that skill whenever a trigger fires.')
   })
 
   test('preflight and session-report carry the executor key and fallback PIC', () => {
@@ -1369,26 +1527,30 @@ describe('durable task-loop state contract (R1.2, R1.6)', () => {
     expect(command).not.toContain('At the Phase 4 → Phase 5 boundary, set `phase` in `.codex-flow/STATE.md` to `review`.')
   })
 
-  test('task status writes route through the helper with a standalone fallback', () => {
+  test('task status writes route through the helper and fail closed', () => {
     expect(phase4).toContain(`${helper} task T<n> in-progress`)
     expect(phase4).toContain('set `currentTask T<n>` and `taskStage launching`')
     expect(phase4).toContain('once the call is dispatched, set `taskStage executing`')
     expect(phase4).toContain(`${helper} task T<n> failed`)
     expect(phase4).toContain(`${helper} set wave <n>`)
-    expect(phase0).toContain('set `currentTask: -`, `taskStage: idle`, `wave: -` (14 keys total)')
-    expect(phase0).toContain('If the helper is unavailable in a standalone install, edit the file directly; if it is present but exits non-zero, surface the error to the user and STOP.')
+    // T9 retarget: the command now names the key count and defers the literal key list to
+    // preflight Step 3.4; the "edit the file directly" escape hatch is forbidden by R1.2.
+    expect(phase0).toContain('write all 14 `.codex-flow/STATE.md` keys per `codex-flow:preflight`')
+    expect(phase0).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
+    expect(preflight).toContain('- currentTask: - - taskStage: idle - wave: -')
   })
 
   test('resume routing uses currentTask and taskStage under phase execution', () => {
-    expect(phase0).toContain(`Run \`${helper} check\` first: when it reports ONLY missing keys on a legacy file`)
+    expect(phase0).toContain(`Run \`${helper} check\` first — when it reports ONLY missing keys on a legacy file`)
     expect(phase0).toContain('any other violation is surfaced to the user before routing')
     expect(phase4).toContain('then set `taskStage idle` and `currentTask -`, and update TaskUpdate')
     expect(readText(PARALLEL_EXECUTION_PATH)).toContain(`${helper} set taskStage merge-conflict`)
     expect(readText(PARALLEL_EXECUTION_PATH)).toContain(`${helper} task T<n> in-progress`)
     expect(readText(PARALLEL_EXECUTION_PATH)).toContain(`${helper} task T<n> done`)
     expect(readText(PARALLEL_EXECUTION_PATH)).toContain(`${helper} set taskStage handoff`)
-    expect(phase0).toContain('but first route by `taskStage`, regardless of `currentTask`')
-    expect(phase0).toContain('`merge-conflict` → surface it and STOP')
+    // T9 retarget: `taskStage` routing is stated once, in preflight Step 2, which the command's
+    // resume check routes to by name.
+    expect(phase0).toContain('`codex-flow:preflight` Step 2 (resume authority, in-progress task reconciliation, `taskStage` routing, report-dir reuse)')
     expect(preflight).toContain('first route by `taskStage` regardless of `currentTask`')
     expect(phase5).toContain('Sequential mode: set `taskStage` to `reviewing`')
     expect(phase5).toContain('Parallel mode: `taskStage` stays `executing` for the whole wave')
@@ -1449,14 +1611,13 @@ describe('deep health probe and outage routing (R3.3)', () => {
   const command = readText(COMMAND_PATH)
   const preflight = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
   const phase0 = extractPhaseSection(command, 0).replace(/\s+/g, ' ')
-  const fastPath = extractFastPathSection(command).replace(/\s+/g, ' ')
-  const fallbackSection = command
-    .slice(command.indexOf('## Executor fallback'), command.indexOf('## Phase 1 — Interview (Claude)'))
-    .replace(/\s+/g, ' ')
+  // T9 retarget: both contracts moved into their skills (T8); read them there.
+  const fastPath = readText(FAST_PATH_PATH).replace(/\s+/g, ' ')
+  const fallbackSection = readText(EXECUTOR_FALLBACK_PATH).replace(/\s+/g, ' ')
 
   test('Phase 0 calls the deep probe once and reads execProbe', () => {
-    expect(phase0).toContain('Call `mcp__codex__codex_health` with `{ deep: true }` ONCE before anything else')
-    expect(phase0).toContain('returns `execProbe` (`ok | quota | model | error | skipped`) plus `execProbeMessage`')
+    expect(phase0).toContain('call `mcp__codex__codex_health` with `{ deep: true }` ONCE — after the gate decision and the resume check, before anything else')
+    expect(phase0).toContain('returning `execProbe` (`ok | quota | model | error | skipped`) plus `execProbeMessage`')
     expect(phase0).toContain('Read `execProbe` from that single call; never re-probe per phase or per task')
     expect(phase0).toContain('**`execProbe: quota` or `execProbe: model`**')
     expect(phase0).toContain('**`execProbe: error`**')
@@ -1483,7 +1644,7 @@ describe('deep health probe and outage routing (R3.3)', () => {
   })
 
   test('the preflight health gate carries the same deep probe routing', () => {
-    expect(preflight).toContain('Call `mcp__codex__codex_health` with `{ deep: true }` ONCE before anything else')
+    expect(preflight).toContain('call `mcp__codex__codex_health` with `{ deep: true }` ONCE — after the gate decision and the resume check, before anything else')
     expect(preflight).toContain('**`execProbe: quota` or `execProbe: model`**')
     expect(preflight).toContain(
       'a `quota` or `model` probe result is sufficient on its own and requires NO unhealthy health re-check',
@@ -1777,5 +1938,628 @@ describe('plan acceptance citation authoring (R6.3)', () => {
     expect(improvementGate).toContain(
       'Run the impact analysis, the coverage lint with `--plan .codex-flow/PLAN.md`, and backlog sanity checks, then get backlog re-approval;',
     )
+  })
+})
+
+describe('fail-closed helper wording guard (R1.2)', () => {
+  // T14 removed the last exclusion (skills/session-report/SKILL.md's standalone-install escape
+  // hatch), so this guard now covers the command and EVERY skill with no carve-outs.
+  test('no silent-degradation wording survives in the command or any skill', () => {
+    // Arrange
+    const documents = [COMMAND_PATH, ...skillDocumentPaths()]
+
+    // Act
+    const violations = documents.flatMap((documentPath) =>
+      findFallbackWordingViolations(path.relative(REPO_ROOT, documentPath), readText(documentPath)))
+
+    // Assert
+    expect(violations).toEqual([])
+  })
+
+  test('the session-report skill is inside the guarded set, not excluded from it', () => {
+    // Arrange — regression pin for the deleted exclusion: the skill must be discovered by
+    // skillDocumentPaths() and must itself be clean.
+    const documents = [COMMAND_PATH, ...skillDocumentPaths()]
+
+    // Act
+    const violations = findFallbackWordingViolations(
+      'skills/session-report/SKILL.md',
+      readText(SESSION_REPORT_PATH),
+    )
+
+    // Assert
+    expect(documents).toContain(SESSION_REPORT_PATH)
+    expect(violations).toEqual([])
+  })
+
+  test('the guard still flags a silent fallback and still allows an explicit prohibition', () => {
+    // Arrange
+    const offending = 'If the helper is missing, edit the file directly and continue.'
+    const prohibition = 'Never edit the file directly; there is no standalone fallback.'
+
+    // Act
+    const flagged = findFallbackWordingViolations('probe', offending)
+    const allowed = findFallbackWordingViolations('probe', prohibition)
+
+    // Assert
+    expect(flagged).toHaveLength(1)
+    expect(flagged[0]).toContain('edit the file directly')
+    expect(allowed).toEqual([])
+  })
+
+  test('an allowlisted clause does not launder a silent fallback in the same sentence', () => {
+    // Arrange (IMP-24: clause-scoped allowlist)
+    const laundered = 'If the helper is unavailable in a standalone install, keep going, '
+      + 'but never fabricate results.'
+
+    // Act
+    const violations = findFallbackWordingViolations('probe', laundered)
+
+    // Assert
+    expect(violations).toHaveLength(1)
+    expect(violations[0]).toContain('unavailable|unset) in a standalone install')
+  })
+
+  test('the canonical fail-closed sentence appears in the command and in preflight', () => {
+    // Arrange
+    const command = readText(COMMAND_PATH)
+    const preflight = readText(PREFLIGHT_PATH)
+
+    // Act
+    const commandOccurrences = command.split(CANONICAL_FAIL_CLOSED_SENTENCE).length - 1
+    const preflightOccurrences = preflight.split(CANONICAL_FAIL_CLOSED_SENTENCE).length - 1
+
+    // Assert
+    expect(commandOccurrences).toBeGreaterThanOrEqual(1)
+    expect(preflightOccurrences).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe('fast-path gate ordering in Phase 0 (R2.3)', () => {
+  test('the fast-path gate is named before the first codex_health call', () => {
+    // Arrange
+    const phaseZero = extractPhaseSection(readText(COMMAND_PATH), 0)
+
+    // Act — the gate must precede the first instruction to CALL the tool, which the command always
+    // spells `mcp__codex__codex_health`; bare `codex_health` prose only describes the gate itself.
+    const gateIndex = phaseZero.indexOf('Fast-path gate')
+    const healthCallIndex = phaseZero.indexOf('mcp__codex__codex_health')
+
+    // Assert
+    expect(gateIndex).toBeGreaterThanOrEqual(0)
+    expect(healthCallIndex).toBeGreaterThan(gateIndex)
+  })
+
+  test('Phase 0 states the analysis lane makes no health call unless Codex is requested', () => {
+    const phaseZero = extractPhaseSection(readText(COMMAND_PATH), 0).replace(/\s+/g, ' ')
+
+    expect(phaseZero).toContain(
+      'The analysis lane stops at that gate: no `codex_health` call at all unless the user requests a Codex second opinion.',
+    )
+  })
+})
+
+describe('per-run overhead byte budgets (R8.2, C7 as amended)', () => {
+  function byteLength(filePath: string): number {
+    return Buffer.byteLength(readFileSync(filePath))
+  }
+
+  function overageMessage(filePath: string, bytes: number, limit: number, limitName: string): string {
+    return `${path.relative(REPO_ROOT, filePath)} is ${bytes} bytes, ${bytes - limit} over ${limitName}`
+  }
+
+  test('the command stays under COMMAND_MAX_BYTES', () => {
+    // Arrange
+    const bytes = byteLength(COMMAND_PATH)
+
+    // Assert
+    expect(
+      bytes <= COMMAND_MAX_BYTES
+        ? []
+        : [overageMessage(COMMAND_PATH, bytes, COMMAND_MAX_BYTES, 'COMMAND_MAX_BYTES')],
+    ).toEqual([])
+  })
+
+  function skillBytes(skillName: string): number {
+    return byteLength(path.join(SKILLS_DIR, skillName, 'SKILL.md'))
+  }
+
+  function perFileBreakdown(skills: readonly string[]): string {
+    return skills.map((skillName) => `skills/${skillName}/SKILL.md=${skillBytes(skillName)}`).join(', ')
+  }
+
+  function phaseSetBytes(skills: readonly string[]): number {
+    return skills.reduce((total, skillName) => total + skillBytes(skillName), 0)
+  }
+
+  test('every declared phase skill set stays under PHASE_SKILLS_MAX_BYTES', () => {
+    // Arrange + Act
+    const overages = PHASE_SKILL_MAP.flatMap(({ phase, skills }) => {
+      const bytes = phaseSetBytes(skills)
+
+      return bytes <= PHASE_SKILLS_MAX_BYTES
+        ? []
+        : [
+          `${phase} skills are ${bytes} bytes, ${bytes - PHASE_SKILLS_MAX_BYTES} over `
+          + `PHASE_SKILLS_MAX_BYTES (${perFileBreakdown(skills)})`,
+        ]
+    })
+
+    // Assert
+    expect(overages).toEqual([])
+  })
+
+  test('PHASE_SKILLS_MAX_BYTES still matches its C7 derivation from the measured phase sets', () => {
+    // Arrange — largest measured phase set, rounded up to the next 4 000, capped at 48 000.
+    const ROUNDING_STEP_BYTES = 4_000
+    const PHASE_SKILLS_CAP_BYTES = 48_000
+    const largestPhaseBytes = Math.max(
+      ...PHASE_SKILL_MAP.map(({ skills }) => phaseSetBytes(skills)),
+    )
+
+    // Act
+    const derived = Math.min(
+      Math.ceil(largestPhaseBytes / ROUNDING_STEP_BYTES) * ROUNDING_STEP_BYTES,
+      PHASE_SKILLS_CAP_BYTES,
+    )
+
+    // Assert — a doc edit that invalidates the recorded derivation fails here, not silently.
+    expect(derived).toBe(PHASE_SKILLS_MAX_BYTES)
+  })
+
+  test('the command plus every flow skill stays under FLOW_TOTAL_MAX_BYTES', () => {
+    // Arrange
+    const flowSkills = [...new Set(PHASE_SKILL_MAP.flatMap(({ skills }) => skills))]
+
+    // Act
+    const bytes = phaseSetBytes(flowSkills) + byteLength(COMMAND_PATH)
+
+    // Assert
+    expect(flowSkills).toHaveLength(20)
+    expect(
+      bytes <= FLOW_TOTAL_MAX_BYTES
+        ? []
+        : [
+          `command + ${flowSkills.length} flow skills are ${bytes} bytes, `
+          + `${bytes - FLOW_TOTAL_MAX_BYTES} over FLOW_TOTAL_MAX_BYTES `
+          + `(commands/codex-flow.md=${byteLength(COMMAND_PATH)}, ${perFileBreakdown(flowSkills)})`,
+        ],
+    ).toEqual([])
+  })
+
+  test('every skill named in the phase map exists on disk', () => {
+    const missing = [...new Set(PHASE_SKILL_MAP.flatMap(({ skills }) => skills))]
+      .filter((skillName) => !existsSync(path.join(SKILLS_DIR, skillName, 'SKILL.md')))
+
+    expect(missing).toEqual([])
+  })
+})
+
+describe('moved paragraph uniqueness (R8.3)', () => {
+  test('each paragraph T8 moved out of the command lives in exactly one document', () => {
+    // Arrange
+    const documents = [COMMAND_PATH, ...skillDocumentPaths()]
+      .map((documentPath) => ({ documentPath, text: readText(documentPath) }))
+
+    // Act
+    const misplaced = MOVED_PARAGRAPH_SENTENCES.map((sentence) => {
+      const holders = documents
+        .filter(({ text }) => text.includes(sentence))
+        .map(({ documentPath }) => path.relative(REPO_ROOT, documentPath))
+
+      return { sentence, holders }
+    }).filter(({ holders }) => holders.length !== 1)
+
+    // Assert
+    expect(misplaced).toEqual([])
+  })
+})
+
+// T15 wording guards (R3.4, R4.3, R7.3, R7.4). Every required-wording assertion below goes through
+// this one predicate, so a single synthetic negative control proves the guard really fails when the
+// wording disappears instead of passing vacuously. Whitespace is normalized on both sides so a
+// re-wrapped doc line does not break a guard that the wording still satisfies.
+function findMissingPhrases(label: string, text: string, phrases: readonly string[]): string[] {
+  const normalized = text.replace(/\s+/g, ' ')
+
+  return phrases
+    .filter((phrase) => !normalized.includes(phrase.replace(/\s+/g, ' ')))
+    .map((phrase) => `${label}: required wording is missing — "${phrase}"`)
+}
+
+// Inverse predicate for wording T14 deleted: it must not come back.
+function findForbiddenPhrases(label: string, text: string, phrases: readonly string[]): string[] {
+  const normalized = text.replace(/\s+/g, ' ')
+
+  return phrases
+    .filter((phrase) => normalized.includes(phrase.replace(/\s+/g, ' ')))
+    .map((phrase) => `${label}: forbidden wording is back — "${phrase}"`)
+}
+
+// IMP-51 per-guard negative controls. `withPhraseRemoved` mutates an in-memory copy of the real
+// document (never the file on disk); the copy is then run through the guard's own section
+// extractor, so each guard is proven to fail both when the wording disappears and when the
+// extractor stops pointing at the section that carries it.
+const PHRASE_REMOVED_MARKER = '<<required wording removed by negative control>>'
+
+function withPhraseRemoved(text: string, phrase: string): string {
+  const pattern = new RegExp(
+    phrase
+      .trim()
+      .split(/\s+/)
+      .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('\\s+'),
+    'g',
+  )
+
+  if (text.match(pattern) === null) {
+    throw new Error(`Cannot build a negative control: the document lacks the phrase "${phrase}"`)
+  }
+
+  return text.replace(pattern, PHRASE_REMOVED_MARKER)
+}
+
+function expectGuardReportsEachMissingPhrase(
+  label: string,
+  document: string,
+  phrases: readonly string[],
+  extract: (text: string) => string = (text) => text,
+): void {
+  for (const phrase of phrases) {
+    const mutated = extract(withPhraseRemoved(document, phrase))
+
+    expect(findMissingPhrases(label, mutated, phrases)).toContain(
+      `${label}: required wording is missing — "${phrase}"`,
+    )
+  }
+}
+
+describe('required/forbidden wording predicates (T15 guard controls)', () => {
+  test('findMissingPhrases reports only the phrases a document lacks', () => {
+    // Arrange
+    const document = 'pass `model` only when `authMode` is `apikey`.'
+
+    // Act
+    const missing = findMissingPhrases('probe', document, [
+      'only when `authMode` is `apikey`',
+      'steer with `reasoningEffort`',
+    ])
+
+    // Assert
+    expect(missing).toEqual([
+      'probe: required wording is missing — "steer with `reasoningEffort`"',
+    ])
+  })
+
+  test('findMissingPhrases tolerates re-wrapped whitespace', () => {
+    // Arrange
+    const rewrapped = 'pass `model` only\n  when `authMode` is\t`apikey`.'
+
+    // Act + Assert
+    expect(findMissingPhrases('probe', rewrapped, ['only when `authMode` is `apikey`'])).toEqual([])
+  })
+
+  test('findForbiddenPhrases reports only the phrases a document still carries', () => {
+    // Arrange
+    const document = 'the payload is returned unredacted when no pattern matches.'
+
+    // Act
+    const found = findForbiddenPhrases('probe', document, [
+      'returned unredacted',
+      'fall back to reading PLAN.md',
+    ])
+
+    // Assert
+    expect(found).toEqual(['probe: forbidden wording is back — "returned unredacted"'])
+  })
+})
+
+describe('auth-aware model bullet wording (R3.4)', () => {
+  // The bullet heading is `- \`model\` and \`reasoningEffort\`:`, so the parameter label passed to
+  // extractParameterBullet carries the interior backticks of that compound label verbatim.
+  const MODEL_BULLET_LABEL = 'model` and `reasoningEffort'
+  const MODEL_BULLET_PHRASES = [
+    'pass `model` only when Phase 0\'s `codex_health.authMode` is `apikey`',
+    'otherwise omit `model` and steer with `reasoningEffort`',
+  ] as const
+  const README_AUTH_MODE_PHRASES = [
+    '`authMode: "chatgpt" | "apikey" | "unknown"`',
+    'pass `model` only when `authMode` is `apikey`; otherwise omit it and steer with '
+    + '`reasoningEffort`',
+    'a flowDocs guard checks that wording',
+  ] as const
+
+  test('Phase 4 tells the executor to pass model only under apikey auth', () => {
+    // Arrange
+    const phaseFour = extractPhaseSection(readText(COMMAND_PATH), 4)
+
+    // Act
+    const bullet = extractParameterBullet(phaseFour, MODEL_BULLET_LABEL)
+
+    // Assert
+    expect(findMissingPhrases('commands/codex-flow.md Phase 4', bullet, MODEL_BULLET_PHRASES))
+      .toEqual([])
+  })
+
+  test('README documents authMode and the guard that pins the wording', () => {
+    // Arrange + Act
+    const missing = findMissingPhrases('README.md', readText(README_PATH), README_AUTH_MODE_PHRASES)
+
+    // Assert
+    expect(missing).toEqual([])
+  })
+
+  test('the Phase 4 guard reports each required phrase removed from the bullet (IMP-51)', () => {
+    expectGuardReportsEachMissingPhrase(
+      'commands/codex-flow.md Phase 4',
+      readText(COMMAND_PATH),
+      MODEL_BULLET_PHRASES,
+      (text) => extractParameterBullet(extractPhaseSection(text, 4), MODEL_BULLET_LABEL),
+    )
+  })
+
+  test('the README guard reports each required phrase removed from the doc (IMP-51)', () => {
+    expectGuardReportsEachMissingPhrase(
+      'README.md',
+      readText(README_PATH),
+      README_AUTH_MODE_PHRASES,
+    )
+  })
+})
+
+describe('Codex review scope passing and out-of-scope routing (R4.3)', () => {
+  const SCOPE_ARGUMENT = 'scope: { files: <the task\'s `Files:` list>, contract: <the PLAN '
+    + 'Contracts the task lists> }'
+  const STEP_FOUR_PHRASES = [
+    'A finding stamped `inScope: false`',
+    'counted in `reviewFindings.outOfScopeCount`',
+    'is routed to the improvements ledger by default and does not block',
+    'it blocks only when you verify it affects THIS task\'s acceptance',
+  ] as const
+  const REVIEW_DUAL_PHRASES = [
+    SCOPE_ARGUMENT,
+    'counting the rest in `reviewFindings.outOfScopeCount`',
+    'A finding with `inScope: false` goes to the improvements ledger by default and never blocks '
+    + 'the task',
+    'Report `outOfScopeCount` with the comparison result',
+  ] as const
+
+  test('Phase 5 step 1 passes the task Files and Contracts as the review scope', () => {
+    // Arrange
+    const phaseFive = extractPhaseSection(readText(COMMAND_PATH), 5)
+
+    // Act
+    const stepOne = extractNumberedStep(phaseFive, 1)
+
+    // Assert
+    expect(findMissingPhrases('commands/codex-flow.md Phase 5 step 1', stepOne, [SCOPE_ARGUMENT]))
+      .toEqual([])
+  })
+
+  test('Phase 5 step 4 routes out-of-scope findings to the ledger by default', () => {
+    // Arrange
+    const phaseFive = extractPhaseSection(readText(COMMAND_PATH), 5)
+
+    // Act
+    const stepFour = extractNumberedStep(phaseFive, 4)
+
+    // Assert
+    expect(findMissingPhrases('commands/codex-flow.md Phase 5 step 4', stepFour, STEP_FOUR_PHRASES))
+      .toEqual([])
+  })
+
+  test('review-dual documents outOfScopeCount and the default-to-ledger rule', () => {
+    // Arrange + Act
+    const missing = findMissingPhrases(
+      'skills/review-dual/SKILL.md',
+      readText(REVIEW_DUAL_PATH),
+      REVIEW_DUAL_PHRASES,
+    )
+
+    // Assert
+    expect(missing).toEqual([])
+  })
+
+  test('the Phase 5 step 1 and step 4 guards report each removed phrase (IMP-51)', () => {
+    const command = readText(COMMAND_PATH)
+
+    expectGuardReportsEachMissingPhrase(
+      'commands/codex-flow.md Phase 5 step 1',
+      command,
+      [SCOPE_ARGUMENT],
+      (text) => extractNumberedStep(extractPhaseSection(text, 5), 1),
+    )
+    expectGuardReportsEachMissingPhrase(
+      'commands/codex-flow.md Phase 5 step 4',
+      command,
+      STEP_FOUR_PHRASES,
+      (text) => extractNumberedStep(extractPhaseSection(text, 5), 4),
+    )
+  })
+
+  test('the review-dual guard reports each removed phrase (IMP-51)', () => {
+    expectGuardReportsEachMissingPhrase(
+      'skills/review-dual/SKILL.md',
+      readText(REVIEW_DUAL_PATH),
+      REVIEW_DUAL_PHRASES,
+    )
+  })
+})
+
+describe('PROJECT.md generation, reading, and refresh triggers (R7.3, R7.4)', () => {
+  const PHASE_ZERO_PHRASES = [
+    'when `.codex-flow/PROJECT.md` is absent generate it with',
+    'scripts/project-context.mjs" --generate',
+    'ask the user to confirm or edit it in the Phase 1 interview',
+    'list it as pre-existing in the `baseline-dirty.patch` manifest',
+  ] as const
+  const STEP_EIGHT_PHRASES = [
+    'When any Decision-log block of this run records a contract deviation under `Contracts '
+    + 'touched` or a Decision naming an architecture change, run',
+    'scripts/project-context.mjs" --refresh',
+    'show the user the resulting `.codex-flow/PROJECT.md` diff for confirmation',
+  ] as const
+
+  test('Phase 0 generates PROJECT.md when absent and confirms it in the interview', () => {
+    // Arrange + Act
+    const phaseZero = extractPhaseSection(readText(COMMAND_PATH), 0)
+
+    // Assert
+    expect(findMissingPhrases('commands/codex-flow.md Phase 0', phaseZero, PHASE_ZERO_PHRASES))
+      .toEqual([])
+  })
+
+  test('Phase 2 planning reads PROJECT.md before exploring the codebase', () => {
+    // Arrange
+    const phaseTwo = extractPhaseSection(readText(COMMAND_PATH), 2)
+
+    // Act
+    const stepOne = extractNumberedStep(phaseTwo, 1).replace(/\s+/g, ' ')
+
+    // Assert — "first" is load-bearing: the brief must precede the Explore subagents.
+    expect(stepOne).toContain('Read `.codex-flow/PROJECT.md` first')
+    expect(stepOne.indexOf('.codex-flow/PROJECT.md'))
+      .toBeLessThan(stepOne.indexOf('explore the codebase'))
+  })
+
+  test('Phase 5 step 8 instructs --refresh on a recorded deviation or architecture change', () => {
+    // Arrange
+    const phaseFive = extractPhaseSection(readText(COMMAND_PATH), 5)
+
+    // Act
+    const stepEight = extractNumberedStep(phaseFive, 8)
+
+    // Assert
+    expect(findMissingPhrases('commands/codex-flow.md Phase 5 step 8', stepEight, STEP_EIGHT_PHRASES))
+      .toEqual([])
+  })
+
+  test('the Phase 0 and Phase 5 step 8 guards report each removed phrase (IMP-51)', () => {
+    const command = readText(COMMAND_PATH)
+
+    expectGuardReportsEachMissingPhrase(
+      'commands/codex-flow.md Phase 0',
+      command,
+      PHASE_ZERO_PHRASES,
+      (text) => extractPhaseSection(text, 0),
+    )
+    expectGuardReportsEachMissingPhrase(
+      'commands/codex-flow.md Phase 5 step 8',
+      command,
+      STEP_EIGHT_PHRASES,
+      (text) => extractNumberedStep(extractPhaseSection(text, 5), 8),
+    )
+  })
+})
+
+describe('session-report cost table wording after T14 (R1.2, C5, C9)', () => {
+  const PER_MODEL_COLUMNS = [
+    'Model',
+    'Runs',
+    'Failed',
+    'Duration (ms)',
+    'Input',
+    'Cached input',
+    'Output',
+    'Reasoning output',
+    'Sources',
+  ] as const
+  const COMPLETENESS_FIELDS = [
+    'Complete',
+    'Unpriced runs',
+    'Missing usage',
+    'Read errors',
+    'History excluded',
+  ] as const
+
+  const TABLE_SHAPE_PHRASES = [
+    `nine-column \`## Per model\` table (${PER_MODEL_COLUMNS.join(', ')})`,
+    `\`## Completeness\` (${COMPLETENESS_FIELDS.join(', ')})`,
+  ] as const
+  const COMPLETENESS_RULE_PHRASES = [
+    '`Complete` is `no` whenever anything went unaccounted for',
+    're-run with `--history` to include the archives',
+  ] as const
+
+  test('the session-cost helper call site carries the canonical fail-closed sentence', () => {
+    // Arrange + Act
+    const sessionReport = readText(SESSION_REPORT_PATH)
+
+    // Assert
+    expect(sessionReport).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
+  })
+
+  test('the skill names the nine-column Per model table and the Completeness section', () => {
+    // Arrange
+    const sessionReport = readText(SESSION_REPORT_PATH)
+
+    // Act
+    const missing = findMissingPhrases(
+      'skills/session-report/SKILL.md',
+      sessionReport,
+      TABLE_SHAPE_PHRASES,
+    )
+
+    // Assert — the recited column list must stay nine wide, matching the C5 helper output.
+    expect(PER_MODEL_COLUMNS).toHaveLength(9)
+    expect(missing).toEqual([])
+  })
+
+  test('the skill says which condition makes Completeness report no', () => {
+    // Arrange + Act
+    const missing = findMissingPhrases(
+      'skills/session-report/SKILL.md',
+      readText(SESSION_REPORT_PATH),
+      COMPLETENESS_RULE_PHRASES,
+    )
+
+    // Assert
+    expect(missing).toEqual([])
+  })
+
+  test('the session-report guards report each removed phrase (IMP-51)', () => {
+    const sessionReport = readText(SESSION_REPORT_PATH)
+
+    expectGuardReportsEachMissingPhrase(
+      'skills/session-report/SKILL.md',
+      sessionReport,
+      TABLE_SHAPE_PHRASES,
+    )
+    expectGuardReportsEachMissingPhrase(
+      'skills/session-report/SKILL.md',
+      sessionReport,
+      COMPLETENESS_RULE_PHRASES,
+    )
+  })
+})
+
+describe('README wording T14 removed stays removed', () => {
+  const REMOVED_README_PHRASES = [
+    'returned unredacted',
+    'fall back to reading PLAN.md',
+  ] as const
+
+  test('README no longer claims unredacted output or a PLAN.md read fallback', () => {
+    // Arrange + Act
+    const violations = findForbiddenPhrases(
+      'README.md',
+      readText(README_PATH),
+      REMOVED_README_PHRASES,
+    )
+
+    // Assert
+    expect(violations).toEqual([])
+  })
+
+  test('the guard reports each phrase reintroduced into a copy of the README (IMP-51)', () => {
+    const readme = readText(README_PATH)
+
+    for (const phrase of REMOVED_README_PHRASES) {
+      const mutated = `${readme}\n\nSynthetic regression: ${phrase}.\n`
+
+      expect(findForbiddenPhrases('README.md', mutated, REMOVED_README_PHRASES)).toContain(
+        `README.md: forbidden wording is back — "${phrase}"`,
+      )
+    }
   })
 })

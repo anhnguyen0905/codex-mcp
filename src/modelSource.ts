@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -58,8 +59,17 @@ export interface ConfiguredModelOptions {
 interface ConfigModelCacheEntry {
   readonly mtimeMs: number
   readonly size: number
+  /** sha1 of the exact bytes that produced `model`, so an in-place rewrite cannot be reused. */
+  readonly contentHash: string
   readonly model: string | undefined
 }
+
+/**
+ * Content fingerprint of a config.toml. Hashes the raw bytes, not the decoded text, so two
+ * different invalid-UTF-8 rewrites of the same length cannot collapse onto one hash via U+FFFD.
+ * sha1 is a change detector here, never a security claim.
+ */
+const contentHashOf = (bytes: Buffer): string => createHash('sha1').update(bytes).digest('hex')
 
 /**
  * Bound on distinct config paths held at once. A server sees one CODEX_HOME in practice; the cap
@@ -75,13 +85,21 @@ export const clearModelCache = (): void => {
 }
 
 /**
+ * Resolved config.toml paths currently memoized, in insertion (eviction) order. Introspection for
+ * tests and diagnostics only — a frozen copy, so no caller can mutate the cache through it.
+ */
+export const modelCachePaths = (): readonly string[] =>
+  Object.freeze([...configModelCache.keys()])
+
+/**
  * Best-effort read of the configured default model from `<codexHome>/config.toml`.
  * Read-only and never throws: a missing, unreadable, or malformed file yields undefined so a
  * metric line simply omits the model rather than failing the run.
  *
- * Memoized per resolved path on (mtimeMs, size) — every call still stats the file, so an edited or
- * newly created config is picked up, while an unchanged one is never re-read or re-parsed. Size is
- * part of the key because a rewrite inside the same millisecond leaves mtimeMs untouched.
+ * Memoized per resolved path on (mtimeMs, size, sha1 of the content) — every call still stats the
+ * file, so an edited or newly created config is picked up. When the stat key matches the cached
+ * one the file is still read once and hashed (the deliberate cost of never trusting mtime+size,
+ * which a same-millisecond same-length rewrite leaves untouched); only the parse is skipped.
  * A missing or unreadable file is never cached: it drops any stale entry and returns undefined.
  */
 export const readConfiguredModel = (options: ConfiguredModelOptions = {}): string | undefined => {
@@ -99,22 +117,32 @@ export const readConfiguredModel = (options: ConfiguredModelOptions = {}): strin
   }
 
   const cached = configModelCache.get(configPath)
-  if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) return cached.model
+  const hasSameStatKey =
+    cached !== undefined && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size
 
-  let model: string | undefined
+  let bytes: Buffer
   try {
-    model = parseConfigModel(readFileSync(configPath, 'utf8'))
+    bytes = readFileSync(configPath)
   } catch {
     configModelCache.delete(configPath)
     return undefined
   }
+
+  const contentHash = contentHashOf(bytes)
+  if (hasSameStatKey && cached.contentHash === contentHash) return cached.model
+  const model = parseConfigModel(bytes.toString('utf8'))
 
   if (!configModelCache.has(configPath) && configModelCache.size >= MAX_CACHED_CONFIG_PATHS) {
     // Evict the least recently inserted path only, so every other path stays memoized.
     const oldestPath = configModelCache.keys().next().value
     if (oldestPath !== undefined) configModelCache.delete(oldestPath)
   }
-  configModelCache.set(configPath, { mtimeMs: stats.mtimeMs, size: stats.size, model })
+  configModelCache.set(configPath, {
+    mtimeMs: stats.mtimeMs,
+    size: stats.size,
+    contentHash,
+    model,
+  })
   return model
 }
 

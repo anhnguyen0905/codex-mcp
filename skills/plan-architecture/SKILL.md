@@ -7,7 +7,7 @@ description: Architecture design for the Planning phase — codebase convention 
 
 ## Step 1 — Discover conventions before designing
 
-Read the codebase until you can answer: How are modules organized (by feature or by layer)? How do errors propagate? Where does validation live? How is the existing code tested? What naming style rules? Your design must read like the codebase's current author wrote it — deviations are review findings waiting to happen.
+Read `.codex-flow/PROJECT.md` first when it exists — it is the durable project context. Then read the codebase until you can answer: How are modules organized (by feature or by layer)? How do errors propagate? Where does validation live? How is the existing code tested? What naming style rules? Your design must read like the codebase's current author wrote it — deviations are review findings waiting to happen.
 
 ## Step 2 — Compare options before choosing
 

@@ -33,6 +33,9 @@ to the coordinator.
 
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/task-waves.mjs" .codex-flow/TASKS.md`
 
+This helper and the `context-slice.mjs` call in Step 2 are both fail-closed.
+If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.
+
 A **wave** is a set of tasks that can run at once: every task's dependencies are satisfied by
 earlier waves, and no two tasks in the wave touch the same file (`Files:` field). Tasks with no
 declared files run alone (unknown blast radius). The tool prints each wave and its width; a wave

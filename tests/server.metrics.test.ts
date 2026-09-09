@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { MetricEntry } from '../src/metricsLog.js'
-import { ROTATION_NOTICE } from '../src/metricsLog.js'
+import { historyDirFor, rotationNoticeFor } from '../src/metricsLog.js'
 import { parseConfigModel, readConfiguredModel } from '../src/modelSource.js'
 import { createServer } from '../src/server.js'
 import type { RunOutcome } from '../src/types.js'
@@ -379,9 +379,18 @@ const readMetricsPayload = async (): Promise<Record<string, unknown>> => {
   return JSON.parse((r.content as Array<{ text: string }>)[0].text)
 }
 
+/** Stage `<dir>/history/<name>` with one entry and return the history dir. */
+const stageHistoryFile = (name: string, entry: string): string => {
+  const historyDir = historyDirFor(logPath)
+  mkdirSync(historyDir, { recursive: true })
+  writeFileSync(join(historyDir, name), `${entry}\n`)
+  return historyDir
+}
+
 describe('codex_metrics diagnostics forwarding', () => {
-  test('forwards invalidLines and the rotation notice for a log with a back-file (R7.3)', async () => {
+  test('forwards invalidLines and reads the rotated back-file without a rotation notice (R7.3)', async () => {
     // Arrange — one entry in the rotated back-file, one entry plus one unparseable line live.
+    // A back-file is always read; only an archived history/ dir raises the rotation notice.
     writeFileSync(`${logPath}.1`, `${metricLine({ cwd: '/w/rotated' })}\n`)
     writeFileSync(logPath, [metricLine(), '{ not json', ''].join('\n'))
 
@@ -391,7 +400,7 @@ describe('codex_metrics diagnostics forwarding', () => {
     // Assert
     expect(payload.totalRuns).toBe(2)
     expect(payload.invalidLines).toBe(1)
-    expect(payload.rotationNotice).toBe(ROTATION_NOTICE)
+    expect(payload.rotationNotice).toBeUndefined()
     expect(payload.readErrors).toBeUndefined()
   })
 
@@ -420,6 +429,17 @@ describe('codex_metrics diagnostics forwarding', () => {
     expect(payload.invalidLines).toBeUndefined()
     expect(payload.rotationNotice).toBeUndefined()
     expect(payload.readErrors).toBeUndefined()
+    expect(payload.historyFiles).toBeUndefined()
+    expect(payload.historyExcluded).toBeUndefined()
+    // `completeness` is always present (R6.3). Without CODEX_MCP_PRICING the usage-bearing entry
+    // has no cost, so the roll-up honestly reports itself incomplete rather than claiming $0.
+    expect(payload.completeness).toEqual({
+      complete: false,
+      unpricedRuns: 1,
+      missingUsage: 0,
+      readErrors: 0,
+      historyExcluded: false,
+    })
     const byModel = payload.byModel as Record<string, { sources?: unknown }>
     expect(byModel['gpt-5.1-codex'].sources).toBeUndefined()
   })
@@ -458,5 +478,95 @@ describe('codex_metrics diagnostics forwarding', () => {
     const byModel = payload.byModel as Record<string, { runs: number; sources: Record<string, number> }>
     expect(byModel['gpt-5.1-codex'].runs).toBe(3)
     expect(byModel['gpt-5.1-codex'].sources).toEqual({ event: 2, override: 0, config: 1 })
+  })
+})
+
+describe('codex_metrics completeness and history (R6.3, C5)', () => {
+  /** codex_metrics payload for a staged log, with tool arguments. */
+  const payloadWith = async (args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const client = await connect(vi.fn(async () => okOutcome))
+    const r = await client.callTool({ name: 'codex_metrics', arguments: args })
+    return JSON.parse((r.content as Array<{ text: string }>)[0].text)
+  }
+
+  test('reports incomplete with the rotation notice when history exists and is excluded', async () => {
+    // Arrange — one archived entry that the default read does NOT include.
+    const historyDir = stageHistoryFile('metrics-20260101-000000.jsonl', metricLine({ cwd: '/w/archived' }))
+    writeFileSync(logPath, `${metricLine()}\n`)
+
+    // Act
+    const payload = await readMetricsPayload()
+
+    // Assert — the gap is disclosed, not silently dropped from the totals.
+    expect(payload.totalRuns).toBe(1)
+    expect(payload.historyFiles).toBe(1)
+    expect(payload.historyExcluded).toBe(true)
+    expect(payload.rotationNotice).toBe(rotationNoticeFor(historyDir, 1))
+    expect(payload.completeness).toMatchObject({ complete: false, historyExcluded: true, readErrors: 0 })
+  })
+
+  test('includeHistory aggregates the archives and clears historyExcluded', async () => {
+    // Arrange
+    stageHistoryFile('metrics-20260101-000000.jsonl', metricLine({ cwd: '/w/archived' }))
+    writeFileSync(logPath, `${metricLine()}\n`)
+
+    // Act
+    const payload = await payloadWith({ includeHistory: true })
+
+    // Assert — the archive is counted in the totals, so nothing is excluded any more.
+    expect(payload.totalRuns).toBe(2)
+    expect(payload.historyFiles).toBe(1)
+    expect(payload.historyExcluded).toBe(false)
+    expect(payload.completeness).toMatchObject({ historyExcluded: false, readErrors: 0 })
+  })
+
+  test('reports complete for an empty log with nothing left unaccounted for', async () => {
+    // Arrange
+    writeFileSync(logPath, '')
+
+    // Act
+    const payload = await readMetricsPayload()
+
+    // Assert
+    expect(payload.completeness).toEqual({
+      complete: true,
+      unpricedRuns: 0,
+      missingUsage: 0,
+      readErrors: 0,
+      historyExcluded: false,
+    })
+  })
+
+  test('counts entries with usage but no priced model as unpricedRuns', async () => {
+    // Arrange — usage present, no CODEX_MCP_PRICING and no priced model in the cost table.
+    writeFileSync(logPath, `${metricLine({ model: 'not-a-priced-model' })}\n`)
+
+    // Act
+    const payload = await readMetricsPayload()
+
+    // Assert
+    expect(payload.completeness).toMatchObject({ complete: false, unpricedRuns: 1, missingUsage: 0 })
+  })
+
+  test('counts entries without usage as missingUsage', async () => {
+    // Arrange
+    writeFileSync(logPath, `${metricLine({ usage: null })}\n`)
+
+    // Act
+    const payload = await readMetricsPayload()
+
+    // Assert
+    expect(payload.completeness).toMatchObject({ complete: false, missingUsage: 1 })
+  })
+
+  test('folds an unreadable log into completeness.readErrors', async () => {
+    // Arrange — a directory where the log file should be: exists, but unreadable.
+    mkdirSync(logPath, { recursive: true })
+
+    // Act
+    const payload = await readMetricsPayload()
+
+    // Assert
+    expect(payload.completeness).toMatchObject({ complete: false, readErrors: 1 })
   })
 })
