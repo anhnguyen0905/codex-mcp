@@ -2040,8 +2040,13 @@ describe('fast-path gate ordering in Phase 0 (R2.3)', () => {
 })
 
 describe('per-run overhead byte budgets (R8.2, C7 as amended)', () => {
+  /**
+   * LF-normalized byte count, matching the repo's readText convention: a Windows
+   * checkout with CRLF line endings must measure the same as a POSIX one, so the
+   * budgets describe the document, not the checkout's line-ending style.
+   */
   function byteLength(filePath: string): number {
-    return Buffer.byteLength(readFileSync(filePath))
+    return Buffer.byteLength(readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n'))
   }
 
   function overageMessage(filePath: string, bytes: number, limit: number, limitName: string): string {

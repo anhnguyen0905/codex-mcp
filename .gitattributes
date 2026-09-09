@@ -1,0 +1,4 @@
+# Keep text sources LF in every checkout so byte budgets and CRLF-safe reads
+# measure the same bytes on Windows as on POSIX.
+*.md text eol=lf
+*.mjs text eol=lf

@@ -8,17 +8,18 @@
  * the point is to prove the *packaged artifact* boots and advertises its tools.
  *
  * Usage: node scripts/npm-smoke.mjs (--version <v> | --tarball <path> | --tarball-from-pack)
- *   --version <v>          run `npx -y @anhnguyen0905/codex-mcp@<v>` (published version)
+ *   --version <v>          run `npx -y -p @anhnguyen0905/codex-mcp@<v> codex-mcp` (published version)
  *   --tarball <path>       install that tarball into a temp dir and run its dist/index.js
  *   --tarball-from-pack    `npm pack --json` this repo first, then as --tarball
  *   --timeout-ms <n>       override the 60 s handshake budget (tests / slow runners)
  *
  * Exit codes: 0 = ok, 1 = mismatch / timeout / spawn or pack failure, 2 = usage error.
- * Windows-safe: `npx.cmd` / `npm.cmd` are resolved explicitly and no argument is
- * ever passed through a shell.
+ * Windows-safe: `npx.cmd` / `npm.cmd` are resolved explicitly and, because Node >= 20.12
+ * refuses to spawn a `.cmd` shim without one (CVE-2024-27980), they run through cmd.exe
+ * with every argument quoted. The node server child never goes through a shell.
  */
 import { spawn, execFile } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -27,6 +28,13 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 
 export const PACKAGE_NAME = '@anhnguyen0905/codex-mcp'
+
+/**
+ * The package name differs from the command it installs, so `npx -y <pkg>` cannot
+ * resolve a command and exits 127. The published bin name is the fallback here; the
+ * repo's package.json is the source of truth whenever it is readable.
+ */
+export const DEFAULT_BIN_NAME = 'codex-mcp'
 
 export const EXPECTED_TOOLS = Object.freeze([
   'codex_execute',
@@ -80,6 +88,72 @@ export function npxBin(platform = process.platform) {
   return platform === 'win32' ? 'npx.cmd' : 'npx'
 }
 
+/**
+ * Node >= 20.12 / 22 refuses to spawn a `.cmd` shim without a shell (CVE-2024-27980),
+ * failing with EINVAL. Only npm/npx need this; the node server child is still spawned
+ * directly, with no shell involved.
+ */
+export function npmSpawnOptions(platform = process.platform) {
+  return platform === 'win32' ? { shell: true } : {}
+}
+
+/** Characters that need no quoting inside cmd.exe. */
+const WIN32_BARE_ARG_PATTERN = /^[A-Za-z0-9@._:+\-\\/]+$/
+/** Characters cmd.exe quoting cannot neutralise; refuse rather than build a broken command line. */
+const WIN32_UNQUOTABLE_PATTERN = /["%!^&|<>\r\n]/
+
+/** Quote a single argument for the cmd.exe shell. A no-op on POSIX, where no shell is used. */
+export function quoteShellArg(arg, platform = process.platform) {
+  if (typeof arg !== 'string') throw new TypeError('quoteShellArg: arg must be a string')
+  if (platform !== 'win32') return arg
+  if (WIN32_BARE_ARG_PATTERN.test(arg)) return arg
+  if (WIN32_UNQUOTABLE_PATTERN.test(arg)) {
+    throw new SmokeError(`argument cannot be safely passed through cmd.exe: ${arg}`)
+  }
+  return `"${arg}"`
+}
+
+export function shellArgs(args, platform = process.platform) {
+  return args.map((arg) => quoteShellArg(arg, platform))
+}
+
+/**
+ * `npx -y -p <pkg>@<version> <bin>`: `-p` names the package to install and the trailing
+ * positional names the command to run, which is what makes a package/bin mismatch work.
+ */
+export function publishedSmokeArgs(spec, binName = DEFAULT_BIN_NAME) {
+  if (typeof spec !== 'string' || spec.length === 0) throw new TypeError('publishedSmokeArgs: spec must be a non-empty string')
+  if (typeof binName !== 'string' || binName.length === 0) throw new TypeError('publishedSmokeArgs: binName must be a non-empty string')
+  return ['-y', '-p', spec, binName]
+}
+
+/** First key of a `bin` map, or — for the string form — the unscoped package name. */
+export function binNameFromManifest(manifest, fallback = DEFAULT_BIN_NAME) {
+  const bin = manifest?.bin
+  if (bin !== null && typeof bin === 'object') {
+    const [firstName] = Object.keys(bin)
+    if (typeof firstName === 'string' && firstName.length > 0) return firstName
+  }
+  if (typeof bin === 'string' && bin.length > 0) {
+    const unscoped = String(manifest?.name ?? '').split('/').pop()
+    if (unscoped) return unscoped
+  }
+  return fallback
+}
+
+/** Read the bin name from the repo's package.json; fall back to the published default. */
+export function resolveBinName(repoRoot, fallback = DEFAULT_BIN_NAME) {
+  if (typeof repoRoot !== 'string' || repoRoot.length === 0) return fallback
+  const manifestPath = path.join(repoRoot, 'package.json')
+  if (!existsSync(manifestPath)) return fallback
+  try {
+    return binNameFromManifest(JSON.parse(readFileSync(manifestPath, 'utf8')), fallback)
+  } catch (error) {
+    console.error(`npm-smoke: could not read ${manifestPath} (${error.message}); using bin name ${fallback}`)
+    return fallback
+  }
+}
+
 function jsonRpcRequest(id, method, params) {
   return `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`
 }
@@ -124,7 +198,7 @@ export function describeToolMismatch(actual, expected = EXPECTED_TOOLS) {
  * Spawn an MCP stdio server, handshake, and return its advertised tool names.
  * Rejects with SmokeError on timeout, early exit, or a malformed response.
  */
-export function runSmoke({ command, args = [], timeoutMs = DEFAULT_TIMEOUT_MS, cwd } = {}) {
+export function runSmoke({ command, args = [], timeoutMs = DEFAULT_TIMEOUT_MS, cwd, spawnOptions = {} } = {}) {
   if (typeof command !== 'string' || command.length === 0) {
     throw new TypeError('runSmoke: command must be a non-empty string')
   }
@@ -136,7 +210,7 @@ export function runSmoke({ command, args = [], timeoutMs = DEFAULT_TIMEOUT_MS, c
   }
 
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+    const child = spawn(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, ...spawnOptions })
     let pending = ''
     let stderr = ''
     let initialized = false
@@ -282,11 +356,12 @@ export function parseArgs(argv) {
 
 async function runNpm(args, cwd) {
   try {
-    const { stdout } = await execFileAsync(npmBin(), args, {
+    const { stdout } = await execFileAsync(npmBin(), shellArgs(args), {
       cwd,
       maxBuffer: MAX_BUFFER_BYTES,
       timeout: NPM_INSTALL_TIMEOUT_MS,
       windowsHide: true,
+      ...npmSpawnOptions(),
     })
     return stdout
   } catch (error) {
@@ -326,9 +401,23 @@ async function main(argv, repoRoot) {
 
   if (options.mode === 'version') {
     const spec = `${PACKAGE_NAME}@${options.version}`
-    console.log(`smoking published ${spec}`)
-    const { tools } = await runSmoke({ command: npxBin(), args: ['-y', spec], timeoutMs: options.timeoutMs })
-    console.log(`PASS: ${spec} advertises ${tools.length} tools (${tools.join(', ')})`)
+    const binName = resolveBinName(repoRoot)
+    console.log(`smoking published ${spec} (bin: ${binName})`)
+    // Run from a scratch cwd: inside this repo npx would resolve the same-named local
+    // package, skip the install, and fail to find the bin (exit 127).
+    const npxDir = mkdtempSync(path.join(os.tmpdir(), 'codex-mcp-npx-smoke-'))
+    try {
+      const { tools } = await runSmoke({
+        command: npxBin(),
+        args: shellArgs(publishedSmokeArgs(spec, binName)),
+        timeoutMs: options.timeoutMs,
+        cwd: npxDir,
+        spawnOptions: npmSpawnOptions(),
+      })
+      console.log(`PASS: ${spec} advertises ${tools.length} tools (${tools.join(', ')})`)
+    } finally {
+      rmSync(npxDir, { recursive: true, force: true })
+    }
     return
   }
 

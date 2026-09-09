@@ -13,9 +13,16 @@ import {
   USAGE,
   describeToolMismatch,
   npmBin,
+  npmSpawnOptions,
   npxBin,
   parseArgs,
+  publishedSmokeArgs,
+  quoteShellArg,
+  resolveBinName,
   runSmoke,
+  shellArgs,
+  DEFAULT_BIN_NAME,
+  binNameFromManifest,
 } from '../scripts/npm-smoke.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -203,6 +210,87 @@ describe('platform binaries', () => {
     expect(npmBin('win32')).toBe('npm.cmd')
     expect(npxBin('linux')).toBe('npx')
     expect(npmBin('darwin')).toBe('npm')
+  })
+})
+
+describe('published-version invocation', () => {
+  test('runs the bin explicitly via -p so a package/bin name mismatch still resolves', () => {
+    // Arrange
+    const spec = `${PACKAGE_NAME}@0.26.0`
+
+    // Act
+    const args = publishedSmokeArgs(spec, 'codex-mcp')
+
+    // Assert — `npx -y <pkg>` exits 127 when the bin name differs from the package name.
+    expect(args).toEqual(['-y', '-p', spec, 'codex-mcp'])
+  })
+
+  test('rejects an empty spec or bin name', () => {
+    // Arrange / Act / Assert
+    expect(() => publishedSmokeArgs('', 'codex-mcp')).toThrow(TypeError)
+    expect(() => publishedSmokeArgs(`${PACKAGE_NAME}@0.26.0`, '')).toThrow(TypeError)
+  })
+
+  test('derives the bin name from this repo package.json bin map', () => {
+    // Arrange / Act
+    const binName = resolveBinName(REPO_ROOT)
+
+    // Assert
+    expect(binName).toBe(DEFAULT_BIN_NAME)
+  })
+
+  test('falls back to the published bin name when the manifest is missing or unreadable', () => {
+    // Arrange
+    const manifestless = path.join(fixtureDir, 'no-manifest-here')
+
+    // Act / Assert
+    expect(resolveBinName(manifestless)).toBe(DEFAULT_BIN_NAME)
+    expect(resolveBinName('')).toBe(DEFAULT_BIN_NAME)
+    expect(binNameFromManifest({})).toBe(DEFAULT_BIN_NAME)
+  })
+
+  test('reads the first key of a bin map and the unscoped name for a string bin', () => {
+    // Arrange / Act / Assert
+    expect(binNameFromManifest({ name: '@scope/pkg', bin: { 'other-cmd': 'dist/index.js' } })).toBe('other-cmd')
+    expect(binNameFromManifest({ name: '@scope/pkg', bin: 'dist/index.js' })).toBe('pkg')
+  })
+})
+
+describe('npm/npx spawn options', () => {
+  test('uses a shell on win32 and no shell on POSIX', () => {
+    // Arrange / Act / Assert — Node >= 20.12 fails EINVAL spawning npm.cmd without a shell.
+    expect(npmSpawnOptions('win32')).toEqual({ shell: true })
+    expect(npmSpawnOptions('linux')).toEqual({})
+    expect(npmSpawnOptions('darwin')).not.toHaveProperty('shell')
+  })
+
+  test('quotes only the win32 arguments that need it and leaves POSIX untouched', () => {
+    // Arrange
+    const withSpaces = 'C:\\Users\\Name Surname\\AppData\\Local\\Temp'
+
+    // Act / Assert
+    expect(quoteShellArg(`${PACKAGE_NAME}@0.26.0`, 'win32')).toBe(`${PACKAGE_NAME}@0.26.0`)
+    expect(quoteShellArg(withSpaces, 'win32')).toBe(`"${withSpaces}"`)
+    expect(quoteShellArg(withSpaces, 'linux')).toBe(withSpaces)
+    expect(shellArgs(['--json', withSpaces], 'win32')).toEqual(['--json', `"${withSpaces}"`])
+    expect(shellArgs(['--json', withSpaces], 'darwin')).toEqual(['--json', withSpaces])
+  })
+
+  test('refuses an argument cmd.exe quoting cannot neutralise', () => {
+    // Arrange / Act / Assert
+    expect(() => quoteShellArg('a"b', 'win32')).toThrow(/cannot be safely passed through cmd.exe/)
+    expect(() => quoteShellArg('a&b', 'win32')).toThrow(/cannot be safely passed through cmd.exe/)
+  })
+
+  test('runSmoke forwards spawnOptions to the child spawn', async () => {
+    // Arrange — a shell builtin: it can only start when shell:true is forwarded to spawn.
+    const shellOnly = 'exit 1'
+
+    // Act / Assert — with a shell it starts and then exits; without one it never spawns.
+    await expect(
+      runSmoke({ command: shellOnly, args: [], timeoutMs: 5000, spawnOptions: { shell: true } }),
+    ).rejects.toThrow(/server exited|failed to write to server stdin/)
+    await expect(runSmoke({ command: shellOnly, args: [], timeoutMs: 5000 })).rejects.toThrow(/failed to spawn/)
   })
 })
 
