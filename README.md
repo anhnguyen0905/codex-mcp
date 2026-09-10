@@ -130,6 +130,26 @@ structured result (`sessionId`, `agentMessage`, `fileChanges`, `commands`, token
 
 ---
 
+## `/codex-flow:brainstorm` — decide before you build (PDCA debate)
+
+Not every task should end in code. `/codex-flow:brainstorm <question>` runs a short
+Plan → Do → Check → Act loop whose deliverable is a decision record, produced by two-way debate
+between Claude (Fable, holds the thesis) and Codex (Astra, independent critic):
+
+| Phase | Who | What happens |
+|-------|-----|--------------|
+| **Plan** | Claude | One `codex_health` call, ≤ 3 framing questions, `BRIEF.md` (weighted criteria, git provenance), a THESIS with 2–3 options and its own strongest objections. |
+| **Do** | Codex ⇄ Claude | 1–3 rounds. Each Astra turn is a **fresh read-only** `codex_execute` that returns numbered challenges (BLOCKER/MAJOR/MINOR) and at most one alternative; Claude answers each with ACCEPT / REBUT / REFINE plus evidence. Stops on convergence or at the cap. |
+| **Check** | Claude, then Codex | Ledger + weighted score table, a fresh-session Codex sign-off for misattributions and dissent, and a mechanical `git status` check proving no code was written. |
+| **Act** | Claude + user | `DECISION.md` (`PROPOSED` → accept / amend / reject / one more round) with a `## Handoff` block a later `/codex-flow` run starts from, plus one `brainstorm.log` line that sizes future round caps. |
+
+Astra's json is parsed fail-closed by `scripts/debate-parse.mjs`; malformed entries are dropped
+with reasons and re-obtained once, never reconstructed from prose. When Codex is unavailable the
+user chooses, once per outage, between fixing it and a clearly labelled single-model run. All
+artifacts live in `.codex-flow/brainstorm/<timestamp>/`; the full flow's control files are never
+touched.
+
+
 ## Highlights
 
 ### Index-based skill selection

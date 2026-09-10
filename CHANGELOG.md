@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.27.0] - 2026-09-10
+
+### Added
+
+- **`/codex-flow:brainstorm` — PDCA two-way debate** (`commands/brainstorm.md` + mirror, `skills/brainstorm-debate/SKILL.md`). A thinking lane whose deliverable is a ratified `DECISION.md`, not code: Plan (health gate once, ≤ 3 framing questions, `BRIEF.md` with weighted criteria and git provenance, Claude's THESIS with self-objections) → Do (1–3 rounds; a fresh read-only `codex_execute` per Astra turn, ACCEPT/REBUT/REFINE responses, one bounded alternative, convergence stop rule) → Check (ledger, weighted score table, fresh-session Codex sign-off, mechanical no-code integrity check via `git status`) → Act (`Status: PROPOSED` → explicit accept/amend/reject/one-more-round, `## Handoff` block for a later `/codex-flow` run, `brainstorm.log` feedback line that sizes future round caps). Outages get one AskUserQuestion per outage with a labelled single-model fallback; the full flow's control files are never touched.
+- **`scripts/debate-parse.mjs`** — fail-closed parser for Astra's fenced json (round and sign-off kinds): last-block extraction, enum/id validation, one ordered `droppedReasons` entry per malformed item, exit codes 0/1/2; shipped in `package.json` `files[]` with `tests/debateParse.test.ts`.
+- **Dry-run fixes (2026-09-10, A/B-testing-platform brainstorm, 3 rounds, 10 challenges)** — the sign-off session now returns `pending[]` CONFIRM/HOLD verdicts that close or reopen round-cap acceptances (`CONFIRMED-BY-signoff` ledger status) so no fourth round is ever needed; Fable reclassifies unprefixed framing challenges as FRAMING; non-code topics get a `prior-art:` evidence class; an absent `authMode` is treated as `chatgpt`; Astra prompts carry the run dir's absolute BRIEF.md/DEBATE.md paths. `BRAINSTORM_SKILL_MAX_BYTES` raised 8 000 → 10 000.
+- `scripts/check-command-sync.mjs` `SYNC_PAIRS` now also gates the brainstorm mirror; `tests/flowDocs.test.ts` adds the brainstorm contract block with `BRAINSTORM_COMMAND_MAX_BYTES 12 000` / `BRAINSTORM_SKILL_MAX_BYTES 8 000`.
+
 ## [0.26.0] - 2026-09-09
 
 ### Added

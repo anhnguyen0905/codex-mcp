@@ -35,6 +35,12 @@ const COMMAND_PATH = path.join(REPO_ROOT, 'commands', 'codex-flow.md')
 const README_PATH = path.join(REPO_ROOT, 'README.md')
 const CLAUDE_COMMAND_PATH = path.join(REPO_ROOT, '.claude', 'commands', 'codex-flow.md')
 const COMMAND_TOKEN_ALLOWLIST = new Set(['codex-flow:codex-flow'])
+const BRAINSTORM_COMMAND_PATH = path.join(REPO_ROOT, 'commands', 'brainstorm.md')
+const BRAINSTORM_CLAUDE_COMMAND_PATH = path.join(REPO_ROOT, '.claude', 'commands', 'brainstorm.md')
+const BRAINSTORM_SKILL_PATH = path.join(SKILLS_DIR, 'brainstorm-debate', 'SKILL.md')
+// Brainstorm lane budgets: a thinking workflow must stay far cheaper than the full flow.
+const BRAINSTORM_COMMAND_MAX_BYTES = 12_000
+const BRAINSTORM_SKILL_MAX_BYTES = 10_000 // raised from 8 000 after the 2026-09-10 dry run added sign-off pending verdicts
 // R6.2 detector (documented, explicit): phrases that instruct a per-task full-suite run.
 const FORBIDDEN_PER_TASK_SUITE_PHRASES = [
   'full suite per task',
@@ -2566,5 +2572,167 @@ describe('README wording T14 removed stays removed', () => {
         `README.md: forbidden wording is back — "${phrase}"`,
       )
     }
+  })
+})
+
+describe('brainstorm command contract (PDCA two-way debate)', () => {
+  const lfBytes = (filePath: string) =>
+    Buffer.byteLength(readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n'))
+
+  test('keeps the Claude command mirror byte-identical', () => {
+    // Arrange
+    const command = readFileSync(BRAINSTORM_COMMAND_PATH)
+    const mirror = readFileSync(BRAINSTORM_CLAUDE_COMMAND_PATH)
+
+    // Assert
+    expect(command.equals(mirror)).toBe(true)
+  })
+
+  test('resolves every referenced skill token to an existing SKILL.md', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const tokens = [...new Set(command.match(/codex-flow:[A-Za-z0-9-]+/g) ?? [])]
+
+    // Act
+    const malformed = tokens.filter((token) => !/^codex-flow:[a-z0-9-]+$/.test(token))
+    const missing = tokens
+      .map((token) => token.slice('codex-flow:'.length))
+      .filter((skillName) => !existsSync(path.join(SKILLS_DIR, skillName, 'SKILL.md')))
+
+    // Assert
+    expect(malformed).toEqual([])
+    expect(missing).toEqual([])
+    expect(tokens).toContain('codex-flow:brainstorm-debate')
+  })
+
+  test('names the debate skill inside a Load skills first line', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+
+    expect(command).toMatch(/\*\*Load skills first\*\*:[^\n]*codex-flow:brainstorm-debate/)
+  })
+
+  test('stays under its own byte budgets', () => {
+    expect(lfBytes(BRAINSTORM_COMMAND_PATH)).toBeLessThanOrEqual(BRAINSTORM_COMMAND_MAX_BYTES)
+    expect(lfBytes(BRAINSTORM_SKILL_PATH)).toBeLessThanOrEqual(BRAINSTORM_SKILL_MAX_BYTES)
+  })
+
+  test('carries the four PDCA phases in order', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const headings = ['## Plan', '## Do', '## Check', '## Act'].map((h) => command.indexOf(h))
+
+    // Assert
+    expect(headings.every((index) => index >= 0)).toBe(true)
+    expect([...headings].sort((a, b) => a - b)).toEqual(headings)
+  })
+
+  test('runs every Codex call read-only and never touches the full-flow control files', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+
+    // Assert
+    expect(command).toContain('`sandbox`: `read-only`')
+    expect(command).not.toMatch(/workspace-write|danger-full-access/)
+    expect(command).not.toContain('flow-state.mjs')
+    expect(command).not.toMatch(/verifyCommand`: `/)
+  })
+
+  test('starts a fresh Codex session per Astra turn and reserves codex_continue for json re-obtain', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+
+    expect(command).toContain('Start a **fresh** session per Astra turn')
+    expect(command).toContain('`mcp__codex__codex_continue` is used only for the json re-obtain step')
+  })
+
+  test('parses Astra output through the fail-closed helper for rounds and sign-off', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const skill = readText(BRAINSTORM_SKILL_PATH)
+
+    // Assert
+    expect(command).toContain('debate-parse.mjs --kind round --round <n>')
+    expect(command).toContain('debate-parse.mjs --kind signoff')
+    expect(skill).toContain('node "${CLAUDE_PLUGIN_ROOT}/scripts/debate-parse.mjs" --kind round --round <n> --file <path>')
+    expect(skill).toContain('Never reconstruct an entry from the prose.')
+    expect(skill).toContain('If the helper is not found, STOP and tell the user to reinstall the')
+  })
+
+  test('follows the auth-aware model rule', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+
+    expect(command).toContain('`model`: only when `authMode` is `apikey`, otherwise omit it')
+    expect(command).toContain('Never pass a `model` override under ChatGPT auth')
+  })
+
+  test('ratifies the decision explicitly and never hands off while PROPOSED', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+
+    expect(command).toContain('`Status: PROPOSED`')
+    expect(command).toContain('Nothing is handed off while `PROPOSED`.')
+    expect(command).toContain('`ACCEPTED` or `REJECTED`')
+    expect(command).toContain('## Handoff')
+  })
+
+  test('enforces the no-code integrity check and the single-model labelling', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+
+    expect(command).toContain('**No-code integrity check** (mechanical)')
+    expect(command).toContain('never present a single-model run as a two-model debate')
+  })
+
+  test('writes the durable brainstorm log line in the documented format', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+
+    expect(command).toContain(
+      '`<ISO 8601> <one-line topic> rounds=<n> flips=<n> blockers=<n> mode=<two-model|single-model> status=<accepted|rejected|parked> dir=<run dir>`',
+    )
+  })
+
+  test('the skill defines the stop rule, scoring schema, and transcript budget', () => {
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    expect(skill).toContain('Minimum 1 round, cap 3')
+    expect(skill).toContain('Never run a fourth round.')
+    expect(skill).toContain('integer weights that sum to 100')
+    expect(skill).toContain('exceeds 6 000 estimated tokens')
+    expect(skill).toContain('ONLY together with a BLOCKER or MAJOR that applies to every option in the thesis')
+  })
+
+  test('lets Astra challenge the framing without joining the Plan phase', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    // Assert
+    expect(command).toContain('Astra is not consulted here')
+    expect(command).toContain('any BRIEF.md amendment from an accepted FRAMING challenge')
+    expect(skill).toContain('Prefix its Claim with FRAMING:')
+    expect(skill).toContain('A FRAMING challenge Fable accepts changes BRIEF.md, not the thesis')
+  })
+
+  test('closes round-cap acceptances through sign-off pending verdicts, not a fourth round', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    expect(skill).toContain('"pending":[{"id":"C2","verdict":"CONFIRM|HOLD","evidence":"..."}]')
+    expect(skill).toContain('CONFIRMED-BY-signoff')
+    expect(command).toContain('apply `pending[]` verdicts per the skill\'s stop rule')
+  })
+
+  test('carries the dry-run fixes: absent authMode, run-dir paths, prior-art evidence, FRAMING reclassification', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    expect(command).toContain('when the field is absent, treat it as `chatgpt`')
+    expect(command).toContain('the absolute paths of the run dir\'s BRIEF.md and DEBATE.md')
+    expect(skill).toContain('mark it `prior-art:`')
+    expect(skill).toContain('Fable reclassifies it and says so')
+  })
+
+  test('the sync gate lists the brainstorm mirror pair', async () => {
+    // @ts-expect-error — plain .mjs script
+    const { SYNC_PAIRS } = await import('../scripts/check-command-sync.mjs')
+
+    expect(SYNC_PAIRS).toContainEqual(['commands/brainstorm.md', '.claude/commands/brainstorm.md'])
   })
 })

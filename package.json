@@ -1,6 +1,6 @@
 {
   "name": "@anhnguyen0905/codex-mcp",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "description": "MCP server bridging Claude Code and OpenAI Codex CLI for plan-execute-review workflows",
   "main": "dist/index.js",
   "repository": {
@@ -77,6 +77,7 @@
     "scripts/skill-brief.mjs",
     "scripts/skill-lint.mjs",
     "scripts/session-cost.mjs",
+    "scripts/debate-parse.mjs",
     "scripts/smoke-e2e.mjs",
     "skills",
     "commands",

@@ -14,9 +14,9 @@ behavior is defined in **markdown instruction files**, not runtime code.
 
 ## Hard conventions (CI-gated — violating these red-fails tests)
 
-- **Command mirror**: `commands/codex-flow.md` has a **byte-identical** mirror at
-  `.claude/commands/codex-flow.md`. Every edit to one must be `cp`-copied to the other.
-  Gates: `scripts/check-command-sync.mjs` + `tests/flowDocs.test.ts`.
+- **Command mirror**: every `commands/<name>.md` (`codex-flow.md`, `brainstorm.md`) has a
+  **byte-identical** mirror at `.claude/commands/<name>.md`. Every edit to one must be `cp`-copied
+  to the other. Gates: `scripts/check-command-sync.mjs` (`SYNC_PAIRS`) + `tests/flowDocs.test.ts`.
 - **Skill files**: `skills/<name>/SKILL.md`. Frontmatter is exactly two unquoted fields:
   `name:` and a one-line `description:`. Body follows the existing skills — `# <Title>
   (embed into Codex prompts)`, then `## Standards block` with a fenced ``` block whose contents

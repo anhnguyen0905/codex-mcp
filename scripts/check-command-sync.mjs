@@ -1,6 +1,5 @@
-// Command sync gate: commands/codex-flow.md is the single source of truth for
-// the /codex-flow command; .claude/commands/codex-flow.md must be a byte-exact
-// copy. Exits 1 with a fix hint when any pair has drifted.
+// Command sync gate: commands/<name>.md is the single source of truth for each
+// slash command; .claude/commands/<name>.md must be a byte-exact copy. Exits 1 with a fix hint when any pair has drifted.
 //
 // Usage: node scripts/check-command-sync.mjs
 
@@ -11,7 +10,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 // [canonical source, mirror that must match it byte-for-byte]
-export const SYNC_PAIRS = [['commands/codex-flow.md', '.claude/commands/codex-flow.md']]
+export const SYNC_PAIRS = [
+  ['commands/codex-flow.md', '.claude/commands/codex-flow.md'],
+  ['commands/brainstorm.md', '.claude/commands/brainstorm.md'],
+]
 
 // Pure: byte-equality of two buffers.
 export const buffersEqual = (a, b) => Buffer.compare(a, b) === 0
