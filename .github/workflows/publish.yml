@@ -96,4 +96,18 @@ jobs:
       - name: smoke the published version
         shell: bash
         timeout-minutes: 10
-        run: node scripts/npm-smoke.mjs --version "${GITHUB_REF_NAME#v}"
+        # `npm view` resolving does not mean the tarball is fetchable yet: npx
+        # installs through a different registry path and can still ETARGET for a
+        # while (v0.27.0: verify passed, smoke 404'd one second later). Retry the
+        # smoke with the same backoff; a genuine boot failure fails every attempt.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in $(seq 1 10); do
+            if node scripts/npm-smoke.mjs --version "$version"; then
+              exit 0
+            fi
+            echo "smoke attempt $attempt/10 failed, retrying in 15s"
+            sleep 15
+          done
+          echo "::error::published @anhnguyen0905/codex-mcp@${version} never passed the smoke"
+          exit 1

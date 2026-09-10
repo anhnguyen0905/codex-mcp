@@ -229,6 +229,13 @@ export function runSmoke({ command, args = [], timeoutMs = DEFAULT_TIMEOUT_MS, c
       finish(new SmokeError(`server did not answer tools/list within ${timeoutMs}ms`, { stderr }))
     }, timeoutMs)
 
+    // A child that exits before we write closes the pipe; Node then emits EPIPE as an 'error'
+    // event on stdin in addition to the write callback. Without a listener that event is an
+    // unhandled error that crashes the whole test run, so route it into the verdict.
+    child.stdin.on('error', (error) => {
+      finish(new SmokeError(`failed to write to server stdin: ${error.message}`, { stderr }))
+    })
+
     const write = (payload) => {
       // The child can die between the readiness check and the write; surface it as a verdict.
       child.stdin.write(payload, (error) => {
