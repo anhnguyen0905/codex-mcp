@@ -118,9 +118,19 @@ Before loading anything new, list the skills already present in the session (per
   candidate's stated purpose. Remove a candidate only for one stated reason: **wrong domain**;
   **superseded by a higher-ranked skill covering the same facet**; or **fails the vet**. Never prune
   because it merely "looked less relevant".
-- Feed the pruned result directly into the existing verdict gate below. Resolve every facet to
-  exactly one of **`LOAD` / `VET` / `AUTHOR`**; do not invent another verdict. The prune feeds this
-  gate and does not replace or weaken it.
+
+### Jev-assisted relevance scoring (optional)
+
+- Claude checks every candidate for exclusion/scope (same categories as fast-path's check) first;
+  if clear and `getJevMode()`!=`off`, ONE batched `askJev` call scores every cleared candidate
+  (fan-out), 0-3, with `state`=reqs — never one call per candidate.
+- In shadow mode, log with `node scripts/jev-client.mjs log --point skill-relevance --jev
+  '<jevAnswer>' --claude '<claudeOrder>'`. Enforce (inert): Score 0, conf >0.8 → last.
+- Never bypasses reading the full `SKILL.md` for a name-only match, or the `LOAD`/`VET`/`AUTHOR`
+  gate; Claude owns the final verdict.
+
+- Feed the pruned result into the verdict gate. Resolve every facet to one of **`LOAD` / `VET` /
+  `AUTHOR`**.
 - Load **every remaining relevant skill that fits a context budget of ~3% of the window** (≈6000
   tokens of a 200k window), highest-relevance first — there is no fixed skill-count cap. Count each
   skill by the distilled block it will contribute (Step 6, ≤30 lines ≈ up to ~600 tokens), not its

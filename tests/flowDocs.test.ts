@@ -97,8 +97,8 @@ const COMMAND_MAX_BYTES = 44_000
 //   Phase 4: 23 253 (TS as the language skill) · Phase 5: 26 581
 // Largest = Phase 2 (42 129) rounded up to the next 4 000 → 44 000, under the 48 000 cap.
 const PHASE_SKILLS_MAX_BYTES = 44_000
-// Growth guard, not a diet target: measured command + the 20 flow skills = 153 021 bytes here.
-const FLOW_TOTAL_MAX_BYTES = 160_000
+// Growth guard, not a diet target: measured command + the 20 flow skills = 160 234 bytes here.
+const FLOW_TOTAL_MAX_BYTES = 162_000
 // C7 phase → skills map. The union of these lists is the "flow skills" set FLOW_TOTAL_MAX_BYTES
 // covers; Phase 4 counts exactly one exec-<lang> skill (TypeScript, this project's language).
 const PHASE_SKILL_MAP: ReadonlyArray<{ phase: string, skills: readonly string[] }> = [

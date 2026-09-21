@@ -42,6 +42,14 @@ behavior is defined in **markdown instruction files**, not runtime code.
   `pathToFileURL` direct-run guard — and MUST be added to `package.json` `files[]` to reach the
   plugin cache. Tests import its exports with `// @ts-expect-error — plain .mjs script`.
 
+- **Jev (TypeSafe.ai) decision helper**: `scripts/jev-client.mjs` wraps `POST
+  https://api.typesafe.ai/v1/systemone` for optional fast-classification assists (fast-path
+  routing, review-dual triage, skill-selection ranking). Reads `TYPESAFE_API_KEY` (never written
+  to disk or logged) and `CODEX_FLOW_JEV_MODE` (`off|shadow|enforce`, default `shadow` when a key
+  is set, else `off`). `off`/missing key is always a silent no-op — never a hard error. Shadow-mode
+  comparisons land in `.codex-flow/notes/jev-shadow.log` (already covered by the `**/.codex-flow/`
+  gitignore rule).
+
 ## Style
 
 - Instruction prose: English, imperative, concise. Match the section style of neighboring skills

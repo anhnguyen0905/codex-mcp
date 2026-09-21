@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Shadow-mode-first Jev/TypeSafe.ai integration** — `scripts/jev-client.mjs` provides the optional raw-fetch System One helper with non-throwing network/API failures and CLI support.
+- **`CODEX_FLOW_JEV_MODE`** — selects `off`, `shadow`, or `enforce`; defaults to `shadow` (log-only, no behavior change) when `TYPESAFE_API_KEY` is set, otherwise `off`.
+- **`skills/fast-path/SKILL.md`** — adds optional Jev-assisted lane routing after Claude’s exclusion check, with shadow-mode comparison logging.
+- **`skills/review-dual/SKILL.md`** — adds optional Jev finding triage, root-cause classification, and improvement prioritization, with security-sensitive check-first safeguards.
+- **`skills/skill-selection/SKILL.md`** — adds optional batched Jev relevance scoring without bypassing the LOAD/VET/AUTHOR verdict gate.
+
 ## [0.27.0] - 2026-09-10
 
 ### Added

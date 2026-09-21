@@ -83,6 +83,44 @@ Allocate `IMP-<n>` from one global counter across the whole run, never from per-
 When Claude and Codex suggest the same improvement, record ONE line with `source: both`.
 The ledger NEVER blocks marking a task done and NEVER spends an `mcp__codex__codex_continue` round.
 
+## Jev-assisted finding triage (optional)
+
+Default to shadow-only logging; Jev output must not change review behavior. For each task review,
+for each raw finding from Claude or Codex, before verification, first confirm from your own read
+whether any security-review-mandatory-trigger category—auth/session, user input, database queries,
+file paths, external API calls, crypto, payments, or secrets/env—is at stake. Only findings that
+pass this check are included; findings that fail it are skipped entirely and handled via normal
+Claude+Codex review—never build a batch from the full diff/context first and filter after. For each
+included finding `<n>`, add a Score question `severity_<n>` with the 0–3 severity rubric and Noul
+questions `is_duplicate_<n>` and `is_in_scope_<n>`. Claude may make one batched `askJev` call
+(fan-out), with `state` containing only included findings. Invoke it through
+`node scripts/jev-client.mjs ask --point review-triage --json '<json>'`;
+unavailable or disabled Jev is non-blocking.
+
+It never changes review-feedback.md's severity/3-round rule or the 3-round `codex_continue`
+escalation rule; Jev output is additive metadata only. In `shadow` mode, after Claude finishes
+its own verified severity/duplicate/in-scope call for each finding, log each comparison with:
+
+```text
+node scripts/jev-client.mjs log --point review-triage --jev '<jevAnswer>' --claude '<claudeVerdict>'
+```
+
+Behavior is unchanged. In `enforce` mode (defined for completeness, ships inert), annotate a
+finding as `pre-triaged` in the findings table only when its Jev severity Score has confidence
+greater than 0.85 and agrees with one reviewer's initial severity. CRITICAL/HIGH findings still
+go through the full 3-round verify+continue loop unchanged.
+
+## Jev-assisted root-cause classification (optional)
+
+Default to shadow-only logging; Claude remains responsible for the decision. When a finding needs
+implementation-bug-vs-plan-drift classification, first confirm from your own read whether any
+security-review-mandatory-trigger category—auth/session, user input, database queries, file paths,
+external API calls, crypto, payments, or secrets/env—is at stake for this finding. If one is at
+stake, skip Jev entirely and rely on normal Claude+Codex review. Only when none is at stake, call
+`askJev` with a Choice question `root_cause` whose choices are `implementation_bug`, `plan_drift`,
+and `ambiguous`, as an advisory input for the command's Phase 5 step 6 plan-drift transaction.
+Claude still makes the final call and still runs the existing plan-drift transaction unchanged.
+
 ## Improvement decision gate
 
 - Consider only unchecked ledger entries without an `(approved: T<n>)` marker as pending. If `.codex-flow/IMPROVEMENTS.md` is missing or has no unchecked pending entries, skip AskUserQuestion and note "no improvements" in the delivery summary.
@@ -91,3 +129,17 @@ The ledger NEVER blocks marking a task done and NEVER spends an `mcp__codex__cod
 - Run approved tasks through the normal Phase 4 → Phase 5 loop. Improvement tasks spawned by the gate do NOT re-trigger the decision gate themselves.
 - Have the orchestrator record declined items once using `plan-architecture`'s non-task event-block
   schema, then check off each ledger line with `(declined)`.
+
+### Jev-assisted improvement prioritization (optional)
+
+Default to shadow-only logging; Jev output only helps order the summary. For each pending
+`.codex-flow/IMPROVEMENTS.md` entry, Claude must first confirm from its own read that its
+description does not quote code in any security-review-mandatory-trigger category—auth/session,
+user input, database queries, file paths, external API calls, crypto, payments, or secrets/env. If
+such a category is at stake, skip the Jev call for that item entirely and use the normal
+Claude+Codex judgment; never call-then-filter. Only descriptions that pass this check may be sent
+in `state` for an optional Jev Score question (0–3, “worth a new task”), used only to order the
+summary presented through AskUserQuestion. The user still approves/declines each item manually,
+unchanged. Log shadow comparisons with `node scripts/jev-client.mjs log --point
+improvement-priority --jev '<jevAnswer>' --claude '<claudeVerdict>'`; no approval, task creation,
+or ledger status changes are automated.
