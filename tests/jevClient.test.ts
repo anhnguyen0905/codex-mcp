@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 // @ts-expect-error — plain .mjs script, not part of the tsc build
-import { askJev, getJevMode, logShadowDecision } from '../scripts/jev-client.mjs'
+import { askJev, getJevMode, loadDotEnv, logShadowDecision } from '../scripts/jev-client.mjs'
 
 const originalKey = process.env.TYPESAFE_API_KEY
 const originalMode = process.env.CODEX_FLOW_JEV_MODE
@@ -22,6 +22,48 @@ describe('getJevMode', () => {
   test('defaults to off without an API key and shadow with one', () => {
     expect(getJevMode({})).toBe('off')
     expect(getJevMode({ TYPESAFE_API_KEY: 'secret' })).toBe('shadow')
+  })
+
+  test('loads an API key from .env in the current working directory', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'jev-client-'))
+    const originalCwd = process.cwd()
+    delete process.env.TYPESAFE_API_KEY
+    await writeFile(path.join(tempDir, '.env'), 'TYPESAFE_API_KEY="from-dotenv"\n')
+    process.chdir(tempDir)
+    try {
+      loadDotEnv()
+      expect(getJevMode()).toBe('shadow')
+      expect(process.env.TYPESAFE_API_KEY).toBe('from-dotenv')
+    } finally {
+      process.chdir(originalCwd)
+    }
+  })
+
+  test('does not override an existing API key with .env', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'jev-client-'))
+    const originalCwd = process.cwd()
+    process.env.TYPESAFE_API_KEY = 'from-environment'
+    await writeFile(path.join(tempDir, '.env'), 'TYPESAFE_API_KEY=from-dotenv\n')
+    process.chdir(tempDir)
+    try {
+      loadDotEnv()
+      expect(process.env.TYPESAFE_API_KEY).toBe('from-environment')
+    } finally {
+      process.chdir(originalCwd)
+    }
+  })
+
+  test('silently ignores a missing .env file', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'jev-client-'))
+    const originalCwd = process.cwd()
+    delete process.env.TYPESAFE_API_KEY
+    process.chdir(tempDir)
+    try {
+      expect(() => loadDotEnv()).not.toThrow()
+      expect(getJevMode()).toBe('off')
+    } finally {
+      process.chdir(originalCwd)
+    }
   })
 })
 

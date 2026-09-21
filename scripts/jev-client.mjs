@@ -1,8 +1,8 @@
-// Calls TypeSafe Jev and records optional shadow-mode comparisons.
+// Calls TypeSafe Jev, loads fallback environment values from .env, and records optional shadow-mode comparisons.
 // Usage: node scripts/jev-client.mjs ask --point <name> --json '<JevAskParams JSON>'
 //        node scripts/jev-client.mjs log --point <name> --jev '<json>' --claude '<json>'
 
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -11,6 +11,29 @@ const LOG_PATH = path.join('.codex-flow', 'notes', 'jev-shadow.log')
 const RETRYABLE_STATUS = new Set([429, 529])
 
 /** @typedef {'off'|'shadow'|'enforce'} JevMode */
+
+/** Loads unset environment variables from a simple .env file without throwing. */
+export function loadDotEnv() {
+  try {
+    const content = readFileSync(path.join(process.cwd(), '.env'), 'utf8')
+    for (const line of content.split(/\r?\n/)) {
+      if (!line.trim() || line.trimStart().startsWith('#')) continue
+      const separator = line.indexOf('=')
+      if (separator < 0) continue
+      const key = line.slice(0, separator).trim()
+      if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || process.env[key] !== undefined) continue
+      let value = line.slice(separator + 1).trim()
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1)
+      }
+      process.env[key] = value
+    }
+  } catch {
+    // .env loading is optional and must never prevent the client from running.
+  }
+}
+
+loadDotEnv()
 
 /** @param {NodeJS.ProcessEnv} [env] @returns {JevMode} */
 export function getJevMode(env = process.env) {
