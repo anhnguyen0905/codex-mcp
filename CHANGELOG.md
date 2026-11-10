@@ -3,6 +3,32 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.29.0] - 2026-11-11
+
+### Changed
+
+- **Approval gates are enforced by `scripts/flow-state.mjs`, not by prose.** `init` creates `.codex-flow/STATE.md`; `approve <requirements|plan|backlog>`, `advance`, `requirement-delta`, `plan-drift`, `improvement-gate` and `resume` are the only commands that change `phase` and the three approvals, each from its legal source phase and only when its guard holds; no single command can skip a phase. **`flow-state set` now rejects `phase`, `requirementsApproved`, `planApproved` and `backlogApproved`**, a non-idle `taskStage` is accepted only in `phase: execution`, `check` reports a phase that is ahead of its approvals, and an approval requires its artifact (REQUIREMENTS.md / PLAN.md / TASKS.md) to be a regular file. A rejected command exits 1, names the failed guard and writes nothing.
+- **`commands/codex-flow.md` and the flow skills use those commands**, state the helper fail-closed rule once, route a connect timeout through `doctor --probe-launcher` and `/mcp` before offering the Executor fallback, use one session-cost invocation (task and review session ids via `--session`; `--cwd` only when no session id exists), and no longer contain shell-specific `mkdir`/`cp`/`$PWD` constructs. Each flow skill lists its helpers as required or optional; an inventory test enforces it.
+- **`scripts/context-slice.mjs` fails closed on an operational git failure** inside a repository (non-zero exit, no slice written). An anchor commit that no longer exists is still a data condition: the slice is written and the affected blocks are stamped `[verify]`.
+- **`scripts/doctor.mjs` reports what it verified.** It probes MCP server startup, warns about cloud-placeholder (dataless) files and slow starts, blocks only on a failed handshake, gives a different hint for a timeout than for a launcher that exits immediately, and prints "All good" only after `--probe-launcher` verified the launcher configured in `.mcp.json`.
+- **`scripts/scope-check.mjs` ignores mode-only changes** (permission noise from cloud-synced folders); additions, deletions, type changes and content changes are always reported.
+
+### Added
+
+- **`scripts/startup-probe.mjs`** — startup handshake probe with timing, dataless-file scan, failure reasons and platform-aware `npx`/`npm` launcher resolution; shipped in `package.json` `files[]` together with `scripts/npm-smoke.mjs`.
+- **`scripts/worktree-setup.mjs`** — fail-closed, byte-verified copy of the control files into a parallel worktree; replaces the bash block in `skills/parallel-execution`.
+- Preflight guidance for mode-only dirty trees, MCP connect timeouts and a worktree canary before the first parallel wave.
+
+### Fixed
+
+- Instruction contradictions between the command and the skills (step references, round discipline, MEDIUM/LOW routing, the completion transition after improvement tasks).
+- Tests no longer depend on an inherited `CODEX_MCP_TERMINAL`, write to the real `.codex-flow/notes/jev-shadow.log`, or pass a real `TYPESAFE_API_KEY` to child processes.
+
+### Known limitations
+
+- The helper records an approval event; it cannot prove a human gave the approval. Typed multi-file transactions, a cross-document rule registry and a fresh-run harness are planned next.
+- Inside this package's own repository, `npx -y @anhnguyen0905/codex-mcp@<version>` resolves the local package and exits 127; register `node dist/index.js` there instead.
+
 ## [0.28.0] - 2026-09-21
 
 ### Added
