@@ -5,6 +5,8 @@ description: Backlog decomposition for the Planning phase — slicing rules, dep
 
 # Backlog Breakdown
 
+**Helpers**: required — task-waves.mjs, requirements-coverage.mjs (helper rule: missing → STOP and tell the user to reinstall the codex-flow plugin; non-zero exit → surface the error and STOP).
+
 Decompose the approved plan into `.codex-flow/TASKS.md`. Each task is one Codex run and one review cycle.
 
 ## Task format

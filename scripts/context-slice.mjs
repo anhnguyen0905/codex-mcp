@@ -64,6 +64,14 @@ const TEST_FILE_REFERENCE = /(?:^|[\s`'"(])(?:\.{0,2}\/)?[A-Za-z0-9_. -]+(?:\/[A
 const KNOWN_RED_NOISE = /^(?:at\s|error\b|caused by\b|expected\b|received\b|stdout\b|stderr\b|console\b|\^+\s*$)/i
 const KNOWN_RED_MARKER = /^(?:[-*]\s*)?(?:fail(?:ed)?\b|[×✗✕●❯])|\btest\b.*\b(?:fail|error|broken)\b/i
 
+/** Identify a failed git probe inside a repository. */
+export class GitProbeError extends Error {
+  constructor(args) {
+    super(`git ${args.join(' ')} failed`)
+    this.name = 'GitProbeError'
+  }
+}
+
 /** Estimate token usage with the repository's four-characters-per-token heuristic. */
 export function tokensOf(text) {
   if (typeof text !== 'string') throw new TypeError('text must be a string')
@@ -300,9 +308,41 @@ export function stalenessOf(block, { headSha, changedFiles, dirtyFiles }) {
   return hasChangedReference ? 'verify' : 'fresh'
 }
 
-/** Create a non-throwing git seam rooted at cwd. */
+/** Create a git seam rooted at cwd with repository-aware failures. */
 export function defaultGit(cwd = process.cwd()) {
   if (typeof cwd !== 'string' || !cwd.trim()) throw new TypeError('cwd must be a non-empty string')
+
+  let insideWorkTree = false
+  try {
+    const output = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    insideWorkTree = output.trim() === 'true'
+  } catch {
+    insideWorkTree = false
+  }
+
+  const probeError = (args) => {
+    if (insideWorkTree) throw new GitProbeError(args)
+  }
+
+  const commitExists = (sha) => {
+    const args = ['cat-file', '-e', `${sha}^{commit}`]
+    try {
+      execFileSync('git', args, { cwd, stdio: ['ignore', 'ignore', 'pipe'] })
+      return true
+    } catch (error) {
+      const status = error instanceof Error && 'status' in error ? error.status : null
+      const stderr = error instanceof Error && 'stderr' in error && Buffer.isBuffer(error.stderr)
+        ? error.stderr.toString('utf8')
+        : ''
+      if (status === 1 || /not a valid object name|could not get object info/i.test(stderr)) return false
+      probeError(args)
+      return false
+    }
+  }
 
   const gitLines = (args, failureValue = []) => {
     try {
@@ -313,6 +353,7 @@ export function defaultGit(cwd = process.cwd()) {
       })
       return output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
     } catch {
+      probeError(args)
       return failureValue
     }
   }
@@ -327,6 +368,7 @@ export function defaultGit(cwd = process.cwd()) {
       const paths = output.split('\0')
       return paths.at(-1) === '' ? paths.slice(0, -1) : paths
     } catch {
+      probeError(args)
       return null
     }
   }
@@ -335,6 +377,7 @@ export function defaultGit(cwd = process.cwd()) {
     headSha: () => gitLines(['rev-parse', 'HEAD'], null)?.[0] ?? null,
     isAncestor: (sha) => {
       if (typeof sha !== 'string' || !GIT_OBJECT_NAME.test(sha)) return null
+      if (!commitExists(sha)) return null
       try {
         execFileSync('git', ['merge-base', '--is-ancestor', sha, 'HEAD'], {
           cwd,
@@ -343,12 +386,15 @@ export function defaultGit(cwd = process.cwd()) {
         return true
       } catch (error) {
         if (error instanceof Error && 'status' in error && error.status === 1) return false
+        probeError(['merge-base', '--is-ancestor', sha, 'HEAD'])
         return null
       }
     },
-    changedFilesSince: (sha) => typeof sha === 'string' && GIT_OBJECT_NAME.test(sha)
-      ? gitPaths(['diff', '--name-only', '-z', `${sha}..HEAD`])
-      : null,
+    changedFilesSince: (sha) => {
+      if (typeof sha !== 'string' || !GIT_OBJECT_NAME.test(sha)) return null
+      if (!commitExists(sha)) return null
+      return gitPaths(['diff', '--name-only', '-z', `${sha}..HEAD`])
+    },
     dirtyFiles: () => {
       const probes = [
         gitPaths(['diff', '--name-only', '-z']),
@@ -1133,7 +1179,7 @@ async function readProjectContext(projectContextPath) {
 }
 
 /** Execute the context-slice CLI and return the written absolute path. */
-export async function main(args = process.argv.slice(2), { cwd = process.cwd() } = {}) {
+export async function main(args = process.argv.slice(2), { cwd = process.cwd(), git } = {}) {
   if (typeof cwd !== 'string' || !cwd.trim()) throw new TypeError('cwd must be a non-empty string')
   const config = parseCliArgs(args)
   const planPath = path.resolve(cwd, config.plan)
@@ -1152,10 +1198,10 @@ export async function main(args = process.argv.slice(2), { cwd = process.cwd() }
   const projectContextText = config.resume
     ? null
     : await readProjectContext(path.resolve(cwd, DEFAULT_PROJECT_FILE))
-  const git = defaultGit(cwd)
+  const gitSeam = git ?? defaultGit(cwd)
   const slice = config.resume
-    ? sliceForResume(planText, tasksText, { git })
-    : sliceForTask(planText, tasksText, config.taskId, { git, requirementsText, projectContextText })
+    ? sliceForResume(planText, tasksText, { git: gitSeam })
+    : sliceForTask(planText, tasksText, config.taskId, { git: gitSeam, requirementsText, projectContextText })
   await fs.mkdir(outputDirectory, { recursive: true })
   await assertNotSymlink(outputDirectory, 'output directory')
   await assertNotSymlink(outputPath, 'output file')
@@ -1171,7 +1217,8 @@ if (isDirectRun) {
     .then((outputPath) => console.log(outputPath))
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error)
-      console.error(`context-slice: ${message.replace(/\s+/g, ' ')}`)
+      const prefix = error instanceof GitProbeError ? 'context-slice: git probe failed' : 'context-slice'
+      console.error(`${prefix}: ${message.replace(/\s+/g, ' ')}`)
       process.exitCode = 1
     })
 }

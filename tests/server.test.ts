@@ -286,6 +286,23 @@ describe('codex-mcp server', () => {
     expect(factory).not.toHaveBeenCalled()
   })
 
+  test('opens a live view from the terminal environment default', async () => {
+    vi.stubEnv('CODEX_MCP_TERMINAL', '1')
+    try {
+      const factory = vi.fn(() => ({ onStdout: vi.fn(), close: vi.fn(), logPath: '/repo/live.jsonl' }))
+      const server = createServer({ runFn: runFn as never, liveViewFactory: factory as never })
+      const client = new Client({ name: 'test-client', version: '0.0.1' })
+      const [ct, st] = InMemoryTransport.createLinkedPair()
+      await Promise.all([server.connect(st), client.connect(ct)])
+
+      await client.callTool({ name: 'codex_execute', arguments: { prompt: 'go', cwd: '/repo' } })
+
+      expect(factory).toHaveBeenCalledWith('/repo')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   test('delivers the prompt over stdin with a `-` argv marker (execute)', async () => {
     const client = await connect(runFn)
 

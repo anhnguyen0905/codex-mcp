@@ -1,14 +1,35 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // @ts-expect-error — plain .mjs script, not part of the tsc build
 import { askJev, getJevMode, loadDotEnv, logShadowDecision } from '../scripts/jev-client.mjs'
 
 const originalKey = process.env.TYPESAFE_API_KEY
 const originalMode = process.env.CODEX_FLOW_JEV_MODE
+const jevClientPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../scripts/jev-client.mjs')
+
+async function runCliInTempDir(
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv },
+  check: (tempDir: string, output: string) => void | Promise<void>,
+) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'jev-client-cli-'))
+  try {
+    const { TYPESAFE_API_KEY: _ignoredKey, ...inheritedEnv } = process.env
+    const output = execFileSync(process.execPath, [jevClientPath, ...args], {
+      encoding: 'utf8',
+      cwd: tempDir,
+      env: { ...inheritedEnv, CODEX_FLOW_JEV_MODE: 'off', ...options.env },
+    })
+    await check(tempDir, output)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
 
 afterEach(() => {
   if (originalKey === undefined) delete process.env.TYPESAFE_API_KEY
@@ -153,36 +174,33 @@ describe('askJev', () => {
     expect(result).toEqual({ available: false, mode: 'shadow', reason: 'network-error', detail: 'connection failed' })
   })
 
-  test('labels malformed CLI JSON as a client error', () => {
-    const output = execFileSync(process.execPath, ['scripts/jev-client.mjs', 'ask', '--point', 'test', '--json', '{'], { encoding: 'utf8' })
-
-    expect(JSON.parse(output)).toMatchObject({ available: false, reason: 'client-error' })
+  test('labels malformed CLI JSON as a client error', async () => {
+    await runCliInTempDir(['ask', '--point', 'test', '--json', '{'], {}, (_tempDir, output) => {
+      expect(JSON.parse(output)).toMatchObject({ available: false, reason: 'client-error' })
+    })
   })
 
-  test('returns a client error when the ask point is missing', () => {
-    const output = execFileSync(process.execPath, ['scripts/jev-client.mjs', 'ask', '--json', '{}'], { encoding: 'utf8' })
-
-    expect(JSON.parse(output)).toMatchObject({ available: false, reason: 'client-error' })
+  test('returns a client error when the ask point is missing', async () => {
+    await runCliInTempDir(['ask', '--json', '{}'], {}, (_tempDir, output) => {
+      expect(JSON.parse(output)).toMatchObject({ available: false, reason: 'client-error' })
+    })
   })
 
-  test('does not write the API key in client-error output', () => {
+  test('does not write the API key in client-error output', async () => {
     const key = 'jev-test-key-that-must-not-leak'
-    const output = execFileSync(process.execPath, ['scripts/jev-client.mjs', 'ask', '--point', 'test', '--json', '{'], {
-      encoding: 'utf8',
-      env: { ...process.env, TYPESAFE_API_KEY: key },
+    await runCliInTempDir(['ask', '--point', 'test', '--json', '{'], { env: { ...process.env, TYPESAFE_API_KEY: key } }, (_tempDir, output) => {
+      expect(output).not.toContain(key)
     })
-
-    expect(output).not.toContain(key)
   })
 
-  test('does not write the API key in log CLI output', () => {
+  test('does not write the API key in log CLI output', async () => {
     const key = 'jev-log-test-key-that-must-not-leak'
-    const output = execFileSync(process.execPath, ['scripts/jev-client.mjs', 'log', '--point', 'test', '--jev', '{}', '--claude', '{}'], {
-      encoding: 'utf8',
-      env: { ...process.env, TYPESAFE_API_KEY: key },
+    await runCliInTempDir(['log', '--point', 'test', '--jev', '{}', '--claude', '{}'], { env: { TYPESAFE_API_KEY: key, CODEX_FLOW_JEV_MODE: 'shadow' } }, async (tempDir, output) => {
+      expect(output).not.toContain(key)
+      const lines = (await readFile(path.join(tempDir, '.codex-flow/notes/jev-shadow.log'), 'utf8')).trim().split('\n')
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0])).toMatchObject({ point: 'test', jevAnswer: {}, claudeDecision: {} })
     })
-
-    expect(output).not.toContain(key)
   })
 })
 

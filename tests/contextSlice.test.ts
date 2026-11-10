@@ -16,11 +16,13 @@ import {
   RESUME_TOKEN_BUDGET,
   TASK_SLICE_TOKEN_BUDGET,
   defaultGit,
+  GitProbeError,
   filterBlocksForTask,
   parsePlan,
   parseTasks,
   sliceForResume,
   sliceForTask,
+  main,
   stalenessOf,
   taskRawOf,
   tokensOf,
@@ -1532,6 +1534,40 @@ describe('defaultGit', () => {
     expect(isAncestor).toBeNull()
     expect(existsSync(targetPath)).toBe(false)
   })
+
+  test.skipIf(!GIT_AVAILABLE)('falls back for an unknown commit anchor', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-git-failure-'))
+    tempDirectories.push(directory)
+    initializeGitRepository(directory)
+    writeFileSync(join(directory, 'tracked.txt'), 'tracked\n')
+    runGit(directory, ['add', 'tracked.txt'])
+    runGit(directory, ['commit', '--quiet', '-m', 'initial'])
+    const git = defaultGit(directory)
+
+    expect(git.isAncestor('deadbeef')).toBeNull()
+    expect(git.changedFilesSince('deadbeef')).toBeNull()
+
+    const result = sliceForTask(
+      PLAN.replace('- Anchor: abc123', '- Anchor: deadbeef'),
+      ['## T1: Unknown anchor', '- Files: scripts/context-slice.mjs', '- Status: pending', ''].join('\n'),
+      'T1',
+      { git },
+    )
+    expect(result.markdown).toContain('### [verify] T1 — Add the parser')
+  })
+
+  test.skipIf(!GIT_AVAILABLE)('throws GitProbeError for a corrupt index', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-git-corrupt-index-'))
+    tempDirectories.push(directory)
+    initializeGitRepository(directory)
+    writeFileSync(join(directory, 'tracked.txt'), 'tracked\n')
+    runGit(directory, ['add', 'tracked.txt'])
+    runGit(directory, ['commit', '--quiet', '-m', 'initial'])
+    writeFileSync(join(directory, '.git', 'index'), 'corrupt index')
+    const git = defaultGit(directory)
+
+    expect(() => git.dirtyFiles()).toThrow(GitProbeError)
+  })
 })
 
 describe.skipIf(!GIT_AVAILABLE)('defaultGit filename parsing', () => {
@@ -1600,6 +1636,64 @@ describe.skipIf(!GIT_AVAILABLE)('defaultGit filename parsing', () => {
 })
 
 describe('context-slice CLI', () => {
+  test('fails closed for an injected GitProbeError before writing output', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-injected-git-failure-'))
+    tempDirectories.push(directory)
+    const planPath = join(directory, 'PLAN.md')
+    const tasksPath = join(directory, 'TASKS.md')
+    const requirementsPath = join(directory, 'REQUIREMENTS.md')
+    const outputDirectory = join(directory, 'derived')
+    const outputPath = join(outputDirectory, 'CONTEXT-T1.md')
+    mkdirSync(outputDirectory)
+    writeFileSync(planPath, PLAN)
+    writeFileSync(tasksPath, `## T1: Git failure
+- Files: scripts/context-slice.mjs
+- Status: pending
+`)
+    writeFileSync(outputPath, 'previous slice\n')
+    const git = {
+      headSha: () => { throw new GitProbeError(['rev-parse', 'HEAD']) },
+      isAncestor: () => false,
+      changedFilesSince: () => null,
+      dirtyFiles: () => [],
+    }
+
+    await expect(main([
+      '--task', 'T1', '--plan', planPath, '--tasks', tasksPath, '--out', outputDirectory,
+    ], { cwd: directory, git })).rejects.toThrow(GitProbeError)
+    expect(readFileSync(outputPath, 'utf8')).toBe('previous slice\n')
+  })
+
+  test.skipIf(!GIT_AVAILABLE)('fails closed through the direct-run CLI on a corrupt index', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-cli-git-failure-'))
+    tempDirectories.push(directory)
+    initializeGitRepository(directory)
+    writeFileSync(join(directory, 'tracked.txt'), 'tracked\n')
+    runGit(directory, ['add', 'tracked.txt'])
+    runGit(directory, ['commit', '--quiet', '-m', 'initial'])
+    writeFileSync(join(directory, '.git', 'index'), 'corrupt index')
+    const planPath = join(directory, 'PLAN.md')
+    const tasksPath = join(directory, 'TASKS.md')
+    const requirementsPath = join(directory, 'REQUIREMENTS.md')
+    const outputDirectory = join(directory, 'derived')
+    const outputPath = join(outputDirectory, 'CONTEXT-T1.md')
+    mkdirSync(outputDirectory)
+    writeFileSync(planPath, PLAN)
+    writeFileSync(tasksPath, ['## T1: Git failure', '- Files: scripts/context-slice.mjs', '- Status: pending', ''].join('\n'))
+    writeFileSync(requirementsPath, '# Requirements\n')
+    writeFileSync(outputPath, 'previous slice\n')
+
+    const result = spawnSync(process.execPath, [
+      CONTEXT_SLICE_SCRIPT, '--task', 'T1', '--plan', planPath, '--tasks', tasksPath,
+      '--requirements', requirementsPath, '--out', outputDirectory,
+    ], { cwd: directory, encoding: 'utf8' })
+
+    expect(result.status).not.toBe(0)
+    expect(result.stderr.trim()).toMatch(/^context-slice: git probe failed: .+$/)
+    expect(result.stderr.trim().split('\n')).toHaveLength(1)
+    expect(readFileSync(outputPath, 'utf8')).toBe('previous slice\n')
+  })
+
   test('continues without a requirements block and warns when the requirements file is absent', () => {
     // Arrange
     const directory = mkdtempSync(join(tmpdir(), 'context-slice-no-requirements-'))

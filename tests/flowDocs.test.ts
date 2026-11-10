@@ -432,6 +432,125 @@ describe('skill frontmatter contracts', () => {
   )
 })
 
+describe('T7 helper call-site inventory', () => {
+  const flowSkillNames = [...new Set(PHASE_SKILL_MAP.flatMap(({ skills }) => skills))]
+  const scope = [COMMAND_PATH, ...flowSkillNames.map((name) => path.join(SKILLS_DIR, name, 'SKILL.md'))]
+
+  test('classifies every helper occurrence with one strict Helpers line', () => {
+    for (const filePath of scope) {
+      const text = readText(filePath)
+      if (filePath === COMMAND_PATH) {
+        expect(text).toContain('**Helper rule**')
+        continue
+      }
+      const occurrences = new Set(
+        [...text.matchAll(/scripts\/([a-z0-9-]+\.mjs)/g)].map((match) => match[1]),
+      )
+      if (occurrences.size === 0) continue
+      const helperLines = text.split('\n').filter((line) => line.startsWith('**Helpers**:'))
+      const helpersLine = helperLines[0]
+      expect(helperLines).toHaveLength(1)
+      expect(helpersLine).toBeDefined()
+      const listed = new Set(
+        [...helpersLine.matchAll(/(?:required|optional) — ([^;(]+)/g)]
+          .flatMap((match) => match[1].split(',').map((name) => name.trim()))
+          .filter((name) => name.endsWith('.mjs')),
+      )
+      expect([...occurrences].filter((name) => !listed.has(name))).toEqual([])
+      expect([...listed].filter((name) => !occurrences.has(name))).toEqual([])
+      if (helpersLine.includes('required —') && !helpersLine.includes('required — none')) {
+        expect(helpersLine).toContain('helper rule')
+      }
+    }
+  })
+
+  test('guards T7 kernel migrations and prohibited shell/state writes', () => {
+    const preflight = readText(PREFLIGHT_PATH)
+    const parallel = readText(PARALLEL_EXECUTION_PATH)
+    const interview = readText(INTERVIEW_ELICITATION_PATH)
+    const report = readText(SESSION_REPORT_PATH)
+    expect(preflight).toContain('flow-state.mjs" init --baseline')
+    expect(preflight).toContain('resume --head')
+    expect(preflight).toContain('doctor.mjs --probe-launcher')
+    expect(parallel).toContain('worktree-setup.mjs" --worktree')
+    expect(parallel).toMatch(/do NOT dispatch/i)
+    expect(parallel).not.toContain('mkdir -p')
+    expect(parallel).not.toContain('cp .codex-flow')
+    expect(parallel).not.toContain('[ -f')
+    expect(interview).toContain('flow-state.mjs" requirement-delta')
+    expect(report).toContain('Codex review session:')
+    expect(report).toContain('review session ids from reviews.md')
+    for (const filePath of scope.slice(1)) {
+      const text = readText(filePath).replace(/```[\s\S]*?```/g, '')
+      expect(text).not.toContain('set phase')
+      expect(text).not.toContain('set `phase`')
+      expect(text).not.toContain('restore `backlogApproved`')
+    }
+  })
+})
+
+describe('T5 environment guidance and contradiction guards', () => {
+  test('preflight distinguishes connect failures and mode-only noise', () => {
+    const skill = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
+
+    expect(skill).toContain('a connect timeout or closed connection is not "server missing"')
+    expect(skill).toContain('run `node scripts/doctor.mjs --probe-launcher`')
+    expect(skill).toContain('reconnect with `/mcp`, re-check health, and only then offer the Executor fallback')
+    expect(skill).toContain('git -c core.fileMode=false status --porcelain` is empty')
+    expect(skill).toContain('mode-only noise')
+    expect(skill).toContain('offer `git config core.fileMode false` instead of commit/stash')
+    expect(skill).not.toContain('equal blob ids')
+  })
+
+  test('parallel execution performs the worktree canary before wave 1', () => {
+    const skill = readText(PARALLEL_EXECUTION_PATH).replace(/\s+/g, ' ')
+
+    expect(skill).toContain('Before wave 1, run `git worktree add --detach <tmp> HEAD`, then `git worktree remove --force <tmp>`')
+    expect(skill).toContain('set `executionMode` to `sequential (worktrees unavailable: <error>)`')
+    expect(skill).toContain('flow-state.mjs" set executionMode')
+    expect(skill).toContain('never discover this mid-wave')
+    expect(skill).toContain('worktree canary fails')
+  })
+
+  test('fallback reruns task checks each round and the suite only in whole-feature review', () => {
+    const skill = readText(EXECUTOR_FALLBACK_PATH).replace(/\s+/g, ' ')
+
+    expect(skill).toContain("re-run the task's acceptance checks after every round")
+    expect(skill).toContain('the full suite runs once in the whole-feature review')
+    expect(skill).not.toContain('re-run the acceptance checks and the suite after every round')
+  })
+
+  test('review feedback defines severity routing and durable clean handoff', () => {
+    const skill = readText(path.join(REPO_ROOT, 'skills', 'review-feedback', 'SKILL.md')).replace(/\s+/g, ' ')
+
+    expect(skill).toContain('MEDIUM/LOW piggyback only on a round already being sent for CRITICAL/HIGH')
+    expect(skill).toContain('otherwise record them in `.codex-flow/IMPROVEMENTS.md`')
+    expect(skill).toContain('proceed to the Phase 5 step 7 durable handoff, where `done` is the last write')
+    expect(skill).not.toContain('MEDIUM/LOW piggyback only.')
+    expect(skill).not.toContain('Clean review → mark the task done')
+  })
+
+  test('dual review repeats the MEDIUM/LOW piggyback clarification', () => {
+    const skill = readText(REVIEW_DUAL_PATH).replace(/\s+/g, ' ')
+
+    expect(skill).toContain('MEDIUM/LOW piggyback only on a round already being sent for CRITICAL/HIGH')
+    expect(skill).toContain('otherwise record them in `.codex-flow/IMPROVEMENTS.md`')
+    expect(skill).not.toContain('CRITICAL/HIGH always; MEDIUM/LOW piggyback only).')
+  })
+
+  test('command-side T1 step references remain corrected', () => {
+    const command = readText(COMMAND_PATH)
+    const phase0 = extractPhaseSection(command, 0).replace(/\s+/g, ' ')
+    const phase5 = extractPhaseSection(command, 5).replace(/\s+/g, ' ')
+
+    expect(phase0).toContain('create STATE.md with')
+    expect(phase0).not.toContain('`codex-flow:preflight` Step 4')
+    expect(phase5).not.toContain('collect its result in step 5')
+    expect(phase5).not.toContain('directly at step 5')
+    expect(phase5).toContain('collect its result in step 4')
+  })
+})
+
 describe('exec-self-testing targeted-testing rules', () => {
   test('keeps every targeted-testing safeguard in execution prompts', () => {
     // Arrange
@@ -684,8 +803,9 @@ describe('interview requirements protocol', () => {
   test('invalidates downstream approvals and requires replanning after a confirmed delta', () => {
     const skill = readText(INTERVIEW_ELICITATION_PATH).replace(/\s+/g, ' ')
 
-    expect(skill).toContain('refreshes `requirementsApproved` in `.codex-flow/STATE.md` to `yes (delta <ISO date>)`')
-    expect(skill).toContain('reset `planApproved` and `backlogApproved` to `no (delta <ISO date>)`')
+    expect(skill).toContain('requirement-delta`, which sets `requirementsApproved` to `yes (delta <date>)`')
+    expect(skill).toContain('resets `planApproved` and `backlogApproved` to `no (delta <date>)`')
+    expect(skill).toContain('returns `phase` to `plan`')
     expect(skill).toContain('re-run Phase 2 impact analysis')
     expect(skill).toContain('obtain backlog re-approval')
     expect(skill).toContain('requirements-coverage.mjs')
@@ -781,24 +901,20 @@ describe('parallel-execution worktree branch points', () => {
 
     expect(skill).toContain('context-slice.mjs" --task T<n>')
     expect(skill).toContain('.codex-flow/CONTEXT-T<n>.md')
-    expect(skill).toContain('cp .codex-flow/SKILLS-T<n>.md "<worktree>/.codex-flow/"')
+    expect(skill).toContain('worktree-setup.mjs" --worktree <worktree> --task T<n>')
   })
 
   test('generates the task slice before copying all control files into the worktree', () => {
     const skill = readText(PARALLEL_EXECUTION_PATH)
     const sliceCommand = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --task T<n>'
 
-    const copyBlock = extractFencedCodeBlockContaining(skill, 'bash', 'cp ')
-    const copyCommand = copyBlock.split(/\r?\n/).find((line) => line.trimStart().startsWith('cp '))
-    const copiedControlFiles = copyCommand?.match(/\.codex-flow\/(?:PLAN\.md|TASKS\.md|CONTEXT-T<n>\.md)/g) ?? []
+    const copyBlock = extractFencedCodeBlockContaining(skill, 'bash', 'worktree-setup.mjs')
+    const setupCommand = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/worktree-setup.mjs" --worktree <worktree> --task T<n>'
 
     expect(copyBlock.indexOf(sliceCommand)).toBeGreaterThanOrEqual(0)
-    expect(copyBlock.indexOf(sliceCommand)).toBeLessThan(copyBlock.indexOf(copyCommand ?? ''))
-    expect(copiedControlFiles).toEqual([
-      '.codex-flow/PLAN.md',
-      '.codex-flow/TASKS.md',
-      '.codex-flow/CONTEXT-T<n>.md',
-    ])
+    expect(copyBlock.indexOf(sliceCommand)).toBeLessThan(copyBlock.indexOf(setupCommand))
+    expect(skill).toContain('PLAN.md and TASKS.md')
+    expect(skill).toContain('CONTEXT-T<n>.md')
   })
 
   test('stops on helper failure and splits mandatory-over-budget tasks before copying', () => {
@@ -806,15 +922,12 @@ describe('parallel-execution worktree branch points', () => {
     const skill = readText(PARALLEL_EXECUTION_PATH).replace(/\s+/g, ' ')
 
     // Act
-    const helperFailureRule = skill.includes(
-      'If the helper is present but exits non-zero, surface the error to the user and STOP; never silently copy a stale slice.',
-    )
     const oversizedTaskRule = skill.includes(
       'If generation reports `mandatory slice content exceeds tokenBudget`, split the oversized task in the backlog and recompute the waves before continuing; never raise the slice budget.',
     )
 
     // Assert
-    expect(helperFailureRule).toBe(true)
+    expect(skill).toContain('If either command exits non-zero, surface the error and do NOT dispatch the subagent.')
     expect(oversizedTaskRule).toBe(true)
   })
 
@@ -862,17 +975,16 @@ describe('parallel-execution worktree branch points', () => {
     expect(skill).toContain(
       'Any expansion — a changed file outside that declaration, excluding generated lockfiles explicitly listed as shared — stops the wave.',
     )
-    const invalidationIndex = skill.indexOf('`backlogApproved: no (files expansion <ISO date>)`')
+    const invalidationIndex = skill.indexOf('flow-state.mjs" plan-drift')
     const filesUpdateIndex = skill.indexOf("update the task's `Files:` in TASKS.md")
-    const restorationIndex = skill.indexOf('restore `backlogApproved: yes (<ISO 8601 timestamp>)`')
+    const restorationIndex = skill.indexOf('approve backlog')
     const expandedReviewIndex = skill.indexOf("RE-RUN the task's conformance → quality → security review over the EXPANDED `Files:` scope")
 
     expect(invalidationIndex).toBeGreaterThanOrEqual(0)
     expect(invalidationIndex).toBeLessThan(filesUpdateIndex)
     expect(restorationIndex).toBeGreaterThan(filesUpdateIndex)
     expect(expandedReviewIndex).toBeGreaterThan(restorationIndex)
-    expect(skill).toContain('`phase: backlog` in STATE.md')
-    expect(skill).toContain('return `phase` to `execution`')
+    expect(skill).toContain('advance` to restore execution')
     expect(skill).toContain('using a fresh `codex_review` or a Claude pass, before the branch may merge')
     expect(skill).toContain(
       'The security review is mandatory when the expansion touches auth, input, queries, files, or secrets.',
@@ -1105,7 +1217,6 @@ describe('codex-flow command structure', () => {
     expect(normalizedPhase).toContain(
       'when either file is missing, read only the control files that exist',
     )
-    expect(phaseSection).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
     expect(phaseSection).toContain('if `.codex-flow/STATE.md` exists')
     expect(normalizedPhase).toContain('even when PLAN.md or TASKS.md has not been created yet')
     expect(phaseSection).toContain('skip only phases whose approvals STATE.md records')
@@ -1133,16 +1244,14 @@ describe('codex-flow command structure', () => {
   })
 
   test.each([
-    [1, 'requirementsApproved', 'plan'],
-    [2, 'planApproved', 'backlog'],
-    [3, 'backlogApproved', 'execution'],
-  ])('records Phase %i approval and advances run state', (phaseNumber, approvalKey, nextPhase) => {
+    [1, 'approve requirements', 'advance'],
+    [2, 'approve plan --at <grant time>', 'advance'],
+    [3, 'approve backlog', 'advance'],
+  ])('records Phase %i approval and advances run state', (phaseNumber, approvalCommand, advanceCommand) => {
     const phaseSection = extractPhaseSection(readText(COMMAND_PATH), phaseNumber)
 
-    expect(phaseSection).toContain('`.codex-flow/STATE.md`')
-    expect(phaseSection).toContain(`\`${approvalKey}\``)
-    expect(phaseSection).toContain('`yes (<ISO 8601 timestamp>)`')
-    expect(phaseSection).toContain(`\`phase\` to \`${nextPhase}\``)
+    expect(phaseSection).toContain(approvalCommand)
+    expect(phaseSection).toContain(advanceCommand)
   })
 
   test('requires Phase 2 acceptance criteria to cite covered requirement IDs', () => {
@@ -1168,8 +1277,8 @@ describe('codex-flow command structure', () => {
   test('resets downstream approvals when a requirement delta is confirmed', () => {
     const phaseSection = extractPhaseSection(readText(COMMAND_PATH), 1).replace(/\s+/g, ' ')
 
-    expect(phaseSection).toContain('refresh `requirementsApproved` to `yes (delta <ISO date>)`')
-    expect(phaseSection).toContain('reset `planApproved` and `backlogApproved` to `no (delta <ISO date>)`')
+    expect(phaseSection).toContain('run `flow-state requirement-delta`')
+    expect(phaseSection).toContain('resets plan/backlog approval and sets phase plan')
     expect(phaseSection).toContain('re-run Phase 2 impact analysis and plan approval')
     expect(phaseSection).toContain('obtain backlog re-approval')
     expect(phaseSection).toContain('requirements-coverage.mjs')
@@ -1191,8 +1300,6 @@ describe('codex-flow command structure', () => {
     expect(lintIndex).toBeGreaterThanOrEqual(0)
     expect(lintIndex).toBeLessThan(approvalIndex)
     expect(lintIndex).toBeLessThan(phaseEnd)
-    // T9 retarget: the bespoke Phase 3 helper-failure sentence is now the canonical C9 sentence.
-    expect(command.slice(phaseStart, phaseEnd)).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
   })
 
   test('generates a task slice before each Phase 4 execution and uses it in the prompt', () => {
@@ -1206,9 +1313,6 @@ describe('codex-flow command structure', () => {
     expect(phaseSection).toContain('Read .codex-flow/CONTEXT-T<n>.md for context')
     expect(phaseSection).toContain('its header records the generation anchor')
     expect(phaseSection).toContain('blocks marked [verify] must be re-checked')
-    // T9 dropped: the alternate "Read .codex-flow/PLAN.md for context." opener existed only for the
-    // now-forbidden standalone fallback (R1.2); the slice is mandatory and the helper fails closed.
-    expect(phaseSection).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
     expect(phaseSection).toContain(
       '`Run position: phase execution — task T<n> <title> — next gate: <gate>`',
     )
@@ -1256,12 +1360,12 @@ describe('codex-flow command structure', () => {
 
   test('runs the ordered plan-change transaction before execution resumes', () => {
     const phaseSection = extractPhaseSection(readText(COMMAND_PATH), 5)
-    const invalidationIndex = phaseSection.indexOf('`backlogApproved: no (plan drift <ISO date>)`')
+    const invalidationIndex = phaseSection.indexOf('flow-state plan-drift')
     const impactIndex = phaseSection.indexOf('impact analysis listing which done and pending tasks')
     const tasksIndex = phaseSection.indexOf('update the affected\n   TASKS.md')
     const lintIndex = phaseSection.indexOf('requirements-coverage.mjs', tasksIndex)
     const approvalIndex = phaseSection.indexOf('get backlog re-approval', lintIndex)
-    const restorationIndex = phaseSection.indexOf('`backlogApproved: yes (<ISO 8601 timestamp>)`', approvalIndex)
+    const restorationIndex = phaseSection.indexOf('flow-state approve backlog', approvalIndex)
 
     expect(invalidationIndex).toBeGreaterThanOrEqual(0)
     expect(invalidationIndex).toBeLessThan(impactIndex)
@@ -1270,8 +1374,7 @@ describe('codex-flow command structure', () => {
     expect(lintIndex).toBeGreaterThan(tasksIndex)
     expect(approvalIndex).toBeGreaterThan(lintIndex)
     expect(restorationIndex).toBeGreaterThan(approvalIndex)
-    expect(phaseSection).toContain('`phase: backlog` in STATE.md')
-    expect(phaseSection).toContain('return `phase` to `execution`')
+    expect(phaseSection).toContain('flow-state plan-drift')
     expect(phaseSection).toContain('`Steps` / `Files` / `Requirements` / `Acceptance` fields')
     expect(phaseSection).toContain('plus the `plan-backlog` backlog sanity checks')
     expect(phaseSection).toContain('regenerate affected slices → recompute waves')
@@ -1298,17 +1401,16 @@ describe('codex-flow command structure', () => {
 
   test('invalidates approval before improvement tasks mutate the backlog', () => {
     const stepNine = extractNumberedStep(extractPhaseSection(readText(COMMAND_PATH), 5), 9)
-    const invalidationIndex = stepNine.indexOf('`backlogApproved: no (improvement tasks <ISO date>)`')
+    const invalidationIndex = stepNine.indexOf('flow-state improvement-gate')
     const appendIndex = stepNine.indexOf('approved items into new tasks appended to `.codex-flow/TASKS.md`')
     const approvalIndex = stepNine.indexOf('get backlog re-approval')
-    const restorationIndex = stepNine.indexOf('restore `backlogApproved: yes (<ISO 8601 timestamp>)`')
+    const restorationIndex = stepNine.indexOf('flow-state approve backlog', approvalIndex)
 
     expect(invalidationIndex).toBeGreaterThanOrEqual(0)
     expect(invalidationIndex).toBeLessThan(appendIndex)
     expect(approvalIndex).toBeGreaterThan(appendIndex)
     expect(restorationIndex).toBeGreaterThan(approvalIndex)
-    expect(stepNine).toContain('`phase: backlog` in STATE.md')
-    expect(stepNine).toContain('return `phase` to\n   `execution` before scheduling the new tasks')
+    expect(stepNine).toContain('flow-state approve backlog')
   })
 
   test('marks a sequential task done only after its durable completion handoff', () => {
@@ -1336,7 +1438,7 @@ describe('codex-flow command structure', () => {
 
     expect(phaseSection).toContain("route verified CRITICAL/HIGH findings from EITHER review to the task's recorded Session line via `mcp__codex__codex_continue`")
     expect(phaseSection).toContain(
-      'If `codex_continue` fails because the recorded session is gone (expired or compacted), fall back to a fresh `codex_execute` fix task that embeds the finding text plus the task\'s `.codex-flow/CONTEXT-T<n>.md` slice; never hand-edit Codex\'s code.',
+      'If `codex_continue` fails because the recorded session is gone (expired or compacted), fall back to a fresh `codex_execute` fix task that embeds the finding text plus the task\'s `.codex-flow/CONTEXT-T<n>.md` slice; never hand-edit Codex\'s code (the only exception is the after-3-rounds hand-fix in Rules).',
     )
   })
 
@@ -1351,7 +1453,6 @@ describe('codex-flow command structure', () => {
     // standalone fallback it used to describe is forbidden by R1.2.
     expect(stepZero).toContain("regenerate this task's slice")
     expect(stepZero).toContain("this task's entry in `.codex-flow/TASKS.md`")
-    expect(stepZero).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
     expect(stepZero).toContain('finding disputes plan intent')
     expect(stepZero).toContain("slice's omitted-pointer line")
     expect(stepZero).toContain(
@@ -1388,11 +1489,6 @@ describe('codex-flow command structure', () => {
 
   test('stops on present helper failures and splits mandatory-over-budget tasks', () => {
     const command = readText(COMMAND_PATH)
-    // T9 retarget: one canonical C9 sentence replaces the old per-site helper-failure wording.
-    for (const phaseNumber of [0, 4, 5]) {
-      const phase = extractPhaseSection(command, phaseNumber)
-      expect(phase).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
-    }
     expect(extractPhaseSection(command, 4).replace(/\s+/g, ' ')).toContain(
       '`mandatory slice content exceeds tokenBudget`, split the oversized task in the backlog before continuing; never raise the slice budget.',
     )
@@ -1447,7 +1543,8 @@ describe('executor fallback contract', () => {
     const phase0 = command.slice(command.indexOf('## Phase 0'), command.indexOf('## Fast-path gate')).replace(/\s+/g, ' ')
     expect(sectionStart).toBeGreaterThan(0)
     expect(sectionEnd).toBeGreaterThan(sectionStart)
-    expect(phase0).toContain('offer the **Executor fallback** (section below): fix Codex and re-check, or continue with Claude as executor. Never continue silently.')
+    expect(phase0).toContain('connect timeout or closed connection is not "server missing"')
+    expect(phase0).toContain('reconnect with `/mcp`')
     expect(phase0).toContain('either a re-check shows `loggedIn: true` or the user has explicitly chosen the fallback')
   })
 
@@ -1468,7 +1565,7 @@ describe('executor fallback contract', () => {
   test('fallback review replaces codex_review with an independent subagent and keeps the round cap', () => {
     expect(section).toContain('Claude must not grade its own homework alone')
     expect(section).toContain('independent review by a fresh subagent')
-    expect(section).toContain('keep the 3-round cap')
+    expect(section).toContain('Keep the 3-round cap')
     expect(command).toContain('Never switch executors silently or mid-task')
   })
 
@@ -1492,7 +1589,7 @@ describe('structured, concurrent dual review contract', () => {
   test('Phase 5 launches codex_review in a background subagent before Claude\'s own pass', () => {
     expect(phase5).toContain('**Start the Codex-side review in the background FIRST**')
     expect(phase5).toContain('launch a background subagent (Agent tool, general-purpose)')
-    expect(phase5).toContain('If the Agent tool is unavailable, call `mcp__codex__codex_review` directly at step 5 instead (sequential fallback).')
+    expect(phase5).toContain('If the Agent tool is unavailable, call `mcp__codex__codex_review` directly at step 4 instead (sequential fallback).')
   })
 
   test('Phase 5 reads reviewFindings instead of re-deriving severities from prose', () => {
@@ -1529,20 +1626,19 @@ describe('durable task-loop state contract (R1.2, R1.6)', () => {
     expect(phase5).toContain(`${helper} set taskStage handoff`)
     expect(phase5).toContain(`${helper} task T<n> done`)
     expect(phase5).toContain('then set `taskStage idle` and `currentTask -`')
-    expect(phase5).toContain(`set \`phase\` to \`review\` with \`${helper} set phase review\` (the only place \`phase: review\` is written)`)
+    expect(phase5).toContain('`flow-state advance` moves `execution → review`; repeat after improvement tasks')
     expect(command).not.toContain('At the Phase 4 → Phase 5 boundary, set `phase` in `.codex-flow/STATE.md` to `review`.')
   })
 
   test('task status writes route through the helper and fail closed', () => {
     expect(phase4).toContain(`${helper} task T<n> in-progress`)
-    expect(phase4).toContain('set `currentTask T<n>` and `taskStage launching`')
-    expect(phase4).toContain('once the call is dispatched, set `taskStage executing`')
+    expect(phase4).toContain('`flow-state set currentTask T<n>` and `flow-state set taskStage launching`')
+    expect(phase4).toContain('once the call is dispatched, run `flow-state set taskStage executing`')
     expect(phase4).toContain(`${helper} task T<n> failed`)
     expect(phase4).toContain(`${helper} set wave <n>`)
     // T9 retarget: the command now names the key count and defers the literal key list to
     // preflight Step 3.4; the "edit the file directly" escape hatch is forbidden by R1.2.
-    expect(phase0).toContain('write all 14 `.codex-flow/STATE.md` keys per `codex-flow:preflight`')
-    expect(phase0).toContain(CANONICAL_FAIL_CLOSED_SENTENCE)
+    expect(phase0).toContain('create STATE.md with')
     expect(preflight).toContain('- currentTask: - - taskStage: idle - wave: -')
   })
 
@@ -1561,6 +1657,60 @@ describe('durable task-loop state contract (R1.2, R1.6)', () => {
     expect(phase5).toContain('Sequential mode: set `taskStage` to `reviewing`')
     expect(phase5).toContain('Parallel mode: `taskStage` stays `executing` for the whole wave')
     expect(preflight).toContain('`merge-conflict` → surface the conflict to the user and STOP')
+  })
+})
+
+describe('T6 command uses kernel commands', () => {
+  const command = readText(COMMAND_PATH)
+  const normalized = command.replace(/\s+/g, ' ')
+
+  test('uses typed flow-state transitions and rejects legacy setters', () => {
+    expect(normalized).toContain('flow-state init --baseline')
+    expect(normalized).toContain('approve requirements')
+    expect(normalized).toContain('approve plan')
+    expect(normalized).toContain('approve backlog')
+    expect(normalized).toContain('requirement-delta')
+    expect(normalized).toContain('plan-drift')
+    expect(normalized).toContain('improvement-gate')
+    expect(normalized).toContain('resume --head')
+    expect((normalized.match(/flow-state advance/g) ?? []).length).toBeGreaterThanOrEqual(5)
+    expect(normalized).not.toContain('set phase')
+    expect(normalized).not.toContain('set requirementsApproved')
+    expect(normalized).not.toContain('set planApproved')
+    expect(normalized).not.toContain('set backlogApproved')
+    expect(normalized).not.toContain('"$PWD"')
+  })
+
+  test('keeps typed transitions runnable and Phase 0 routing consistent', () => {
+    const transitionText = normalized.replace(/`phase` and the three approvals change only through `approve`, `advance`, `requirement-delta`, `plan-drift`, `improvement-gate`, and `resume`\./, '')
+    expect(transitionText).not.toMatch(/`(advance|requirement-delta|plan-drift|improvement-gate|approve (requirements|plan|backlog)[^`]*)`/)
+    expect((command.match(/The orchestrator is the only writer\./g) ?? []).length).toBe(1)
+    expect(normalized).toContain('doctor.mjs --probe-launcher')
+    expect(command).toContain('flow-state approve backlog --checkpoint-commits <yes|no> --execution-mode "<mode>"')
+    expect(command).not.toMatch(/flow-state\.mjs"[^`]*\n[^`]*`/)
+  })
+
+  test('routes outages and reports session cost with session identities', () => {
+    expect(normalized).toContain('connect timeout or closed connection')
+    expect(normalized).toContain('reconnect with `/mcp`')
+    expect(normalized).toContain('Never continue silently')
+    expect(normalized).toContain('--session')
+    expect(normalized).toContain('every `Codex review session:` id recorded in `reviews.md`')
+    expect(normalized).toContain('use `--cwd <project root>` only when no session id exists')
+  })
+
+  test('guards whole-feature completion and supporting documentation', () => {
+    expect(normalized).toContain('run `flow-state advance` until `phase: complete`')
+    expect(normalized).toContain('repeat after improvement tasks')
+    expect(readText(path.join(REPO_ROOT, 'AGENTS.md'))).toContain('create STATE.md with `init`')
+    const agents = readText(path.join(REPO_ROOT, 'AGENTS.md'))
+    for (const command of ['approve', 'advance', 'requirement-delta', 'plan-drift', 'improvement-gate', 'resume']) {
+      expect(agents).toContain(command)
+    }
+    expect(agents).not.toContain('(`set` / `check` / `task`) — the helper is')
+    expect(readText(README_PATH)).not.toContain('10-key run state')
+    expect(command).not.toContain('then approval, then')
+    expect(command).not.toContain('`.\n   adding `--dirty-baseline')
   })
 })
 
@@ -2006,18 +2156,19 @@ describe('fail-closed helper wording guard (R1.2)', () => {
     expect(violations[0]).toContain('unavailable|unset) in a standalone install')
   })
 
-  test('the canonical fail-closed sentence appears in the command and in preflight', () => {
+  test('the canonical fail-closed sentence appears once before Phase 0 in the command', () => {
     // Arrange
     const command = readText(COMMAND_PATH)
-    const preflight = readText(PREFLIGHT_PATH)
 
     // Act
     const commandOccurrences = command.split(CANONICAL_FAIL_CLOSED_SENTENCE).length - 1
-    const preflightOccurrences = preflight.split(CANONICAL_FAIL_CLOSED_SENTENCE).length - 1
+    const phaseZeroIndex = command.indexOf('## Phase 0')
+    const sentenceIndex = command.indexOf(CANONICAL_FAIL_CLOSED_SENTENCE)
 
     // Assert
-    expect(commandOccurrences).toBeGreaterThanOrEqual(1)
-    expect(preflightOccurrences).toBeGreaterThanOrEqual(1)
+    expect(commandOccurrences).toBe(1)
+    expect(sentenceIndex).toBeGreaterThanOrEqual(0)
+    expect(sentenceIndex).toBeLessThan(phaseZeroIndex)
   })
 })
 
@@ -2069,6 +2220,14 @@ describe('per-run overhead byte budgets (R8.2, C7 as amended)', () => {
         ? []
         : [overageMessage(COMMAND_PATH, bytes, COMMAND_MAX_BYTES, 'COMMAND_MAX_BYTES')],
     ).toEqual([])
+  })
+
+  test('the command stays within the T1 byte limit', () => {
+    // Arrange
+    const bytes = byteLength(COMMAND_PATH)
+
+    // Assert
+    expect(bytes).toBeLessThanOrEqual(43_948)
   })
 
   function skillBytes(skillName: string): number {

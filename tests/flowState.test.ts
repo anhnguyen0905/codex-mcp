@@ -1,4 +1,13 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, test, vi } from 'vitest'
@@ -6,10 +15,18 @@ import { afterAll, describe, expect, test, vi } from 'vitest'
 // @ts-expect-error — plain .mjs script, not part of the tsc build
 import {
   STATE_KEYS,
+  PHASES,
   TASK_TRANSITIONS,
+  TransitionRejectedError,
+  advanceState,
+  approveState,
   checkState,
+  improvementGateState,
   main,
   parseState,
+  planDriftState,
+  requirementDeltaState,
+  resumeState,
   setStateKey,
   setTaskStatus,
 } from '../scripts/flow-state.mjs'
@@ -107,7 +124,6 @@ describe('STATE.md updates', () => {
   })
 
   test.each([
-    ['phase', 'planning'],
     ['taskStage', 'running'],
     ['currentTask', 'task-1'],
     ['wave', '0'],
@@ -192,6 +208,195 @@ function tasksWithStatuses(statuses: Record<string, string>): string {
     .flatMap(([id, status]) => [`## ${id}: Task ${id}`, `- Status: ${status}`, ''])
     .join('\n')
 }
+
+function stateAtPhase(phase: string, approvals = true): string {
+  const approval = approvals ? 'yes (today)' : 'no'
+  return stateWithSelectors({
+    phase,
+    currentTask: '-',
+    taskStage: 'idle',
+    wave: '-',
+  })
+    .replaceAll('- requirementsApproved: yes (today)', `- requirementsApproved: ${approval}`)
+    .replaceAll('- planApproved: yes (today)', `- planApproved: ${approval}`)
+    .replaceAll('- backlogApproved: yes (today)', `- backlogApproved: ${approval}`)
+}
+
+function writeApprovalArtifacts(directory: string): void {
+  writeFileSync(join(directory, 'REQUIREMENTS.md'), '# requirements\n')
+  writeFileSync(join(directory, 'PLAN.md'), '# plan\n')
+  writeFileSync(join(directory, 'TASKS.md'), tasksWithStatuses({ T1: 'done' }))
+}
+
+const APPROVAL_LEGAL_CASES = new Set([
+  'requirements:interview:false',
+  'requirements:plan:true',
+  'plan:plan:false',
+  'backlog:backlog:false',
+])
+const APPROVAL_CASES = ['requirements', 'plan', 'backlog'].flatMap((gate) =>
+  PHASES.flatMap((phase) => [false, true].map((delta) => [gate, phase, delta])),
+)
+
+describe('typed flow transitions', () => {
+  test.each(APPROVAL_CASES)('approves %s only from its legal phase', (gate, phase, delta) => {
+    // Arrange
+    const state = stateAtPhase(phase)
+    const legal = APPROVAL_LEGAL_CASES.has(`${gate}:${phase}:${delta}`)
+
+    // Act
+    const update = () => approveState(state, gate, { at: AT, delta })
+
+    // Assert
+    if (legal) {
+      const expected = delta ? `yes (delta ${AT.slice(0, 10)})` : `yes (${AT})`
+      expect(update()).toContain(expected)
+    } else {
+      expect(update).toThrow(TransitionRejectedError)
+    }
+  })
+
+  test.each([
+    ['interview', 'plan'],
+    ['plan', 'backlog'],
+    ['backlog', 'execution'],
+    ['execution', 'review'],
+    ['review', 'complete'],
+  ])('advances exactly one step from %s', (phase, next) => {
+    // Arrange
+    const state = stateAtPhase(phase)
+    const tasksText = tasksWithStatuses({ T1: 'done' })
+
+    // Act
+    const updated = advanceState(state, { tasksText })
+
+    // Assert
+    expect(parseState(updated).phase).toBe(next)
+  })
+
+  test.each(PHASES.filter((phase) => phase !== 'complete'))(
+    'rejects advance from %s when its guard is not satisfied',
+    (phase) => {
+      // Arrange
+      const state = stateAtPhase(phase, false)
+
+      // Act / Assert
+      expect(() => advanceState(state, { tasksText: tasksWithStatuses({ T1: 'pending' }) }))
+        .toThrow(TransitionRejectedError)
+    },
+  )
+
+  test('rejects every non-linear transition outside its legal source phases', () => {
+    // Arrange
+    const transitions = [
+      { run: requirementDeltaState, legal: ['plan', 'backlog', 'execution', 'review'] },
+      { run: planDriftState, legal: ['execution', 'review'] },
+      { run: improvementGateState, legal: ['execution', 'review'] },
+    ] as const
+
+    // Act / Assert
+    for (const transition of transitions) {
+      for (const phase of PHASES) {
+        const state = stateAtPhase(phase)
+        if (transition.legal.includes(phase)) {
+          expect(transition.run(state, { at: AT })).toBeTypeOf('string')
+        } else {
+          expect(() => transition.run(state, { at: AT })).toThrow(TransitionRejectedError)
+        }
+      }
+    }
+  })
+
+  test('resume writes a head and never moves forward', () => {
+    // Arrange
+    const state = stateAtPhase('backlog')
+
+    // Act
+    const updated = resumeState(state, 'deadbeef', { phase: 'plan' })
+
+    // Assert
+    expect(parseState(updated)).toMatchObject({ phase: 'plan', resumeHead: 'deadbeef' })
+    expect(() => resumeState(state, 'deadbeef', { phase: 'execution' }))
+      .toThrow(TransitionRejectedError)
+  })
+
+  test('uses calendar dates for delta and gate markers', () => {
+    // Arrange
+    const date = '2026-11-10'
+    const interview = stateAtPhase('interview')
+    const plan = stateAtPhase('plan')
+    const execution = stateAtPhase('execution')
+
+    // Act
+    const approved = approveState(plan, 'requirements', { at: date, delta: true })
+    const delta = requirementDeltaState(plan, { at: date })
+    const drift = planDriftState(execution, { at: date })
+    const improvement = improvementGateState(execution, { at: date })
+
+    // Assert
+    expect(parseState(approved).requirementsApproved).toBe('yes (delta 2026-11-10)')
+    expect(parseState(delta).requirementsApproved).toBe('yes (delta 2026-11-10)')
+    expect(parseState(drift).backlogApproved).toBe('no (plan drift 2026-11-10)')
+    expect(parseState(improvement).backlogApproved).toBe('no (improvement tasks 2026-11-10)')
+    expect(parseState(approveState(interview, 'requirements')).requirementsApproved)
+      .toMatch(/^yes \(\d{4}-\d{2}-\d{2}T/)
+    expect(parseState(requirementDeltaState(plan)).requirementsApproved)
+      .toMatch(/^yes \(delta \d{4}-\d{2}-\d{2}\)$/)
+    expect(() => requirementDeltaState(plan, { at: '2026-02-30' })).toThrow(
+      'invalid ISO 8601 timestamp',
+    )
+  })
+
+  test('cannot reach complete from interview in one command', () => {
+    // Arrange
+    const state = stateAtPhase('interview')
+    const tasksText = tasksWithStatuses({ T1: 'done' })
+
+    // Act / Assert
+    expect(parseState(advanceState(state, { tasksText })).phase).toBe('plan')
+    expect(() => resumeState(state, 'deadbeef', { phase: 'complete' }))
+      .toThrow(TransitionRejectedError)
+  })
+})
+
+describe('approval-aware checks', () => {
+  test.each([
+    ['plan', 'no', 'no', 'no'],
+    ['backlog', 'yes', 'no', 'no'],
+    ['execution', 'yes', 'yes', 'no'],
+  ])('flags phase %s when its approval is missing', (phase, requirements, plan, backlog) => {
+    // Arrange
+    const state = stateAtPhase(phase)
+      .replace('- requirementsApproved: yes (today)', `- requirementsApproved: ${requirements}`)
+      .replace('- planApproved: yes (today)', `- planApproved: ${plan}`)
+      .replace('- backlogApproved: yes (today)', `- backlogApproved: ${backlog}`)
+
+    // Act
+    const violations = checkState(state)
+
+    // Assert
+    expect(violations.some(({ key }) => key === 'requirementsApproved')).toBe(requirements !== 'yes')
+    expect(violations.some(({ key }) => key === 'planApproved')).toBe(
+      phase !== 'plan' && plan !== 'yes',
+    )
+    expect(violations.some(({ key }) => key === 'backlogApproved')).toBe(
+      phase === 'execution' && backlog !== 'yes',
+    )
+  })
+
+  test('accepts the two in-transaction approval states', () => {
+    // Arrange
+    const planState = stateAtPhase('plan', false)
+      .replace('- requirementsApproved: no', '- requirementsApproved: yes (delta today)')
+    const backlogState = stateAtPhase('backlog', false)
+      .replace('- requirementsApproved: no', '- requirementsApproved: yes (today)')
+      .replace('- planApproved: no', '- planApproved: yes (today)')
+
+    // Act / Assert
+    expect(checkState(planState)).toEqual([])
+    expect(checkState(backlogState)).toEqual([])
+  })
+})
 
 describe('relational state validation', () => {
   test('reports a selected task held at the idle stage', () => {
@@ -495,6 +700,270 @@ describe('TASKS.md transitions', () => {
 })
 
 describe('flow-state CLI', () => {
+  test.each([
+    ['phase', 'plan', 'advance or a typed transition command'],
+    ['requirementsApproved', 'yes', 'approve requirements or requirement-delta'],
+    ['planApproved', 'yes', 'approve plan or requirement-delta'],
+    ['backlogApproved', 'yes', 'approve backlog, plan-drift, or improvement-gate'],
+  ])('rejects direct transition key %s without changing bytes', async (key, value, message) => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-typed-set-')
+    const statePath = join(directory, 'STATE.md')
+    writeFileSync(statePath, LEGACY_STATE)
+    const before = readFileSync(statePath, 'utf8')
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    // Act
+    const exitCode = await main(['set', key, value, '--state', statePath], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(1)
+    expect(stderr.mock.calls[0]?.[0]).toContain(`flow-state: rejected: ${key} is controlled by ${message}`)
+    expect(readFileSync(statePath, 'utf8')).toBe(before)
+    stderr.mockRestore()
+  })
+
+  test('initializes exactly the canonical 14-key state and refuses overwrite', async () => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-init-')
+    const controlDirectory = join(directory, '.codex-flow')
+    mkdirSync(controlDirectory)
+    const statePath = join(controlDirectory, 'STATE.md')
+
+    // Act
+    expect(await main([
+      'init', '--baseline', 'abc123', '--known-red', 'none', '--dirty-baseline', 'clean',
+    ], { cwd: directory })).toBe(0)
+    const state = readFileSync(statePath, 'utf8')
+    const secondInit = await main([
+      'init', '--baseline', 'other', '--known-red', 'other',
+    ], { cwd: directory })
+
+    // Assert
+    expect(state).toBe([
+      '# codex-flow run state',
+      '',
+      '## Run state',
+      '- phase: interview',
+      '- requirementsApproved: no',
+      '- planApproved: no',
+      '- backlogApproved: no',
+      '- runBaselineRef: abc123',
+      '- resumeHead:',
+      '- knownRed: none',
+      '- checkpointCommits:',
+      '- executionMode: undecided',
+      '- dirtyBaseline: clean',
+      '- executor: codex',
+      '- currentTask: -',
+      '- taskStage: idle',
+      '- wave: -',
+      '',
+    ].join('\n'))
+    expect(Object.keys(parseState(state))).toEqual(STATE_KEYS)
+    expect(secondInit).toBe(1)
+    expect(readFileSync(statePath, 'utf8')).toBe(state)
+  })
+
+  test.each([
+    ['requirements', 'interview', 'REQUIREMENTS.md'],
+    ['plan', 'plan', 'PLAN.md'],
+    ['backlog', 'backlog', 'TASKS.md'],
+  ])('requires the %s artifact before approval', async (gate, phase, artifact) => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-artifact-')
+    const controlDirectory = join(directory, '.codex-flow')
+    mkdirSync(controlDirectory)
+    const statePath = join(controlDirectory, 'STATE.md')
+    writeFileSync(statePath, stateAtPhase(phase))
+    writeFileSync(join(controlDirectory, 'OTHER.md'), '')
+    const before = readFileSync(statePath, 'utf8')
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    // Act
+    const exitCode = await main(['approve', gate, '--at', AT], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(1)
+    expect(stderr.mock.calls[0]?.[0]).toContain(`requires ${artifact}`)
+    expect(readFileSync(statePath, 'utf8')).toBe(before)
+    stderr.mockRestore()
+  })
+
+  test.skipIf(process.platform === 'win32').each([
+    ['directory', (artifact: string, directory: string) => mkdirSync(join(directory, artifact))],
+    ['symlink', (artifact: string, directory: string) => {
+      const target = join(directory, 'target.md')
+      writeFileSync(target, '# target\n')
+      symlinkSync(target, join(directory, artifact))
+    }],
+  ])('rejects an artifact that is a %s', async (_, createArtifact) => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-artifact-type-')
+    const controlDirectory = join(directory, '.codex-flow')
+    mkdirSync(controlDirectory)
+    const statePath = join(controlDirectory, 'STATE.md')
+    writeFileSync(statePath, stateAtPhase('interview'))
+    createArtifact('REQUIREMENTS.md', controlDirectory)
+    const before = readFileSync(statePath, 'utf8')
+    // Act
+    const exitCode = await main(['approve', 'requirements', '--at', AT], { cwd: directory })
+    // Assert
+    expect(exitCode).toBe(1)
+    expect(readFileSync(statePath, 'utf8')).toBe(before)
+  })
+
+  test('requires earlier approvals before later approvals', async () => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-earlier-')
+    const controlDirectory = join(directory, '.codex-flow')
+    mkdirSync(controlDirectory)
+    writeApprovalArtifacts(controlDirectory)
+    const statePath = join(controlDirectory, 'STATE.md')
+    writeFileSync(statePath, stateAtPhase('plan', false))
+    const before = readFileSync(statePath, 'utf8')
+
+    // Act
+    const exitCode = await main(['approve', 'plan', '--at', AT], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(1)
+    expect(readFileSync(statePath, 'utf8')).toBe(before)
+  })
+
+  test('rejects checkpoint options on non-backlog approvals', async () => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-approval-options-')
+    const controlDirectory = join(directory, '.codex-flow')
+    mkdirSync(controlDirectory)
+    writeApprovalArtifacts(controlDirectory)
+    const statePath = join(controlDirectory, 'STATE.md')
+    writeFileSync(statePath, stateAtPhase('interview'))
+    const before = readFileSync(statePath, 'utf8')
+
+    // Act
+    const rejected = main([
+      'approve', 'requirements', '--checkpoint-commits', 'yes', '--at', AT,
+    ], { cwd: directory })
+
+    // Assert
+    await expect(rejected).rejects.toThrow(
+      '--checkpoint-commits and --execution-mode are only valid for approve backlog',
+    )
+    expect(readFileSync(statePath, 'utf8')).toBe(before)
+  })
+
+  test.each([
+    ['taskStage', 'executing', 'execution'],
+    ['currentTask', 'T1', 'execution'],
+  ])('advance rejects execution with selected %s', async (key, value, phase) => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-advance-guard-')
+    const controlDirectory = join(directory, '.codex-flow')
+    mkdirSync(controlDirectory)
+    writeApprovalArtifacts(controlDirectory)
+    const statePath = join(controlDirectory, 'STATE.md')
+    writeFileSync(statePath, stateAtPhase(phase))
+    expect(await main(['set', key, value], { cwd: directory })).toBe(0)
+    const before = readFileSync(statePath, 'utf8')
+
+    // Act
+    const exitCode = await main(['advance'], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(1)
+    expect(readFileSync(statePath, 'utf8')).toBe(before)
+  })
+
+  test('set accepts non-idle task stages only in execution', async () => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-task-stage-')
+    const controlDirectory = join(directory, '.codex-flow')
+    mkdirSync(controlDirectory)
+    const statePath = join(controlDirectory, 'STATE.md')
+    writeFileSync(statePath, stateAtPhase('plan'))
+
+    // Act
+    const exitCode = await main(['set', 'taskStage', 'launching'], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(1)
+    expect(parseState(readFileSync(statePath, 'utf8')).taskStage).toBe('idle')
+  })
+
+  test('runs the five non-linear transactions through the CLI', async () => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-transactions-')
+    const controlDirectory = join(directory, '.codex-flow')
+    mkdirSync(controlDirectory)
+    writeApprovalArtifacts(controlDirectory)
+    const command = (args: string[]) => main(args, { cwd: directory })
+    const runOk = async (args: string[]) => expect(await command(args)).toBe(0)
+    await runOk(['init', '--baseline', 'abc123', '--known-red', 'none'])
+    await runOk(['approve', 'requirements', '--at', AT])
+    await runOk(['advance'])
+    await runOk(['approve', 'plan', '--at', AT])
+    await runOk(['advance'])
+    await runOk(['approve', 'backlog', '--at', AT, '--checkpoint-commits', 'yes', '--execution-mode', 'parallel'])
+    await runOk(['advance'])
+    const statePath = join(controlDirectory, 'STATE.md')
+    expect(parseState(readFileSync(statePath, 'utf8'))).toMatchObject({
+      checkpointCommits: 'yes',
+      executionMode: 'parallel',
+    })
+
+    // Act: requirements delta, plan drift, improvement gate, resume, archive + init.
+    await runOk(['requirement-delta', '--at', AT])
+    expect(parseState(readFileSync(statePath, 'utf8'))).toMatchObject({
+      phase: 'plan',
+      requirementsApproved: `yes (delta ${AT.slice(0, 10)})`,
+      planApproved: `no (delta ${AT.slice(0, 10)})`,
+      backlogApproved: `no (delta ${AT.slice(0, 10)})`,
+    })
+    await runOk(['approve', 'plan', '--at', AT])
+    await runOk(['advance'])
+    await runOk(['approve', 'backlog', '--at', AT])
+    await runOk(['advance'])
+    expect(parseState(readFileSync(statePath, 'utf8')).phase).toBe('execution')
+    await runOk(['plan-drift', '--at', AT])
+    expect(parseState(readFileSync(statePath, 'utf8'))).toMatchObject({
+      phase: 'backlog',
+      backlogApproved: `no (plan drift ${AT.slice(0, 10)})`,
+    })
+    await runOk(['approve', 'backlog', '--at', AT])
+    await runOk(['advance'])
+    await runOk(['advance'])
+    expect(parseState(readFileSync(statePath, 'utf8')).phase).toBe('review')
+    await runOk(['improvement-gate', '--at', AT])
+    expect(parseState(readFileSync(statePath, 'utf8'))).toMatchObject({
+      phase: 'backlog',
+      backlogApproved: `no (improvement tasks ${AT.slice(0, 10)})`,
+    })
+    await runOk(['approve', 'backlog', '--at', AT])
+    await runOk(['advance'])
+    await runOk(['advance'])
+    expect(parseState(readFileSync(statePath, 'utf8')).phase).toBe('review')
+    await runOk(['resume', '--head', 'deadbeef', '--phase', 'backlog'])
+    expect(parseState(readFileSync(statePath, 'utf8'))).toMatchObject({
+      phase: 'backlog',
+      resumeHead: 'deadbeef',
+    })
+    await runOk(['approve', 'backlog', '--at', AT])
+    await runOk(['advance'])
+    await runOk(['advance'])
+    expect(parseState(readFileSync(statePath, 'utf8')).phase).toBe('review')
+    renameSync(statePath, join(controlDirectory, 'STATE.archive.md'))
+    await runOk(['init', '--baseline', 'newbase', '--known-red', 'none'])
+
+    // Assert
+    expect(parseState(readFileSync(statePath, 'utf8'))).toMatchObject({
+      phase: 'interview',
+      requirementsApproved: 'no',
+      planApproved: 'no',
+      backlogApproved: 'no',
+    })
+  })
+
   test('rejects an unknown key without writing the state file', async () => {
     // Arrange
     const directory = makeTempDirectory('flow-state-key-')
@@ -598,7 +1067,7 @@ describe('flow-state CLI', () => {
     symlinkSync(targetPath, statePath)
 
     // Act
-    const update = main(['set', 'phase', 'review', '--state', statePath], { cwd: directory })
+    const update = main(['set', 'knownRed', 'updated', '--state', statePath], { cwd: directory })
 
     // Assert
     await expect(update).rejects.toThrow('state file is a symlink — refusing to write through it')

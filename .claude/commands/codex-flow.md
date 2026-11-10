@@ -11,6 +11,8 @@ Follow the six phases (0–5) strictly. Do NOT write implementation code yoursel
 
 Each phase names plugin skills (`codex-flow:*`) to load via the Skill tool before starting the phase — they carry the detailed checklists this command routes to. If a named skill cannot be loaded, STOP and tell the user to reinstall the codex-flow plugin; never improvise a phase or a lane from memory.
 
+**Helper rule** (every `scripts/*.mjs` call below): If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.
+
 ## Phase 0 — Preflight (gate, do this FIRST)
 
 **Load skills first**: `codex-flow:preflight` (health gate, resume check, workspace baseline; it carries the detailed checklist for the steps below) plus `codex-flow:fast-path` at the gate and `codex-flow:executor-fallback` when an outage routes there.
@@ -27,8 +29,9 @@ ONLY missing keys on a legacy file, add them with `set` (`currentTask -`, `taskS
 terminal-status validation runs too. When both `.codex-flow/PLAN.md` and `.codex-flow/TASKS.md`
 exist, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --resume` and read
 `.codex-flow/RESUME.md` instead of the raw files; when either file is missing, read only the control files that exist.
-If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand. On resume, write the current `git rev-parse HEAD` to `resumeHead` and update `phase` to the
-phase being entered; apart from that legacy-key backfill, change no other state field. On restart,
+On resume, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" resume --head <sha>` with the
+current `git rev-parse HEAD`; add `--phase <phase>` only when entering an earlier phase. Apart
+from that legacy-key backfill, change no other state field. On restart,
 archive the old control files that exist to `.codex-flow/archive/<timestamp>/` and begin fresh.
 
 `phase: complete` is terminal: the previous run is finished, so do NOT offer resume for it. Archive
@@ -50,10 +53,11 @@ deep input adds a one-shot read-only `codex exec` probe, returning `execProbe`
 `execProbe` from that single call; never re-probe per phase or per task. Route it per
 `codex-flow:preflight` Step 1:
 
-- **Tool call fails / server missing** → the MCP server is not set up: point the user at the
-  codex-mcp README install steps (or `node scripts/doctor.mjs`), then
-  offer the **Executor fallback** (section below): fix Codex and re-check, or continue with
-  Claude as executor. Never continue silently.
+- **Tool call fails / server missing** → a connect timeout or closed connection is not "server
+  missing": run `node scripts/doctor.mjs --probe-launcher`, hydrate cloud-synced files, reconnect with `/mcp`,
+  re-check health, and only then offer the **Executor fallback** (section below). Otherwise the
+  MCP server is not registered: point the user at the codex-mcp README install steps (or
+  `node scripts/doctor.mjs`), then offer the fallback. Never continue silently.
 - **`loggedIn: false`** → tell the user to run `codex login`, then offer the same fallback choice;
   do not interview, plan, or execute anything until either a re-check shows `loggedIn: true` or the
   user has explicitly chosen the fallback.
@@ -92,15 +96,16 @@ Then baseline the workspace per `codex-flow:preflight` Step 3 (in the project ro
    local-time timestamp; on resume, reuse the report dir recorded under `## Session report` in the
    existing PLAN.md — the single report dir later phases write into per
    `codex-flow:session-report`.
-5. After baselining a fresh run, write all 14 `.codex-flow/STATE.md` keys per
-   `codex-flow:preflight` Step 4, with `phase: interview`, every approval `no`, `runBaselineRef`
-   at the run-start git HEAD, the compact original `knownRed` list, `dirtyBaseline` set to
-   `baseline-dirty.patch` when the user proceeded dirty, and `executor` set to `codex` — or to the
-   fallback value when the user chose the Executor fallback in the health gate. From here on, write
-   STATE.md keys and TASKS.md status lines only through
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs"` (`set`, `check`, `task`) — including the
-   Phase 1–3 approval gates, the plan-drift and improvement transactions, and the executor switch.
-   If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand. The orchestrator is the only writer. Never modify `runBaselineRef`, `knownRed`, or
+5. After baselining a fresh run, create STATE.md with
+   `flow-state init --baseline <run-start HEAD> --known-red "<compact list>"` (add
+   `--dirty-baseline baseline-dirty.patch` / `--executor <fallback value>` when applicable);
+   `flow-state <subcommand>` abbreviates `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" <subcommand>`.
+   From here on, write STATE.md keys and TASKS.md status lines only through
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs"` (`set`, `check`, `task`) — except that
+   `phase` and the three approvals change only through `approve`, `advance`, `requirement-delta`,
+   `plan-drift`, `improvement-gate`, and `resume`. The initial state has `phase: interview` and every
+   approval `no`; record the run-start HEAD, compact original `knownRed` list, and fallback executor
+   value as applicable. The orchestrator is the only writer. Never modify `runBaselineRef`, `knownRed`, or
    `dirtyBaseline` on resume.
 
 ## Fast-path gate — small and analysis-only tasks
@@ -128,13 +133,12 @@ Interview the user with AskUserQuestion per those skills. Keep asking until ever
 Immediately after confirmation, write the confirmed Requirements Summary VERBATIM to
 `.codex-flow/REQUIREMENTS.md` using the `codex-flow:interview-elicitation` format. Do not start
 Phase 2 until the write completes.
-Immediately when the user grants requirements approval, set `requirementsApproved` in
-`.codex-flow/STATE.md` to `yes (<ISO 8601 timestamp>)` and set `phase` to `plan` before entering
-Phase 2.
+Immediately when the user grants requirements approval, run `flow-state approve requirements` then `flow-state advance`
+before entering Phase 2.
 
 For a confirmed mid-run requirement delta, append the delta per
-`codex-flow:interview-elicitation`, refresh `requirementsApproved` to `yes (delta <ISO date>)`,
-reset `planApproved` and `backlogApproved` to `no (delta <ISO date>)`, and set `phase` to `plan`.
+`codex-flow:interview-elicitation`, then run `flow-state requirement-delta` (which resets plan/backlog approval
+and sets phase plan).
 Before execution resumes, re-run Phase 2 impact analysis and plan approval, rebuild the affected
 backlog, run
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md --plan .codex-flow/PLAN.md`,
@@ -182,18 +186,14 @@ elicitation. When in doubt, ask.
 6. After approval, write `planning.md` to the report dir per `codex-flow:session-report`, and under
    a `## Session report` heading in PLAN.md record `- Report dir: <report dir>` and
    `- Session start: <ISO 8601>`.
-7. Only after steps 5 and 6 complete, set `planApproved` in `.codex-flow/STATE.md` to
-   `yes (<ISO 8601 timestamp>)` using the user's grant time, then set `phase` to `backlog` before
+7. Only after steps 5 and 6 complete, run `flow-state approve plan --at <grant time>` then `flow-state advance` before
    entering Phase 3. Never persist Phase 2 approval before its post-approval artifacts are durable.
 
 ## Phase 3 — Backlog (Claude)
 
 **Load skill first**: `codex-flow:plan-backlog` (slicing rules, dependency ordering, sanity checks).
 
-Immediately when the user grants backlog approval below, set `backlogApproved` in
-`.codex-flow/STATE.md` to `yes (<ISO 8601 timestamp>)`, record the checkpoint choice in
-`checkpointCommits` and the selected mode in `executionMode`, and set `phase` to `execution`
-before entering Phase 4.
+Immediately when the user grants backlog approval below, run `flow-state approve backlog --checkpoint-commits <yes|no> --execution-mode "<mode>"` then `flow-state advance` before entering Phase 4.
 
 Decompose the approved plan into tasks in `.codex-flow/TASKS.md`:
 
@@ -234,7 +234,7 @@ Before asking for backlog approval, run
 Every effective R<n>.<m> must be cited by at least one task and no task may cite an unknown ID; fix
 the backlog before presenting it for approval. Every PLAN `A<n>` acceptance entry must be cited by
 at least one task's `Acceptance:` field; treat a non-zero exit (orphan `A<n>`, unknown citation) as
-fix the backlog before presenting it. If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.
+fix the backlog before presenting it.
 
 Show the backlog to the user and get approval before executing, asking once at the same time:
 **checkpoint commits after each passed task — yes/no?** (recommended yes on multi-task backlogs;
@@ -268,9 +268,9 @@ For each task in dependency order (sequential mode):
    update, set the task's `- Status:` line to `in-progress`, append
    `  - <ISO 8601 ts> pending -> in-progress` beneath it, and write
    `- Session: launching (base: <short sha>)`. Make the Status write and its transition line with
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" task T<n> in-progress`, and set `currentTask T<n>` and
-   `taskStage launching` with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set`; once the call is dispatched, set `taskStage executing`.
-   Both helper calls in this step are required. If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand. Complete all of these writes before calling
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" task T<n> in-progress`, and run `flow-state set currentTask T<n>` and
+   `flow-state set taskStage launching`; once the call is dispatched, run `flow-state set taskStage executing`.
+   Both helper calls in this step are required. Complete all of these writes before calling
    `mcp__codex__codex_execute` with:
    - `prompt`: start with the single header line `Run position: phase execution — task T<n> <title> — next gate: <gate>`, then the opener "Read .codex-flow/CONTEXT-T<n>.md for context (a budgeted slice of PLAN.md; its header records the generation anchor, and blocks marked [verify] must be re-checked against the current code before relying on them)." Then append "Implement task T<n> exactly as specified below, and only this task. Run its acceptance checks before finishing." + the standards, testing, and language blocks from the loaded skills (or the `exec-deliverable` blocks for a non-code task) + a distilled ≤ 30-line rules block per skill in the task's `Skills:` field (see `codex-flow:skill-selection` Step 6 — never paste a whole SKILL.md); do not append the full task text because the slice already embeds it as mandatory content.
    - `cwd`: absolute path of the project root
@@ -317,8 +317,8 @@ Parallel mode: `taskStage` stays `executing` for the whole wave (subagents revie
 worktrees) and moves to `handoff` only in the coordinator's Step 3.8. `phase: review` is set once,
 in step 8, after the last task.
 
-0. Before reviewing, reuse the existing `.codex-flow/CONTEXT-T<n>.md` only when its generated header's anchor equals the current `git rev-parse HEAD` and the tree is clean; otherwise run `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --task T<n>` to regenerate this task's slice, then re-read it and this task's entry in `.codex-flow/TASKS.md`. If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand. Treat the files read on disk — not session memory, which may have been compacted — as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline. Read full `.codex-flow/PLAN.md` only when a finding disputes plan intent or the slice's omitted-pointer line points at a section the review needs.
-1. **Start the Codex-side review in the background FIRST** — it is read-only and independent of your own pass, so never run it after your review: launch a background subagent (Agent tool, general-purpose) whose only job is to call `mcp__codex__codex_review` for THIS task with the focus block from `codex-flow:review-dual` (task id/title, acceptance criteria, `Files:` list) plus `scope: { files: <the task's `Files:` list>, contract: <the PLAN Contracts the task lists> }`, and return the tool result's `reviewFindings` object plus `status` verbatim, nothing else. Do steps 2–4 yourself while it runs; collect its result in step 5. If the Agent tool is unavailable, call `mcp__codex__codex_review` directly at step 5 instead (sequential fallback).
+0. Before reviewing, reuse the existing `.codex-flow/CONTEXT-T<n>.md` only when its generated header's anchor equals the current `git rev-parse HEAD` and the tree is clean; otherwise run `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --task T<n>` to regenerate this task's slice, then re-read it and this task's entry in `.codex-flow/TASKS.md`. Treat the files read on disk — not session memory, which may have been compacted — as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline. Read full `.codex-flow/PLAN.md` only when a finding disputes plan intent or the slice's omitted-pointer line points at a section the review needs.
+1. **Start the Codex-side review in the background FIRST** — it is read-only and independent of your own pass, so never run it after your review: launch a background subagent (Agent tool, general-purpose) whose only job is to call `mcp__codex__codex_review` for THIS task with the focus block from `codex-flow:review-dual` (task id/title, acceptance criteria, `Files:` list) plus `scope: { files: <the task's `Files:` list>, contract: <the PLAN Contracts the task lists> }`, and return the tool result's `reviewFindings` object plus `status` verbatim, nothing else. Do steps 2–4 yourself while it runs; collect its result in step 4. If the Agent tool is unavailable, call `mcp__codex__codex_review` directly at step 4 instead (sequential fallback).
    **Scope trip-wire (mechanical, not judgment)** — in sequential mode, before the Claude review
    pass, run
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/scope-check.mjs" --task T<n> --base <base sha> --tasks .codex-flow/TASKS.md`
@@ -328,7 +328,7 @@ in step 8, after the last task.
    transaction; do not review the out-of-scope diff as if it were in scope and do not re-argue the
    task's `Files:` after the fact. Exit 1 with a placeholder or empty `Files:` set is the same
    blocker. Parallel mode gets this from the worktree boundary and `codex-flow:parallel-execution`'s
-   undeclared-file stop instead. If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.
+   undeclared-file stop instead.
    Inspect what Codex did: use the returned `diff` field (git status + patch) and read changed files where the patch is not enough; for diffs over 400 lines follow the `codex-flow:context-discipline` no-raw-read rules.
 2. Review in order: conformance → quality → security, per the loaded skills.
 3. Read the tool result's `accepted` verdict first (`true` only when the run succeeded AND its
@@ -366,21 +366,18 @@ in step 8, after the last task.
    file:line, expected vs observed). If `codex_continue` fails because the
    recorded session is gone (expired or compacted), fall back to a fresh `codex_execute` fix task
    that embeds the finding text plus the task's `.codex-flow/CONTEXT-T<n>.md` slice; never hand-edit
-   Codex's code. The fallback `codex_execute` also passes the same `verifyCommand`. Then re-review. Repeat up to 3 rounds per task.
+   Codex's code (the only exception is the after-3-rounds hand-fix in Rules). The fallback `codex_execute` also passes the same `verifyCommand`. Then re-review. Repeat up to 3 rounds per task.
 6. **Plan drift**: when a finding traces to the PLAN being wrong (wrong architecture, missed
    requirement) rather than Codex mis-implementing it, do NOT burn review rounds. Run this
-   plan-change transaction before execution resumes: FIRST durably set
-   `backlogApproved: no (plan drift <ISO date>)` and `phase: backlog` in STATE.md → amend PLAN.md
+   plan-change transaction before execution resumes: FIRST run `flow-state plan-drift` → amend PLAN.md
    with user approval → write an impact analysis listing which done and pending tasks the change
    touches → update the affected
    TASKS.md `Steps` / `Files` / `Requirements` / `Acceptance` fields → re-run
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md --plan .codex-flow/PLAN.md`
-   (If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.) plus the `plan-backlog` backlog sanity checks → regenerate affected slices → recompute waves →
-   get backlog re-approval → only then restore
-   `backlogApproved: yes (<ISO 8601 timestamp>)` and return `phase` to `execution`. Improvement
-   tasks appended at the improvement decision gate go through the same mini-transaction — state
-   invalidation first, impact analysis, coverage lint, backlog sanity checks, re-approval, then
-   approval and phase restoration — before they are scheduled.
+   plus the `plan-backlog` backlog sanity checks → regenerate affected slices → recompute waves →
+   get backlog re-approval → only then run `flow-state approve backlog` then `flow-state advance`. Improvement
+   tasks appended at the improvement decision gate go through the same mini-transaction — impact analysis,
+   coverage lint, backlog sanity checks, re-approval, then `flow-state approve backlog` and `flow-state advance` — before they are scheduled.
 7. **If clean**: complete the durable handoff while the task remains `in-progress`. In sequential
    mode first set `taskStage handoff` with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set taskStage handoff`
    (parallel mode does this once per wave in Step 3.8).
@@ -397,8 +394,8 @@ in step 8, after the last task.
    **Parallel mode**: follow `codex-flow:parallel-execution`'s wave workflow — always commit each
    passed worktree task, and after the wave merge and passing integration review the coordinator
    appends the schema blocks and takes the wave compaction point.
-8. **After the last task**: set `phase` to `review` with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set phase review` (the only place
-   `phase: review` is written) and reset `wave -`. Then do a whole-feature dual review — Claude's pass PLUS a required
+8. **After the last task**: `flow-state advance` moves `execution → review`; repeat after improvement tasks (only place `phase: review` is written)
+   and set `wave -`, then do a dual review — Claude's pass PLUS required
    `mcp__codex__codex_review`. Review the baseline-to-working-tree diff with
    `git diff runBaselineRef` (the one-argument form), taking `runBaselineRef` from
    `.codex-flow/STATE.md`; never use a resume-point ref for final review. This includes
@@ -415,7 +412,7 @@ in step 8, after the last task.
    full test suite, AND verify the feature end-to-end by exercising the changed behavior (run the
    app/flow, not only unit tests). Re-run
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md --plan .codex-flow/PLAN.md`;
-   If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand. Walk the effective
+   Walk the effective
    REQUIREMENTS.md set ID-by-ID, reporting met/not-met with evidence (test name, file, or
    demonstrated behavior); any not-met ID blocks completion. Then summarize the delivered change,
    remaining risks, and suggest a commit message. With per-task checkpoint commits, offer to squash
@@ -429,25 +426,26 @@ in step 8, after the last task.
 9. **Improvement decision gate**: run it per `codex-flow:review-dual`, which carries the whole gate
    (pending-entry definition, the missing-ledger "no improvements" case, slicing approved items into
    `.codex-flow/TASKS.md` with `(approved: T<n>)` / `(declined)` ledger markers, and the no-re-trigger
-   rule for gate-spawned tasks). Before appending any approved task, FIRST durably set
-   `backlogApproved: no (improvement tasks <ISO date>)` and `phase: backlog` in STATE.md. Slice
+   rule for gate-spawned tasks). Before appending any approved task, FIRST run `flow-state improvement-gate`. Slice
    approved items into new tasks appended to `.codex-flow/TASKS.md`.
    Run the impact analysis, the coverage lint with `--plan .codex-flow/PLAN.md`, and backlog sanity
    checks, then get backlog re-approval;
-   only afterward restore `backlogApproved: yes (<ISO 8601 timestamp>)` and return `phase` to
-   `execution` before scheduling the new tasks, which run through the normal Phase 4 → Phase 5 loop.
+   only afterward run `flow-state approve backlog` then `flow-state advance` before scheduling the new tasks, which run
+   through the normal Phase 4 → Phase 5 loop.
    After the improvement decision gate has fully resolved — all approved improvement tasks have
    been executed and reviewed, or no improvements are pending — and just before delivering the
    final summary, generate `cost.md` from the project root per `codex-flow:session-report`. Read
    `<session-start ISO>` from PLAN.md's recorded `- Session start: <ISO 8601>` line, falling back to
    the report-dir timestamp in local time, and run:
-   `node "${CLAUDE_PLUGIN_ROOT}/scripts/session-cost.mjs" --since "<session-start ISO>" --cwd "$PWD"`
-   If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand. Embed its output in `cost.md`; always include the Claude
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/session-cost.mjs" --since "<session-start ISO>" --session <task session ids…> --session <review session ids…>`
+   using every task `- Session:` id and every `Codex review session:` id recorded in `reviews.md`;
+   use `--cwd <project root>` only when no session id exists.
+   Embed its output in `cost.md`; always include the Claude
    qualitative section, never fabricate numbers, and never embed raw stderr.
    Generate `SUMMARY.md` in the report dir per `codex-flow:session-report` and mention both
    reports in the final delivery summary. Only after the improvement gate and all final review, requirement,
-   cost, report, and delivery gates complete, set `phase` in `.codex-flow/STATE.md` to `complete`
-   with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set phase complete`.
+   cost, report, and delivery gates complete, run `flow-state advance` until `phase: complete`
+   (twice when improvement tasks returned the run to `execution`).
 10. **Retro**: per `codex-flow:skill-selection` Step 8, if the flow produced reusable domain
    knowledge no indexed skill covers, offer to save it as a new skill in the local library and
    rebuild the index.

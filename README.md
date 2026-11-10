@@ -214,8 +214,8 @@ missing or exits non-zero the flow stops and asks for a plugin reinstall instead
 - `.codex-flow/REQUIREMENTS.md` records confirmed acceptance criteria verbatim with atomic
   `R<n>.<m>` IDs. Mid-run changes append confirmed `ADDED`/`MODIFIED`/`REMOVED` Deltas instead of
   rewriting history, and reset affected downstream approvals.
-- `.codex-flow/STATE.md` is the resume authority instead of file existence. Its 10-key run state
-  tracks the phase, three approvals, immutable `runBaselineRef` / known-red / dirty-baseline values,
+- `.codex-flow/STATE.md` is the resume authority instead of file existence. Its 14-key run state
+  tracks the phase and approvals (changed through typed `flow-state` commands), immutable `runBaselineRef` / known-red / dirty-baseline values,
   checkpoint choice, execution mode, and a separate `resumeHead`.
 - `scripts/requirements-coverage.mjs` rejects uncited or unknown criterion IDs at the Phase 3 gate;
   final review then walks every ID and records met/not-met with evidence.

@@ -431,6 +431,109 @@ describe('renderMarkdown', () => {
 })
 
 describe('--session filter (R5.2)', () => {
+  const writeSessionFixture = (logPath: string): void => {
+    const entries = [
+      makeEntry({ sessionId: 'E1', tool: 'codex_execute' }),
+      makeEntry({ sessionId: 'C1', tool: 'codex_continue', cwd: '/workspace/worktree' }),
+      makeEntry({ sessionId: 'R1', tool: 'codex_review', cwd: '/workspace/worktree' }),
+      makeEntry({ sessionId: 'R2', tool: 'codex_review' }),
+    ]
+    writeFileSync(logPath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''))
+  }
+
+  test('counts executor and reviewer runs when all session ids are supplied', () => {
+    // Arrange
+    const logPath = makeTempLogPath()
+    writeSessionFixture(logPath)
+
+    // Act
+    const result = runScript(
+      [
+        '--since',
+        '2026-07-23',
+        '--json',
+        '--session',
+        'E1',
+        '--session',
+        'C1',
+        '--session',
+        'R1',
+        '--session',
+        'R2',
+      ],
+      logPath,
+    )
+    const aggregate = JSON.parse(result.stdout) as {
+      totalRuns: number
+      totalTokens: { input: number; cachedInput: number; output: number; reasoningOutput: number }
+      byTool: Record<string, { runs: number }>
+    }
+
+    // Assert
+    expect(result.status).toBe(0)
+    expect(aggregate.totalRuns).toBe(4)
+    expect(aggregate.totalTokens).toEqual({ input: 40, cachedInput: 20, output: 16, reasoningOutput: 8 })
+    expect(aggregate.byTool).toEqual({
+      codex_continue: { runs: 1 },
+      codex_execute: { runs: 1 },
+      codex_review: { runs: 2 },
+    })
+  })
+
+  test('omits reviewer runs when only executor session ids are supplied', () => {
+    // Arrange
+    const logPath = makeTempLogPath()
+    writeSessionFixture(logPath)
+
+    // Act
+    const result = runScript(['--since', '2026-07-23', '--json', '--session', 'E1', '--session', 'C1'], logPath)
+    const aggregate = JSON.parse(result.stdout) as { totalRuns: number; byTool: Record<string, { runs: number }> }
+
+    // Assert
+    expect(result.status).toBe(0)
+    expect(aggregate.totalRuns).toBe(2)
+    expect(aggregate.byTool).toEqual({ codex_continue: { runs: 1 }, codex_execute: { runs: 1 } })
+  })
+
+  test('uses cwd as a fallback and omits the run recorded under another cwd', () => {
+    // Arrange
+    const logPath = makeTempLogPath()
+    writeSessionFixture(logPath)
+
+    // Act
+    const result = runScript(['--since', '2026-07-23', '--json', '--cwd', '/workspace/project'], logPath)
+    const aggregate = JSON.parse(result.stdout) as { totalRuns: number; byTool: Record<string, { runs: number }> }
+
+    // Assert
+    expect(result.status).toBe(0)
+    expect(aggregate.totalRuns).toBe(2)
+    expect(aggregate.byTool).toEqual({ codex_execute: { runs: 1 }, codex_review: { runs: 1 } })
+  })
+
+  test('applies since before session matching and excludes an older listed session', () => {
+    // Arrange
+    const logPath = makeTempLogPath()
+    const entries = [
+      makeEntry({ sessionId: 'E1', ts: '2026-07-22T23:59:59Z' }),
+      makeEntry({ sessionId: 'C1', tool: 'codex_continue' }),
+      makeEntry({ sessionId: 'R1', tool: 'codex_review' }),
+      makeEntry({ sessionId: 'R2', tool: 'codex_review' }),
+    ]
+    writeFileSync(logPath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''))
+
+    // Act
+    const result = runScript(
+      ['--since', '2026-07-23', '--json', '--session', 'E1', '--session', 'C1', '--session', 'R1', '--session', 'R2'],
+      logPath,
+    )
+    const aggregate = JSON.parse(result.stdout) as { totalRuns: number; totalTokens: { input: number } }
+
+    // Assert
+    expect(result.status).toBe(0)
+    expect(aggregate.totalRuns).toBe(3)
+    expect(aggregate.totalTokens.input).toBe(30)
+  })
+
   test('parseArgs collects repeatable --session values in order and de-duplicates', () => {
     const parsed = parseArgs(['--since', '2026-07-23', '--session', 'a', '--session', 'b', '--session', 'a'])
 

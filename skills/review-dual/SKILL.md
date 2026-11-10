@@ -5,6 +5,8 @@ description: Run independent Codex and Claude reviews, reconcile findings by evi
 
 # Dual Review (Codex + Claude)
 
+**Helpers**: required — none; optional — jev-client.mjs (off/missing key is a silent no-op).
+
 Give every task TWO independent reviews: Claude reviews with the review-conformance, review-quality, and review-security skills; Codex reviews via `mcp__codex__codex_review` in a fresh read-only session so it never grades its own homework. Compare both reviews and select the optimal resolution supported by evidence.
 
 ## Codex reviewer role (focus block)
@@ -69,7 +71,7 @@ The tool asks Codex to end with one fenced json block and parses it fail-closed 
 
 - Bucket the union of Claude's and Codex's findings into agreed, unique-to-one, and conflicting.
 - Verify EVERY finding with evidence: read the code and run the relevant test. Let the evidence determine the verdict, not the reviewer.
-- Feed verified findings into the normal `mcp__codex__codex_continue` round per review-feedback severity rules (CRITICAL/HIGH always; MEDIUM/LOW piggyback only).
+- Feed verified findings into the normal `mcp__codex__codex_continue` round per review-feedback severity rules (CRITICAL/HIGH always; MEDIUM/LOW piggyback only on a round already being sent for CRITICAL/HIGH; otherwise record them in `.codex-flow/IMPROVEMENTS.md`).
 - Use AskUserQuestion ONLY when a CRITICAL/HIGH finding cannot be verified either way, or two mutually exclusive valid fixes exist.
 - Give the verified outcome, including counts for each bucket and the resolution, to the single
   post-review Decision-log writer defined in `plan-architecture`; do not append from this review step.

@@ -5,6 +5,8 @@ description: Route small or read-only codex-flow work through a lite lane instea
 
 # Fast-path gate — small and analysis-only tasks
 
+**Helpers**: required — none; optional — jev-client.mjs (off/missing key is a silent no-op).
+
 The full six-phase flow exists for multi-task feature work. Its fixed overhead (interview docs,
 PLAN/TASKS/STATE, per-task slices, dual review, reports) is the wrong cost for a small or
 read-only task, so route those through one of two lite lanes instead. Evaluate this gate right

@@ -46,7 +46,7 @@ Decision log using the non-task event-block schema from `codex-flow:plan-archite
 - Run your own conformance → quality → security pass as usual, then apply the review-dual
   comparison protocol to the two reviews.
 - Fix verified CRITICAL/HIGH findings directly (there is no Codex session to route them to), re-run
-  the acceptance checks and the suite after every round, and keep the 3-round cap; after 3 rounds,
+  the task's acceptance checks after every round; the full suite runs once in the whole-feature review. Keep the 3-round cap; after 3 rounds,
   stop and re-plan the task with the user.
 - Report PIC for a fallback task is `claude (fallback: <reason>)` per `codex-flow:session-report`;
   `cost.md` reports measured Codex cost for the run's Codex tasks only and says so.

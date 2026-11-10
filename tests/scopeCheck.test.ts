@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, describe, expect, test, vi } from 'vitest'
@@ -13,6 +13,7 @@ import {
   isExcludedPath,
   main,
   parseCliArgs,
+  parseRawDiff,
   parseTaskFilesField,
   scopeCheck,
 } from '../scripts/scope-check.mjs'
@@ -62,6 +63,7 @@ function makeRepo(tasksText = TASKS): { directory: string; base: string } {
   git(directory, 'init', '-q')
   git(directory, 'config', 'user.email', 'test@example.com')
   git(directory, 'config', 'user.name', 'test')
+  git(directory, 'config', 'core.fileMode', 'true')
   mkdirSync(join(directory, 'scripts'))
   mkdirSync(join(directory, 'tests'))
   mkdirSync(join(directory, '.codex-flow'))
@@ -469,6 +471,145 @@ describe('collectChangedPaths', () => {
   test('rejects a base that is not a git object name', () => {
     expect(() => collectChangedPaths('HEAD~1', process.cwd())).toThrow(
       'base must be a git object name',
+    )
+  })
+
+  test.skipIf(process.platform === 'win32')('ignores a tracked mode-only change', () => {
+    // Arrange
+    const { directory, base } = makeRepo()
+    chmodSync(join(directory, 'src.ts'), 0o755)
+
+    // Act
+    const changed = collectChangedPaths(base, directory)
+
+    // Assert
+    expect(changed).toEqual([])
+  })
+
+  test.skipIf(process.platform === 'win32')('keeps a tracked content and mode change', () => {
+    // Arrange
+    const { directory, base } = makeRepo()
+    writeFileSync(join(directory, 'src.ts'), '// changed\n')
+    chmodSync(join(directory, 'src.ts'), 0o755)
+
+    // Act
+    const changed = collectChangedPaths(base, directory)
+
+    // Assert
+    expect(changed).toEqual(['src.ts'])
+  })
+
+  test('still returns an untracked file', () => {
+    // Arrange
+    const { directory, base } = makeRepo()
+    writeFileSync(join(directory, 'untracked.txt'), 'new\n')
+
+    // Act
+    const changed = collectChangedPaths(base, directory)
+
+    // Assert
+    expect(changed).toEqual(['untracked.txt'])
+  })
+
+  test('returns a deleted committed empty file', () => {
+    // Arrange
+    const { directory } = makeRepo()
+    writeFileSync(join(directory, 'empty.txt'), '')
+    git(directory, 'add', 'empty.txt')
+    git(directory, 'commit', '-q', '-m', 'empty file')
+    const base = git(directory, 'rev-parse', 'HEAD').trim()
+    execFileSync('git', ['rm', '-q', 'empty.txt'], { cwd: directory })
+
+    // Act
+    const changed = collectChangedPaths(base, directory)
+
+    // Assert
+    expect(changed).toEqual(['empty.txt'])
+  })
+
+  test('returns a staged new empty file', () => {
+    // Arrange
+    const { directory, base } = makeRepo()
+    writeFileSync(join(directory, 'empty.txt'), '')
+    git(directory, 'add', 'empty.txt')
+
+    // Act
+    const changed = collectChangedPaths(base, directory)
+
+    // Assert
+    expect(changed).toEqual(['empty.txt'])
+  })
+})
+
+describe('parseRawDiff', () => {
+  const oldId = 'a'.repeat(40)
+  const newId = 'b'.repeat(40)
+
+  test('drops mode-only records and keeps content changes', () => {
+    // Arrange
+    const raw = [
+      `:100644 100755 ${oldId} ${oldId} M`,
+      'mode-only.txt',
+      `:100644 100644 ${oldId} ${newId} M`,
+      'content.txt',
+      `:100644 100755 ${oldId} ${newId} M`,
+      'content-and-mode.txt',
+    ].join('\0')
+
+    // Act
+    const paths = parseRawDiff(raw)
+
+    // Assert
+    expect(paths).toEqual(['content.txt', 'content-and-mode.txt'])
+  })
+
+  test('keeps a content change whose new id is all zeros', () => {
+    const raw = `:100644 100644 ${oldId} ${'0'.repeat(40)} M\0content.txt\0`
+    expect(parseRawDiff(raw)).toEqual(['content.txt'])
+  })
+
+  test('keeps additions and deletions even when numstat has zero lines', () => {
+    // Arrange
+    const raw = [
+      `:100644 000000 ${oldId} ${'0'.repeat(40)} D`,
+      'deleted.txt',
+      `:000000 100644 ${'0'.repeat(40)} ${newId} A`,
+      'added.txt',
+    ].join('\0')
+
+    // Act
+    const paths = parseRawDiff(raw, { zeroLinePaths: new Set(['deleted.txt', 'added.txt']) })
+
+    // Assert
+    expect(paths).toEqual(['deleted.txt', 'added.txt'])
+  })
+
+  test('uses zero-line paths only for regular-file mode-only modifications', () => {
+    // Arrange
+    const raw = [
+      `:100644 100755 ${oldId} ${newId} M`,
+      'confirmed.txt',
+      `:100644 100755 ${oldId} ${newId} M`,
+      'unconfirmed.txt',
+      `:100644 120000 ${oldId} ${newId} M`,
+      'type-change.txt',
+    ].join('\0')
+
+    // Act
+    const paths = parseRawDiff(raw, { zeroLinePaths: new Set(['confirmed.txt', 'type-change.txt']) })
+
+    // Assert
+    expect(paths).toEqual(['unconfirmed.txt', 'type-change.txt'])
+  })
+
+  test('returns an empty list for empty output', () => {
+    expect(parseRawDiff('')).toEqual([])
+  })
+
+  test('rejects non-string and malformed output', () => {
+    expect(() => parseRawDiff(undefined)).toThrow(TypeError)
+    expect(() => parseRawDiff(':100644 100644 bad\0file.txt\0')).toThrow(
+      'rawOutput contains a malformed record',
     )
   })
 })

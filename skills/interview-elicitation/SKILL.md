@@ -5,6 +5,8 @@ description: Requirements elicitation framework for the Interview phase — six 
 
 # Requirements Elicitation
 
+**Helpers**: required — requirements-coverage.mjs, flow-state.mjs (helper rule: missing → STOP and tell the user to reinstall the codex-flow plugin; non-zero exit → surface the error and STOP).
+
 Goal: leave the interview with requirements so unambiguous that a different engineer could implement them without asking anything.
 
 ## Six domains to cover (minimum one confirmed answer each)
@@ -64,11 +66,13 @@ confirmation and append a timestamped delta under `## Deltas` using this format:
 
 Treat the original requirement sections plus all deltas as the effective requirement set in every
 downstream phase. The user's delta confirmation refreshes `requirementsApproved` in
-`.codex-flow/STATE.md` to `yes (delta <ISO date>)`. At the same time, reset `planApproved` and
-`backlogApproved` to `no (delta <ISO date>)` and set `phase` to `plan`; no earlier plan or backlog
-approval survives a requirement change.
+`.codex-flow/STATE.md` to `yes (delta <ISO date>)`. Record the delta by running
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" requirement-delta`, which sets
+`requirementsApproved` to `yes (delta <date>)`, resets `planApproved` and `backlogApproved` to
+`no (delta <date>)`, and returns `phase` to `plan`; no earlier plan or backlog approval survives a
+requirement change.
 
 Before execution resumes, re-run Phase 2 impact analysis against the effective set and obtain plan
 approval, rebuild the affected tasks, run
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`,
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md --plan .codex-flow/PLAN.md`,
 and obtain backlog re-approval. Stop on any coverage violation.

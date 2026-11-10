@@ -46,6 +46,7 @@ const GIT_OBJECT_NAME = /^[0-9a-fA-F]{4,64}$/
 const CASE_INSENSITIVE_PLATFORMS = new Set(['darwin', 'win32'])
 // Tokens a plan author leaves behind when the file list is not filled in yet.
 const PLACEHOLDER_TOKENS = new Set(['—', '–', '-', 'none', 'n/a', 'tbd'])
+const RAW_DIFF_RECORD = /^:([0-7]{6}) ([0-7]{6}) ([0-9a-f]{40}) ([0-9a-f]{40}) ([A-Z])$/i
 
 /** Raised when a task's `Files:` declaration cannot be trusted (empty, placeholder, missing task). */
 export class ScopeDeclarationError extends Error {
@@ -187,14 +188,49 @@ export function scopeCheck(taskId, base, tasksText, changedPaths, platform = pro
   return { allowed, changed, extras }
 }
 
-/** Run one git command rooted at cwd and split its NUL-separated path output. */
-function gitPaths(args, cwd) {
-  const output = execFileSync('git', args, {
+/** Parse raw Git records and omit records that change only the file mode. */
+export function parseRawDiff(rawOutput, { zeroLinePaths = new Set() } = {}) {
+  if (typeof rawOutput !== 'string') throw new TypeError('rawOutput must be a string')
+  if (rawOutput === '') return []
+
+  const fields = rawOutput.split('\0')
+  if (fields.at(-1) === '') fields.pop()
+  if (fields.length % 2 !== 0) throw new TypeError('rawOutput contains a malformed record')
+
+  const paths = []
+  for (let index = 0; index < fields.length; index += 2) {
+    const match = fields[index].match(RAW_DIFF_RECORD)
+    const filePath = fields[index + 1]
+    if (!match || filePath === '') throw new TypeError('rawOutput contains a malformed record')
+    const [, oldMode, newMode, oldId, newId, status] = match
+    const regularFileModes = new Set(['100644', '100755'])
+    const isModeOnlyModification =
+      status === 'M' &&
+      oldMode !== newMode &&
+      regularFileModes.has(oldMode) &&
+      regularFileModes.has(newMode) &&
+      (oldId === newId || zeroLinePaths.has(filePath))
+    if (isModeOnlyModification) continue
+    paths.push(filePath)
+  }
+  return paths
+}
+
+/** Run one git command rooted at cwd and return its NUL-separated output. */
+function gitOutput(args, cwd) {
+  return execFileSync('git', args, {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  return output.split('\0').filter(Boolean)
+}
+
+/** Return paths whose worktree diff has no content-line changes. */
+function gitModeOnlyPaths(base, cwd) {
+  return gitOutput(['diff', '--numstat', '-z', '--no-renames', base], cwd)
+    .split('\0')
+    .filter((entry) => entry.startsWith('0\t0\t'))
+    .map((entry) => entry.slice('0\t0\t'.length))
 }
 
 /** Tracked changes since base plus untracked, non-ignored files. Throws on git failure. */
@@ -202,9 +238,16 @@ export function collectChangedPaths(base, cwd = process.cwd()) {
   if (typeof base !== 'string' || !GIT_OBJECT_NAME.test(base)) {
     throw new TypeError(`base must be a git object name (got: ${base})`)
   }
+  const zeroLinePaths = new Set(gitModeOnlyPaths(base, cwd))
+  const trackedPaths = parseRawDiff(
+    gitOutput(['diff', '--raw', '-z', '--no-renames', '--abbrev=40', base], cwd),
+    { zeroLinePaths },
+  )
   return [
-    ...gitPaths(['diff', '--name-only', '-z', base], cwd),
-    ...gitPaths(['ls-files', '-z', '--others', '--exclude-standard'], cwd),
+    ...trackedPaths,
+    ...gitOutput(['ls-files', '-z', '--others', '--exclude-standard'], cwd)
+      .split('\0')
+      .filter(Boolean),
   ]
 }
 

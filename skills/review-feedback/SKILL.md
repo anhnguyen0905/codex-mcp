@@ -46,11 +46,11 @@ Review findings to fix (address ALL, re-run the targeted tests for the touched f
 2. [MEDIUM] src/api/users.ts:15 — validation duplicates `validateId` from src/lib/validate.ts; use it.
 ```
 
-Rules: exact file:line · observed vs expected behavior · which criterion/standard it violates · what "fixed" looks like. Group by file. Send CRITICAL/HIGH always; MEDIUM/LOW piggyback only.
+Rules: exact file:line · observed vs expected behavior · which criterion/standard it violates · what "fixed" looks like. Group by file. Send CRITICAL/HIGH always; MEDIUM/LOW piggyback only on a round already being sent for CRITICAL/HIGH; otherwise record them in `.codex-flow/IMPROVEMENTS.md`.
 
 ## Round discipline
 
 - Re-review after every round: pass the same `verifyCommand` on the `codex_continue` so acceptance re-runs mechanically, read `accepted`/`verification` from the fix-round result, verify each finding is actually fixed, and check nothing new broke — diff the diff.
 - Max 3 rounds per task. Persisting findings after 3 rounds → stop sending to Codex; tell the user, then either fix by hand (flagging it) or re-plan the task.
 - Never fix Codex's code yourself during rounds 1–3 — parallel edits desync the Codex session's view of the workspace.
-- Clean review → mark the task done, state what was verified (verification passed, criteria met) — not just "looks good".
+- Clean review → proceed to the Phase 5 step 7 durable handoff, where `done` is the last write; state what was verified (verification passed, criteria met) — not just "looks good".

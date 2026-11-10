@@ -19,7 +19,6 @@ export const STATE_KEYS = Object.freeze([
   'taskStage',
   'wave',
 ])
-
 export const PHASES = Object.freeze([
   'interview',
   'plan',
@@ -28,7 +27,6 @@ export const PHASES = Object.freeze([
   'review',
   'complete',
 ])
-
 export const TASK_STAGES = Object.freeze([
   'idle',
   'launching',
@@ -37,18 +35,14 @@ export const TASK_STAGES = Object.freeze([
   'handoff',
   'merge-conflict',
 ])
-
 export const TASK_STATUSES = Object.freeze(['pending', 'in-progress', 'done', 'failed'])
-
 export const TERMINAL_TASK_STATUSES = Object.freeze(['done', 'failed'])
-
 export const TASK_TRANSITIONS = Object.freeze({
   pending: Object.freeze(['in-progress']),
   'in-progress': Object.freeze(['done', 'failed', 'pending']),
   done: Object.freeze([]),
   failed: Object.freeze(['pending']),
 })
-
 const STATE_KEY_SET = new Set(STATE_KEYS)
 const PHASE_SET = new Set(PHASES)
 const TASK_STAGE_SET = new Set(TASK_STAGES)
@@ -60,15 +54,45 @@ const STATE_LINE = /^- ([A-Za-z][A-Za-z0-9]*):[ \t]*([^\r\n]*)(\r\n|\n|$)/gm
 const TASK_HEADING = /^##[ \t]+(T\d+):[^\r\n]*(?:\r\n|\n|$)/gm
 const STATUS_LINE = /^- Status:[ \t]*([^\r\n]*)(\r\n|\n|$)/gm
 const ISO_8601 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):?(\d{2}))$/
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
+const APPROVAL_KEYS = Object.freeze(['requirementsApproved', 'planApproved', 'backlogApproved'])
+const TYPED_APPROVAL_COMMANDS = Object.freeze({
+  phase: 'advance or a typed transition command',
+  requirementsApproved: 'approve requirements or requirement-delta',
+  planApproved: 'approve plan or requirement-delta',
+  backlogApproved: 'approve backlog, plan-drift, or improvement-gate',
+})
+const ADVANCE_RULES = Object.freeze({
+  interview: Object.freeze({ next: 'plan', guard: 'requirementsApproved' }),
+  plan: Object.freeze({ next: 'backlog', guard: 'planApproved' }),
+  backlog: Object.freeze({ next: 'execution', guard: 'backlogApproved' }),
+  execution: Object.freeze({ next: 'review', guard: 'terminalTasks' }),
+  review: Object.freeze({ next: 'complete', guard: 'allApprovalsAndTerminalTasks' }),
+})
+const APPROVE_RULES = Object.freeze({
+  requirements: Object.freeze({ phase: 'interview', key: 'requirementsApproved', artifact: 'REQUIREMENTS.md' }),
+  plan: Object.freeze({ phase: 'plan', key: 'planApproved', artifact: 'PLAN.md' }),
+  backlog: Object.freeze({ phase: 'backlog', key: 'backlogApproved', artifact: 'TASKS.md' }),
+})
+const NON_LINEAR_RULES = Object.freeze({
+  'requirement-delta': Object.freeze({ phases: Object.freeze(['plan', 'backlog', 'execution', 'review']) }),
+  'plan-drift': Object.freeze({ phases: Object.freeze(['execution', 'review']) }),
+  'improvement-gate': Object.freeze({ phases: Object.freeze(['execution', 'review']) }),
+})
 
+/** Error raised when a typed flow transition guard rejects a command. */
+export class TransitionRejectedError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'TransitionRejectedError'
+  }
+}
 function assertString(value, label) {
   if (typeof value !== 'string') throw new TypeError(`${label} must be a string`)
 }
-
 function lineEndingOf(text) {
   return text.includes('\r\n') ? '\r\n' : '\n'
 }
-
 function stateLinesOf(text) {
   return [...text.matchAll(STATE_LINE)].map((match) => ({
     key: match[1],
@@ -79,7 +103,6 @@ function stateLinesOf(text) {
     ending: match[3],
   }))
 }
-
 /** Parse canonical state lines into a key/value object. Duplicate keys are rejected. */
 export function parseState(text) {
   assertString(text, 'text')
@@ -92,7 +115,6 @@ export function parseState(text) {
   }
   return Object.fromEntries(entries)
 }
-
 function stateValueError(key, value) {
   if (key === 'phase' && !PHASE_SET.has(value)) return `must be one of ${PHASES.join('|')}`
   if (key === 'taskStage' && !TASK_STAGE_SET.has(value)) {
@@ -106,7 +128,6 @@ function stateValueError(key, value) {
   }
   return null
 }
-
 function validateStateKeyValue(key, value) {
   assertString(key, 'key')
   assertString(value, 'value')
@@ -117,7 +138,6 @@ function validateStateKeyValue(key, value) {
   const reason = stateValueError(key, value)
   if (reason) throw new Error(`invalid ${key} value ${JSON.stringify(value)}: ${reason}`)
 }
-
 function insertionForMissingKey(text, lines, key, value) {
   const lineEnding = lineEndingOf(text)
   const stateLine = `- ${key}: ${value}`
@@ -137,7 +157,6 @@ function insertionForMissingKey(text, lines, key, value) {
   const suffix = text.endsWith('\n') ? lineEnding : ''
   return { at: text.length, text: `${prefix}${stateLine}${suffix}` }
 }
-
 /** Return STATE.md text with exactly the selected key line updated or inserted. */
 export function setStateKey(text, key, value) {
   assertString(text, 'text')
@@ -152,16 +171,180 @@ export function setStateKey(text, key, value) {
   const insertion = insertionForMissingKey(text, lines, key, value)
   return `${text.slice(0, insertion.at)}${insertion.text}${text.slice(insertion.at)}`
 }
-
+function stateValueOf(state, key) {
+  const value = parseState(state)[key]
+  if (value === undefined) throw new Error(`missing state key ${key}`)
+  return value
+}
+function rejectTransition(message) {
+  throw new TransitionRejectedError(message)
+}
+function approvalIsYes(value) {
+  return value.startsWith('yes')
+}
+function requirePhase(state, expected, command) {
+  const phase = stateValueOf(state, 'phase')
+  if (phase !== expected) rejectTransition(`${command} requires phase ${expected} (was ${phase})`)
+}
+function requireApprovals(state, keys, command) {
+  for (const key of keys) {
+    if (!approvalIsYes(stateValueOf(state, key))) {
+      rejectTransition(`${command} requires ${key} to start with yes`)
+    }
+  }
+}
+function applyStateChanges(text, changes) {
+  return changes.reduce((state, [key, value]) => setStateKey(state, key, value), text)
+}
+function timestampValue(at) {
+  const timestamp = at ?? new Date().toISOString()
+  validateTimestamp(timestamp)
+  return timestamp
+}
+function dateValue(at) {
+  const date = at ?? new Date().toISOString().slice(0, 10)
+  if (ISO_DATE.test(date)) {
+    const [, year, month, day] = date.match(ISO_DATE)
+    const parsed = new Date(`${date}T00:00:00.000Z`)
+    if (parsed.getUTCFullYear() === Number(year)
+      && parsed.getUTCMonth() + 1 === Number(month)
+      && parsed.getUTCDate() === Number(day)) return date
+  } else {
+    validateTimestamp(date)
+    return date.slice(0, 10)
+  }
+  throw new Error(`invalid ISO 8601 timestamp ${JSON.stringify(date)}`)
+}
+function phaseApprovalKeys(phase) {
+  const phaseIndex = PHASES.indexOf(phase)
+  if (phaseIndex < 0) throw new Error(`invalid phase ${JSON.stringify(phase)}`)
+  return APPROVAL_KEYS.slice(0, Math.max(0, phaseIndex))
+}
+function ensureTargetPhase(currentPhase, targetPhase) {
+  if (!PHASE_SET.has(targetPhase)) {
+    throw new Error(`invalid phase ${JSON.stringify(targetPhase)}`)
+  }
+  if (PHASES.indexOf(targetPhase) > PHASES.indexOf(currentPhase)) {
+    rejectTransition(`resume cannot move phase forward from ${currentPhase} to ${targetPhase}`)
+  }
+}
+/** Return a new state text with one typed approval recorded. */
+export function approveState(text, gate, {
+  at,
+  delta = false,
+  checkpointCommits,
+  executionMode,
+} = {}) {
+  assertString(text, 'text')
+  assertString(gate, 'gate')
+  const rule = APPROVE_RULES[gate]
+  if (!rule) throw new Error(`unknown approval ${gate}`)
+  if (gate !== 'backlog' && (checkpointCommits !== undefined || executionMode !== undefined)) {
+    throw new Error('--checkpoint-commits and --execution-mode are only valid for approve backlog')
+  }
+  const phase = stateValueOf(text, 'phase')
+  if (gate === 'requirements' && delta) {
+    if (phase !== 'plan') rejectTransition(`approve requirements --delta requires phase plan (was ${phase})`)
+  } else {
+    requirePhase(text, rule.phase, `approve ${gate}`)
+  }
+  const earlier = gate === 'plan'
+    ? ['requirementsApproved']
+    : gate === 'backlog' ? ['requirementsApproved', 'planApproved'] : []
+  requireApprovals(text, earlier, `approve ${gate}`)
+  if (delta && gate !== 'requirements') rejectTransition(`--delta is only valid for approve requirements`)
+  const timestamp = delta ? dateValue(at) : timestampValue(at)
+  const value = delta ? `yes (delta ${timestamp})` : `yes (${timestamp})`
+  const changes = [[rule.key, value]]
+  if (gate === 'backlog' && checkpointCommits !== undefined) {
+    changes.push(['checkpointCommits', checkpointCommits])
+  }
+  if (gate === 'backlog' && executionMode !== undefined) {
+    changes.push(['executionMode', executionMode])
+  }
+  return applyStateChanges(text, changes)
+}
+function ensureTerminalTasks(tasksText, command) {
+  if (tasksText === null) rejectTransition(`${command} requires TASKS.md`)
+  const violations = terminalStatusViolations(tasksText)
+  if (violations.length > 0) rejectTransition(`${command} requires every task status to be done or failed`)
+}
+/** Return a new state text after exactly one forward phase transition. */
+export function advanceState(text, { tasksText = null } = {}) {
+  assertString(text, 'text')
+  const phase = stateValueOf(text, 'phase')
+  const rule = ADVANCE_RULES[phase]
+  if (!rule) rejectTransition(`advance is not allowed from phase ${phase}`)
+  if (rule.guard === 'terminalTasks') {
+    requireStateSelectors(text, 'advance execution -> review')
+    ensureTerminalTasks(tasksText, 'advance execution -> review')
+  } else if (rule.guard === 'allApprovalsAndTerminalTasks') {
+    requireApprovals(text, APPROVAL_KEYS, 'advance review -> complete')
+    ensureTerminalTasks(tasksText, 'advance review -> complete')
+  } else {
+    requireApprovals(text, [rule.guard], `advance ${phase} -> ${rule.next}`)
+  }
+  return setStateKey(text, 'phase', rule.next)
+}
+function requireStateSelectors(text, command) {
+  if (stateValueOf(text, 'taskStage') !== 'idle') {
+    rejectTransition(`${command} requires taskStage idle`)
+  }
+  if (stateValueOf(text, 'currentTask') !== NO_SELECTOR) {
+    rejectTransition(`${command} requires currentTask -`)
+  }
+}
+function requireNonLinearPhase(text, command) {
+  const phase = stateValueOf(text, 'phase')
+  const rule = NON_LINEAR_RULES[command]
+  if (!rule.phases.includes(phase)) rejectTransition(`${command} requires phase ${rule.phases.join(' or ')} (was ${phase})`)
+}
+/** Return a new state text after recording a requirements delta. */
+export function requirementDeltaState(text, { at } = {}) {
+  assertString(text, 'text')
+  requireNonLinearPhase(text, 'requirement-delta')
+  const timestamp = dateValue(at)
+  return applyStateChanges(text, [
+    ['phase', 'plan'],
+    ['requirementsApproved', `yes (delta ${timestamp})`],
+    ['planApproved', `no (delta ${timestamp})`],
+    ['backlogApproved', `no (delta ${timestamp})`],
+  ])
+}
+function applyBacklogGate(text, command, marker, at) {
+  assertString(text, 'text')
+  requireNonLinearPhase(text, command)
+  const timestamp = dateValue(at)
+  return applyStateChanges(text, [
+    ['phase', 'backlog'],
+    ['backlogApproved', `no (${marker} ${timestamp})`],
+  ])
+}
+/** Return a new state text after recording plan drift. */
+export function planDriftState(text, { at } = {}) {
+  return applyBacklogGate(text, 'plan-drift', 'plan drift', at)
+}
+/** Return a new state text after recording an improvement gate. */
+export function improvementGateState(text, { at } = {}) {
+  return applyBacklogGate(text, 'improvement-gate', 'improvement tasks', at)
+}
+/** Return a new state text after recording a resume head and optional earlier phase. */
+export function resumeState(text, head, { phase } = {}) {
+  assertString(text, 'text')
+  assertString(head, 'head')
+  if (!head || /[\r\n]/.test(head)) throw new Error('resume head must be a non-empty single-line value')
+  const currentPhase = stateValueOf(text, 'phase')
+  const targetPhase = phase ?? currentPhase
+  ensureTargetPhase(currentPhase, targetPhase)
+  requireApprovals(text, phaseApprovalKeys(targetPhase), `resume to ${targetPhase}`)
+  const changes = [['resumeHead', head]]
+  if (phase !== undefined) changes.push(['phase', targetPhase])
+  return applyStateChanges(text, changes)
+}
 function singleValueOf(lines, key) {
   const matches = lines.filter((line) => line.key === key)
   return matches.length === 1 ? matches[0].value : null
 }
-
-/**
- * Relational violations across the selector keys. Each key must already be
- * present exactly once and per-key valid, so a malformed line is reported once.
- */
 function selectorViolations(lines) {
   const currentTask = singleValueOf(lines, 'currentTask')
   const taskStage = singleValueOf(lines, 'taskStage')
@@ -178,12 +361,6 @@ function selectorViolations(lines) {
   }
   return []
 }
-
-/**
- * Violations for tasks left non-terminal while the run claims to be complete.
- * A malformed section (no Status line, or more than one) is reported as its own
- * `tasks` violation so every later task is still validated.
- */
 function terminalStatusViolations(tasksText) {
   return taskSectionsOf(tasksText).flatMap((section) => {
     const matches = statusMatchesOf(tasksText, section)
@@ -201,12 +378,16 @@ function terminalStatusViolations(tasksText) {
     }]
   })
 }
-
-/**
- * Return all schema violations: per-key checks in canonical key order, then the
- * relational selector checks, then terminal task-status checks when `tasksText`
- * is supplied. Omitting `tasksText` preserves legacy STATE.md-only validation.
- */
+function approvalViolations(lines) {
+  const phase = singleValueOf(lines, 'phase')
+  if (!PHASE_SET.has(phase)) return []
+  const approvals = Object.fromEntries(APPROVAL_KEYS.map((key) => [key, singleValueOf(lines, key)]))
+  return phaseApprovalKeys(phase).flatMap((key) => (
+    approvals[key] !== null && approvalIsYes(approvals[key])
+      ? []
+      : [{ key, reason: `phase ${phase} requires ${key} to start with yes` }]
+  ))
+}
 export function checkState(text, { tasksText = null } = {}) {
   assertString(text, 'text')
   if (tasksText !== null && typeof tasksText !== 'string') {
@@ -224,9 +405,8 @@ export function checkState(text, { tasksText = null } = {}) {
   const taskViolations = isComplete && tasksText !== null
     ? terminalStatusViolations(tasksText)
     : []
-  return [...keyViolations, ...selectorViolations(lines), ...taskViolations]
+  return [...keyViolations, ...approvalViolations(lines), ...selectorViolations(lines), ...taskViolations]
 }
-
 function taskSectionsOf(text) {
   const headings = [...text.matchAll(TASK_HEADING)]
   return headings.map((heading, index) => ({
@@ -235,7 +415,6 @@ function taskSectionsOf(text) {
     end: headings[index + 1]?.index ?? text.length,
   }))
 }
-
 /** Every `- Status:` line inside one task section, with absolute offsets. */
 function statusMatchesOf(tasksText, section) {
   const block = tasksText.slice(section.start, section.end)
@@ -247,7 +426,6 @@ function statusMatchesOf(tasksText, section) {
     ending: match[2],
   }))
 }
-
 function statusLineOf(tasksText, section) {
   const matches = statusMatchesOf(tasksText, section)
   if (matches.length === 0) throw new Error(`task ${section.id} has no Status line`)
@@ -276,7 +454,6 @@ function validateTimestamp(at) {
     throw new Error(`invalid ISO 8601 timestamp ${JSON.stringify(at)}`)
   }
 }
-
 function transitionInsertionOf(text, statusLine) {
   let at = statusLine.end
   let ending = statusLine.ending
@@ -321,7 +498,6 @@ export function setTaskStatus(tasksText, id, status, { at = new Date().toISOStri
   const withTransition = `${tasksText.slice(0, insertion.at)}${transitionLine}${tasksText.slice(insertion.at)}`
   return `${withTransition.slice(0, statusLine.start)}- Status: ${status}${withTransition.slice(statusLine.contentEnd)}`
 }
-
 async function assertNotSymlink(targetPath, label) {
   try {
     const stats = await fs.lstat(targetPath)
@@ -332,7 +508,6 @@ async function assertNotSymlink(targetPath, label) {
     throw error
   }
 }
-
 async function writeFileAtomically(targetPath, contents, label) {
   const directory = path.dirname(targetPath)
   const temporaryPath = path.join(
@@ -352,8 +527,29 @@ async function writeFileAtomically(targetPath, contents, label) {
     throw error
   }
 }
-
-function parseOptions(args, positionalCount, allowedOptions) {
+async function createFileExclusively(targetPath, contents, label) {
+  const directory = path.dirname(targetPath)
+  const temporaryPath = path.join(directory, `.${path.basename(targetPath)}.${process.pid}.${randomUUID()}.tmp`)
+  try {
+    await fs.writeFile(temporaryPath, contents, { encoding: 'utf8', flag: 'wx' })
+    await assertNotSymlink(targetPath, label)
+    try {
+      await fs.link(temporaryPath, targetPath)
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+        rejectTransition(`init refuses to overwrite existing state file ${targetPath}`)
+      }
+      throw error
+    }
+  } finally {
+    try {
+      await fs.rm(temporaryPath, { force: true })
+    } catch {
+      // Preserve the primary create error when best-effort cleanup also fails.
+    }
+  }
+}
+function parseOptions(args, positionalCount, allowedOptions, flagOptions = new Set()) {
   const positionals = []
   const options = {}
   for (let index = 0; index < args.length; index += 1) {
@@ -364,6 +560,10 @@ function parseOptions(args, positionalCount, allowedOptions) {
     }
     if (!allowedOptions.has(argument)) throw new Error(`unknown option ${argument}`)
     if (Object.hasOwn(options, argument)) throw new Error(`duplicate option ${argument}`)
+    if (flagOptions.has(argument)) {
+      options[argument] = true
+      continue
+    }
     const value = args[index + 1]
     if (!value || value.startsWith('--')) throw new Error(`${argument} requires a value`)
     options[argument] = value
@@ -372,70 +572,222 @@ function parseOptions(args, positionalCount, allowedOptions) {
   if (positionals.length !== positionalCount) throw new Error('invalid arguments')
   return { positionals, options }
 }
-
+function requiredOption(options, name) {
+  const value = options[name]
+  if (!value) throw new Error(`${name} requires a value`)
+  return value
+}
+function createInitialState({ baseline, knownRed, dirtyBaseline = 'none', executor = 'codex' }) {
+  const values = {
+    phase: 'interview',
+    requirementsApproved: 'no',
+    planApproved: 'no',
+    backlogApproved: 'no',
+    runBaselineRef: baseline,
+    resumeHead: '',
+    knownRed,
+    checkpointCommits: '',
+    executionMode: 'undecided',
+    dirtyBaseline,
+    executor,
+    currentTask: '-',
+    taskStage: 'idle',
+    wave: '-',
+  }
+  for (const key of STATE_KEYS) validateStateKeyValue(key, values[key])
+  return [
+    '# codex-flow run state',
+    '',
+    '## Run state',
+    ...STATE_KEYS.map((key) => `- ${key}:${values[key] === '' ? '' : ` ${values[key]}`}`),
+    '',
+  ].join('\n')
+}
+async function assertArtifactExists(directory, filename) {
+  const artifact = path.join(directory, filename)
+  try {
+    const stats = await fs.lstat(artifact)
+    if (!stats.isFile()) rejectTransition(`approval requires regular file ${filename} in ${directory}`)
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      rejectTransition(`approval requires ${filename} in ${directory}`)
+    }
+    throw error
+  }
+} async function tasksForAdvance(stateText, tasksPath) {
+  const phase = stateValueOf(stateText, 'phase')
+  if (phase !== 'execution' && phase !== 'review') return null
+  try {
+    return await fs.readFile(tasksPath, 'utf8')
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      rejectTransition(`advance ${phase} requires TASKS.md`)
+    }
+    throw error
+  }
+}
+function setStateWithGuards(text, key, value) {
+  if (Object.hasOwn(TYPED_APPROVAL_COMMANDS, key)) {
+    rejectTransition(`${key} is controlled by ${TYPED_APPROVAL_COMMANDS[key]}`)
+  }
+  if (key === 'taskStage' && value !== 'idle' && stateValueOf(text, 'phase') !== 'execution') {
+    rejectTransition('non-idle taskStage is only allowed in phase execution')
+  }
+  return setStateKey(text, key, value)
+}
 function parseCliArgs(argv) {
   if (!Array.isArray(argv) || argv.some((argument) => typeof argument !== 'string')) {
     throw new TypeError('CLI args must be an array of strings')
   }
   const [command, ...args] = argv
+  const state = (options) => options['--state'] ?? '.codex-flow/STATE.md'
+  if (command === 'init') {
+    const parsed = parseOptions(args, 0, new Set([
+      '--state', '--baseline', '--known-red', '--dirty-baseline', '--executor',
+    ]))
+    return {
+      command,
+      state: state(parsed.options),
+      baseline: requiredOption(parsed.options, '--baseline'),
+      knownRed: requiredOption(parsed.options, '--known-red'),
+      dirtyBaseline: parsed.options['--dirty-baseline'],
+      executor: parsed.options['--executor'],
+    }
+  }
+  if (command === 'approve') {
+    const parsed = parseOptions(
+      args,
+      1,
+      new Set(['--state', '--at', '--delta', '--checkpoint-commits', '--execution-mode', '--dir']),
+      new Set(['--delta']),
+    )
+    const gate = parsed.positionals[0]
+    if (!Object.hasOwn(APPROVE_RULES, gate)) throw new Error(`unknown approval ${gate}`)
+    return {
+      command,
+      gate,
+      state: state(parsed.options),
+      at: parsed.options['--at'],
+      delta: parsed.options['--delta'] === true,
+      checkpointCommits: parsed.options['--checkpoint-commits'],
+      executionMode: parsed.options['--execution-mode'],
+      dir: parsed.options['--dir'] ?? '.codex-flow',
+    }
+  }
+  if (command === 'advance') {
+    const parsed = parseOptions(args, 0, new Set(['--state', '--tasks']))
+    return { command, state: state(parsed.options), tasks: parsed.options['--tasks'] ?? '.codex-flow/TASKS.md' }
+  }
+  if (NON_LINEAR_RULES[command]) {
+    const parsed = parseOptions(args, 0, new Set(['--state', '--at']))
+    return { command, state: state(parsed.options), at: parsed.options['--at'] }
+  }
+  if (command === 'resume') {
+    const parsed = parseOptions(args, 0, new Set(['--state', '--head', '--phase']))
+    const phase = parsed.options['--phase']
+    if (phase !== undefined && !PHASE_SET.has(phase)) throw new Error(`invalid phase ${JSON.stringify(phase)}`)
+    return { command, state: state(parsed.options), head: requiredOption(parsed.options, '--head'), phase }
+  }
   if (command === 'set') {
     const parsed = parseOptions(args, 2, new Set(['--state']))
-    return { command, key: parsed.positionals[0], value: parsed.positionals[1], state: parsed.options['--state'] ?? '.codex-flow/STATE.md' }
+    return { command, key: parsed.positionals[0], value: parsed.positionals[1], state: state(parsed.options) }
   }
   if (command === 'check') {
     const parsed = parseOptions(args, 0, new Set(['--state', '--tasks']))
-    return {
-      command,
-      state: parsed.options['--state'] ?? '.codex-flow/STATE.md',
-      tasks: parsed.options['--tasks'] ?? null,
-    }
+    return { command, state: state(parsed.options), tasks: parsed.options['--tasks'] ?? null }
   }
   if (command === 'task') {
     const parsed = parseOptions(args, 2, new Set(['--tasks', '--at']))
-    return { command, id: parsed.positionals[0], status: parsed.positionals[1], tasks: parsed.options['--tasks'] ?? '.codex-flow/TASKS.md', at: parsed.options['--at'] }
+    return {
+      command,
+      id: parsed.positionals[0],
+      status: parsed.positionals[1],
+      tasks: parsed.options['--tasks'] ?? '.codex-flow/TASKS.md',
+      at: parsed.options['--at'],
+    }
   }
-  throw new Error('usage: flow-state <set|check|task> ...')
+  throw new Error('usage: flow-state <init|approve|advance|requirement-delta|plan-drift|improvement-gate|resume|set|check|task> ...')
 }
-
 async function updateFile(filePath, update, label) {
   const text = await fs.readFile(filePath, 'utf8')
   const updated = update(text)
   await writeFileAtomically(filePath, updated, label)
 }
-
+async function runCheck(config, cwd) {
+  const tasksText = config.tasks ? await fs.readFile(path.resolve(cwd, config.tasks), 'utf8') : null
+  const violations = checkState(await fs.readFile(path.resolve(cwd, config.state), 'utf8'), { tasksText })
+  for (const violation of violations) console.error(`flow-state: violation: ${violation.key}: ${violation.reason}`)
+  return violations.length ? 1 : 0
+}
+async function runTypedCommand(config, cwd, statePath) {
+  if (config.command === 'approve') {
+    const directory = path.resolve(cwd, config.dir)
+    if (config.gate !== 'backlog'
+      && (config.checkpointCommits !== undefined || config.executionMode !== undefined)) {
+      throw new Error('--checkpoint-commits and --execution-mode are only valid for approve backlog')
+    }
+    await assertArtifactExists(directory, APPROVE_RULES[config.gate].artifact)
+    if (config.checkpointCommits !== undefined
+      && !['yes', 'no'].includes(config.checkpointCommits)) {
+      throw new Error('--checkpoint-commits must be yes or no')
+    }
+    if (config.executionMode !== undefined && /[\r\n]/.test(config.executionMode)) throw new Error('--execution-mode must be a single line')
+    await updateFile(statePath, (text) => approveState(text, config.gate, config), 'state file')
+    return 0
+  }
+  if (config.command === 'advance') {
+    const stateText = await fs.readFile(statePath, 'utf8')
+    const tasksText = await tasksForAdvance(stateText, path.resolve(cwd, config.tasks))
+    await writeFileAtomically(statePath, advanceState(stateText, { tasksText }), 'state file')
+    return 0
+  }
+  const transitions = { 'requirement-delta': requirementDeltaState, 'plan-drift': planDriftState, 'improvement-gate': improvementGateState }
+  if (transitions[config.command]) {
+    await updateFile(statePath, (text) => transitions[config.command](text, config), 'state file')
+    return 0
+  }
+  if (config.command === 'resume') {
+    await updateFile(statePath, (text) => resumeState(text, config.head, config), 'state file')
+    return 0
+  }
+  throw new Error(`unknown command ${config.command}`)
+}
 /** Execute the flow-state CLI and return its exit code. */
 export async function main(argv = process.argv.slice(2), { cwd = process.cwd() } = {}) {
   assertString(cwd, 'cwd')
   if (!cwd.trim()) throw new Error('cwd must be a non-empty string')
   const config = parseCliArgs(argv)
-  if (config.command === 'set') {
-    const statePath = path.resolve(cwd, config.state)
-    await updateFile(statePath, (text) => setStateKey(text, config.key, config.value), 'state file')
-    return 0
+  try {
+    if (config.command === 'init') {
+      const target = path.resolve(cwd, config.state)
+      await createFileExclusively(target, createInitialState(config), 'state file')
+      return 0
+    }
+    if (config.command === 'set') {
+      await updateFile(path.resolve(cwd, config.state), (text) => setStateWithGuards(text, config.key, config.value), 'state file')
+      return 0
+    }
+    if (config.command === 'task') {
+      await updateFile(
+        path.resolve(cwd, config.tasks),
+        (text) => setTaskStatus(text, config.id, config.status, { at: config.at }),
+        'tasks file',
+      )
+      return 0
+    }
+    if (config.command === 'check') return runCheck(config, cwd)
+    return await runTypedCommand(config, cwd, path.resolve(cwd, config.state))
+  } catch (error) {
+    if (error instanceof TransitionRejectedError) {
+      console.error(`flow-state: rejected: ${error.message}`)
+      return 1
+    }
+    throw error
   }
-  if (config.command === 'task') {
-    const tasksPath = path.resolve(cwd, config.tasks)
-    await updateFile(
-      tasksPath,
-      (text) => setTaskStatus(text, config.id, config.status, { at: config.at }),
-      'tasks file',
-    )
-    return 0
-  }
-  const statePath = path.resolve(cwd, config.state)
-  const tasksText = config.tasks
-    ? await fs.readFile(path.resolve(cwd, config.tasks), 'utf8')
-    : null
-  const violations = checkState(await fs.readFile(statePath, 'utf8'), { tasksText })
-  for (const violation of violations) {
-    console.error(`flow-state: violation: ${violation.key}: ${violation.reason}`)
-  }
-  return violations.length ? 1 : 0
 }
 
 const isDirectRun =
   process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
 if (isDirectRun) {
   main()
     .then((exitCode) => { process.exitCode = exitCode })

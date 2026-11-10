@@ -1,10 +1,10 @@
-<!-- generated 2026-09-09T07:38:27.855Z from README.md, AGENTS.md, package.json -->
+<!-- generated 2026-11-10T15:47:04.676Z from README.md, AGENTS.md, package.json -->
 
 # Project context
 
 ## What it is
 
-- Package: `@anhnguyen0905/codex-mcp` v0.26.0
+- Package: `@anhnguyen0905/codex-mcp` v0.28.0
 - Manifest description: MCP server bridging Claude Code and OpenAI Codex CLI for plan-execute-review workflows
 
 A Claude Code plugin and MCP server that runs a disciplined **plan → execute → review** loop:
@@ -26,16 +26,16 @@ TODO — who runs this and in what environment
 
 - Manifests: `package.json`
 - Entry point: `dist/index.js`
-- Published paths: `dist`, `scripts/tail-progress.mjs`, `scripts/doctor.mjs`, `scripts/build-skills-index.mjs`, `scripts/sync-awesome-skills.mjs`, `scripts/skill-match.mjs`, `scripts/skill-eval.mjs`, `scripts/task-waves.mjs` (+14 more)
+- Published paths: `dist`, `scripts/tail-progress.mjs`, `scripts/doctor.mjs`, `scripts/startup-probe.mjs`, `scripts/npm-smoke.mjs`, `scripts/build-skills-index.mjs`, `scripts/sync-awesome-skills.mjs`, `scripts/skill-match.mjs` (+19 more)
 
 <!-- owner-notes -->
 <!-- /owner-notes -->
 
 ## Constraints
 
-- **Command mirror**: `commands/codex-flow.md` has a **byte-identical** mirror at
-  `.claude/commands/codex-flow.md`. Every edit to one must be `cp`-copied to the other.
-  Gates: `scripts/check-command-sync.mjs` + `tests/flowDocs.test.ts`.
+- **Command mirror**: every `commands/<name>.md` (`codex-flow.md`, `brainstorm.md`) has a
+  **byte-identical** mirror at `.claude/commands/<name>.md`. Every edit to one must be `cp`-copied
+  to the other. Gates: `scripts/check-command-sync.mjs` (`SYNC_PAIRS`) + `tests/flowDocs.test.ts`.
 - **Skill files**: `skills/<name>/SKILL.md`. Frontmatter is exactly two unquoted fields:
   `name:` and a one-line `description:`. Body follows the existing skills — `# <Title>
   (embed into Codex prompts)`, then `## Standards block` with a fenced ``` block whose contents
@@ -46,8 +46,7 @@ TODO — who runs this and in what environment
   the SKILL.md together. Skill tokens named in the command must sit inside a
   `**Load skills first...**:` line to be recognized.
 - **Release consistency**: on a version bump, the version must agree across `package.json`,
-  `package-lock.json` (2 spots), `server.json` (2 spots), `.claude-plugin/plugin.json`, the
-  `.mcp.json` npx pin, and a `## [<version>]`… (truncated)
+  `package-lock.json` (2 spots), `server.json` (2 spots), `.claude-plugin/plugin.json`, th… (truncated)
 
 _Source: AGENTS.md_
 

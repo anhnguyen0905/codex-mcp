@@ -5,6 +5,8 @@ description: Run a codex-flow backlog faster by executing independent tasks conc
 
 # Parallel Execution (default when wave width > 1)
 
+**Helpers**: required — task-waves.mjs, flow-state.mjs, context-slice.mjs, worktree-setup.mjs, requirements-coverage.mjs (helper rule: missing → STOP and tell the user to reinstall the codex-flow plugin; non-zero exit → surface the error and STOP).
+
 codex-mcp serializes runs per `cwd` (to prevent file/git races) but runs different `cwd`s in
 parallel. So real parallelism = **one git worktree per concurrent task**, each driven by its own
 Claude subagent calling `codex_execute` into that worktree.
@@ -27,7 +29,7 @@ to the coordinator.
 - When a wave exceeds **3 concurrent tasks**, ask whether to run at that width or lower the cap
   before spawning; parallel execution burns N× simultaneous quota.
 - Stay sequential when the tool reports "fully sequential", the user opted out, the project is
-  not a git repo, or the tracked baseline cannot be made clean.
+  not a git repo, the tracked baseline cannot be made clean, or the worktree canary fails.
 
 ## Step 1 — Compute waves
 
@@ -51,6 +53,8 @@ update, not an approval gate.
 
 ## Step 2 — Per wave: spawn a subagent + worktree per task
 
+Before wave 1, run `git worktree add --detach <tmp> HEAD`, then `git worktree remove --force <tmp>`. If the canary fails, set `executionMode` to `sequential (worktrees unavailable: <error>)` with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set executionMode "sequential (worktrees unavailable: <error>)"` and run sequentially; never discover this mid-wave.
+
 **Hard precondition:** parallel mode requires a clean tracked baseline, with every accepted project
 change the tasks depend on committed at the branch point. If Phase 0 accepted a dirty baseline,
 commit the required changes and stash unrelated residue before continuing, or stay sequential.
@@ -73,18 +77,13 @@ For each task in the wave (width > 1):
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --task T<n>
-   mkdir -p "<worktree>/.codex-flow"
-   cp .codex-flow/PLAN.md .codex-flow/TASKS.md .codex-flow/CONTEXT-T<n>.md "<worktree>/.codex-flow/"
-   if [ -f .codex-flow/SKILLS-T<n>.md ]; then
-     cp .codex-flow/SKILLS-T<n>.md "<worktree>/.codex-flow/"
-   fi
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/worktree-setup.mjs" --worktree <worktree> --task T<n>
    ```
 
    Generate the task's `.codex-flow/CONTEXT-T<n>.md` immediately before copying it alongside
    PLAN.md and TASKS.md. When the task's `.codex-flow/SKILLS-T<n>.md` sidecar exists, copy it into
    the worktree alongside the context slice.
-   If the helper is present but exits non-zero, surface the error to the user and STOP; never
-   silently copy a stale slice.
+   If either command exits non-zero, surface the error and do NOT dispatch the subagent.
    If generation reports `mandatory slice content exceeds tokenBudget`, split the oversized task
    in the backlog and recompute the waves before continuing; never raise the slice budget.
    Treat these copies as coordinator-owned context: subagents read them but do not include them in
@@ -129,11 +128,10 @@ Because each `cwd` differs, the per-workspace concurrency guard allows all of th
 4. Before merging each worktree, the coordinator diffs the worktree's actual changed files against
    the task's declared `Files:`. Any expansion — a changed file outside that declaration, excluding
    generated lockfiles explicitly listed as shared — stops the wave. As the FIRST step of this
-   backlog-mutating transaction, durably set `backlogApproved: no (files expansion <ISO date>)` and
-   `phase: backlog` in STATE.md. Only then update the task's `Files:` in TASKS.md, re-run
+   backlog-mutating transaction, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" plan-drift`. Only then update the task's `Files:` in TASKS.md, re-run
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/requirements-coverage.mjs" --requirements .codex-flow/REQUIREMENTS.md --tasks .codex-flow/TASKS.md`
    plus the `plan-backlog` backlog sanity checks, and get user re-approval. Only after re-approval,
-   restore `backlogApproved: yes (<ISO 8601 timestamp>)` and return `phase` to `execution`. Then RE-RUN
+   run `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" approve backlog` then `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" advance` to restore execution. Then RE-RUN
    the task's conformance → quality → security review over the EXPANDED `Files:` scope, using a
    fresh `codex_review` or a Claude pass, before the branch may merge. The security review is
    mandatory when the expansion touches auth, input, queries, files, or secrets.

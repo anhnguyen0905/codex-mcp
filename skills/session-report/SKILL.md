@@ -5,6 +5,8 @@ description: Create the six per-session codex-flow reports with fixed timing, te
 
 # Session Reports
 
+**Helpers**: required — session-cost.mjs (helper rule: missing → STOP; non-zero → surface error and STOP).
+
 ## Start the report bundle
 
 At Phase 0, create `.codex-flow/reports/<YYYYMMDD-HHMMSS>/`.
@@ -44,6 +46,7 @@ Use this section template in `reviews.md`:
 
 ```markdown
 ## T<n>: <title>
+Codex review session: <sessionId | —>
 ### Claude findings
 <numbered findings with severity + file:line, or "none">
 ### Codex findings
@@ -75,11 +78,10 @@ pass each as a `--session <id>` flag. Run the helper from the project root throu
 plugin-root convention used for other runtime scripts:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/session-cost.mjs" --since "<session-start ISO>" --session <id> --session <id> …
+node "${CLAUDE_PLUGIN_ROOT}/scripts/session-cost.mjs" --since "<session-start ISO>" --session <every task Session id> --session <review session ids from reviews.md> …
 ```
 
-Fall back to `--cwd "$PWD"` instead of `--session` flags only when no session ids exist (for example,
-every task ran under the Claude-executor fallback).
+Use `--cwd <project root>` only when no session ids exist: `--cwd` misses worktree runs, and task ids alone miss review runs.
 
 If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.
 Embed the helper's output in `cost.md` verbatim — `## Totals`, the nine-column `## Per model` table

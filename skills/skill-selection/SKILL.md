@@ -5,6 +5,8 @@ description: Select domain skills from a local skill index instead of blind-load
 
 # Skill Selection (index-first, never blind-load)
 
+**Helpers**: required — skill-brief.mjs, skill-lint.mjs (helper rule: missing → STOP; non-zero → surface error and STOP); optional — build-skills-index.mjs, sync-awesome-skills.mjs, skill-match.mjs, skill-eval.mjs, jev-client.mjs (no index → skip selection; Jev off/missing key silently no-ops).
+
 Loading every available skill wastes context and buries the ones that matter. Select the few
 relevant skills from a local index; treat "0 matches" as a normal outcome. A session should only
 ever contain the skills its current work needs.

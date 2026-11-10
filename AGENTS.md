@@ -30,9 +30,10 @@ behavior is defined in **markdown instruction files**, not runtime code.
   `package-lock.json` (2 spots), `server.json` (2 spots), `.claude-plugin/plugin.json`, the
   `.mcp.json` npx pin, and a `## [<version>]` heading in `CHANGELOG.md`.
 
-- **Run-state writes**: `.codex-flow/STATE.md` and task `Status` lines in `.codex-flow/TASKS.md` are
-  edited only through `node scripts/flow-state.mjs` (`set` / `check` / `task`) — the helper is
-  required, never optional. It validates keys, phases, task stages, and status transitions. Never
+- **Run-state writes**: create STATE.md with `init`; change `phase` and the three approvals only
+  through `approve`, `advance`, `requirement-delta`, `plan-drift`, `improvement-gate`, and `resume`;
+  change other keys through `set`, task Status lines through `task`, and validate with `check` — the
+  helper is required, never optional. It validates keys, phases, task stages, and status transitions. Never
   hand-edit those files in the flow, and never fall back to editing them when the helper is
   missing: a missing helper means the plugin install is broken, so the flow STOPS and the user is
   told to reinstall it; a helper that exits non-zero surfaces its error and STOPS.

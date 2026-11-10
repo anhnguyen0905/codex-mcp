@@ -5,6 +5,8 @@ description: Phase 0 preflight for codex-flow — gate on Codex login/health, de
 
 # Preflight (Phase 0 — run FIRST, it is a gate)
 
+**Helpers**: required — doctor.mjs, context-slice.mjs, flow-state.mjs (helper rule: missing → STOP and tell the user to reinstall the codex-flow plugin; non-zero exit → surface the error and STOP).
+
 Nothing downstream is safe until these pass. Do not interview, plan, or execute until the gate is green.
 
 ## Step 1 — Health gate
@@ -20,7 +22,7 @@ a one-shot read-only `codex exec` probe and returns `execProbe`
 (`ok | quota | model | error | skipped`) plus `execProbeMessage` next to `loggedIn`; read
 `execProbe` from that single call instead of re-probing later phases.
 
-- **Tool call fails / server missing** → the MCP server isn't set up. Point the user to the codex-mcp
+- **Tool call fails / server missing** → a connect timeout or closed connection is not "server missing": run `node scripts/doctor.mjs --probe-launcher`, keep the folder downloaded or move the repo off cloud-synced storage, reconnect with `/mcp`, re-check health, and only then offer the Executor fallback. Otherwise, the MCP server isn't set up. Point the user to the codex-mcp
   README install steps (or `node scripts/doctor.mjs`), then offer the command's **Executor
   fallback**: fix and re-check, or continue with Claude as executor. Never continue silently.
 - **`loggedIn: false`** → tell the user to run `codex login` (ChatGPT Plus/Pro/Team, or set
@@ -82,21 +84,21 @@ not been created yet:
   cost/report delivery gates, and completion write instead of concluding there is no work. For an
   earlier phase, enter its first unapproved gate. Treat
   every `[verify]` block as a hypothesis: confirm it against `git diff` and the current code before
-  relying on it. Record the current `git rev-parse HEAD` as `resumeHead` and update `phase`; apart
+  relying on it. Record the current `git rev-parse HEAD` as `resumeHead` with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" resume --head <sha>` (add `--phase <phase>` only when entering an earlier phase); apart
   from the legacy-key backfill above, change no other STATE.md key as part of the resume operation.
   The reconciliation choice for an in-progress task (continue / review as-is / reset) is made
   first; the `taskStage` routing then applies to the task as the user left it.
 - On resume, reuse the report dir recorded under `## Session report` in PLAN.md; create it only if
   missing.
 - **Restart** → archive the old control files that exist to `.codex-flow/archive/<timestamp>/`,
-  then begin fresh.
+  then begin fresh with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" init --baseline <run-start HEAD> --known-red "<compact list>"`.
 
 If STATE.md does not exist, do not offer resume. Treat any PLAN.md or TASKS.md as orphaned control
 files and offer to archive them before beginning a fresh run.
 
 ## Step 3 — Baseline the workspace
 
-1. **Git cleanliness + ref**: `git status --porcelain`. Dirty → ask the user to commit/stash first
+1. **Git cleanliness + ref**: `git status --porcelain`. If porcelain is non-empty but `git -c core.fileMode=false status --porcelain` is empty, it is mode-only noise: with user consent, offer `git config core.fileMode false` instead of commit/stash and treat the baseline as clean. Otherwise, dirty → ask the user to commit/stash first
    (recommended: clean per-task diffs + a rollback point) or proceed with the dirty baseline noted
    in PLAN.md. When the user proceeds dirty, write `.codex-flow/baseline-dirty.patch`: save the
    baseline-to-working-tree output from `git diff HEAD`, then append a `# Untracked at run start`
@@ -109,7 +111,7 @@ files and offer to archive them before beginning a fresh run.
    failures as the **known-red baseline** — Phase 5 compares against this list so Codex is blamed
    only for NEW failures. If the suite can't run at all, tell the user and agree how results will be
    verified before continuing.
-4. **Write run state**: after baselining, write `.codex-flow/STATE.md` with exactly one
+4. **Write run state**: after baselining, create `.codex-flow/STATE.md` with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" init --baseline <run-start HEAD> --known-red "<compact list>"` (add `--dirty-baseline baseline-dirty.patch` / `--executor <fallback value>` when applicable), with exactly one
    `## Run state` section and these fixed `- <key>: <value>` lines:
 
    ```markdown
@@ -140,7 +142,7 @@ files and offer to archive them before beginning a fresh run.
    progress lives in `currentTask` + `taskStage`; `phase: review` means the whole-feature review
    after the last task.
 
-   Write STATE.md and TASKS.md status lines only through the helper:
+   `phase` and the three approvals change only through `approve`, `advance`, `requirement-delta`, `plan-drift`, `improvement-gate`, and `resume`; change other keys through `set`. Write STATE.md and TASKS.md status lines only through the helper:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set <key> <value>`, `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check`, and
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" task <T-id> <status>` (which appends the transition
    line). If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.
