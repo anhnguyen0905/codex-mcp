@@ -563,6 +563,142 @@ export function parseCatalog(content) {
   return entries
 }
 
+/** Compare a rendered index with the scanned local skill files; --check never writes. */
+export function indexStaleness({ indexEntries, indexMtimeMs, scanned }) {
+  const local = new Map(scanned.map((entry) => [entry.canonicalFile ?? path.resolve(entry.file), entry.file]))
+  const indexed = new Set(
+    indexEntries
+      .filter((entry) => entry.file && !/^https?:\/\//i.test(entry.file))
+      .map((entry) => entry.canonicalFile ?? path.resolve(entry.file)),
+  )
+  const newer = scanned.filter((entry) => entry.mtimeMs >= indexMtimeMs)
+  if (newer.length > 0) {
+    return {
+      stale: true,
+      reason: `${newer.length} skill file(s) modified at or after the index (e.g. ${newer[0].file})`,
+    }
+  }
+  const added = [...local].filter(([file]) => !indexed.has(file))
+  if (added.length > 0) {
+    return { stale: true, reason: `${added.length} skill(s) on disk not in the index (e.g. ${added[0][1]})` }
+  }
+  const gone = [...indexed].filter((file) => !local.has(file))
+  if (gone.length > 0) {
+    return { stale: true, reason: `${gone.length} indexed skill(s) no longer on disk (e.g. ${gone[0]})` }
+  }
+  return { stale: false, reason: null }
+}
+
+const canonicalRoots = async (roots) => Promise.all(roots.map(async (root) => {
+  try { return await fs.realpath(path.resolve(root)) } catch { return path.resolve(root) }
+}))
+
+/** The roots recorded by the build, or null when the header is absent or not a list of paths. */
+const rootsHeader = (content) => {
+  const match = content.match(/^<!-- roots: (.+) -->\r?$/m)
+  if (!match) return null
+  let roots
+  try {
+    roots = JSON.parse(match[1])
+  } catch {
+    return null
+  }
+  return Array.isArray(roots) && roots.every((root) => typeof root === 'string') ? roots : null
+}
+
+const canonicalFile = async (file) => {
+  try { return await fs.realpath(file) } catch { return path.resolve(file) }
+}
+
+const canonicalizeIndexed = async (entries) => Promise.all(entries.map(async (entry) => ({
+  ...entry,
+  ...(entry.file && !/^https?:\/\//i.test(entry.file) ? { canonicalFile: await canonicalFile(entry.file) } : {}),
+})))
+
+const rootsMatch = (recorded, checked) =>
+  recorded && JSON.stringify([...recorded].sort()) === JSON.stringify([...checked].sort())
+
+const readIndexForCheck = async (outFile) => {
+  let indexStat
+  try {
+    indexStat = await fs.stat(outFile)
+  } catch (error) {
+    if (error.code === 'ENOENT') return { stale: true, reason: `index missing: ${outFile}` }
+    return { stale: true, reason: `unreadable: ${outFile} (${error.code ?? 'UNKNOWN'})` }
+  }
+  if (!indexStat.isFile()) return { stale: true, reason: `unreadable: ${outFile} (EISDIR)` }
+  try {
+    return { content: await fs.readFile(outFile, 'utf8'), indexStat }
+  } catch (error) {
+    return { stale: true, reason: `unreadable: ${outFile} (${error.code ?? 'UNKNOWN'})` }
+  }
+}
+
+const scanForCheck = async (localEntries) => Promise.all(localEntries.map(async (entry) => {
+  try {
+    await fs.readFile(entry.file)
+    const fileStat = await fs.stat(entry.file)
+    return { ...entry, mtimeMs: fileStat.mtimeMs, canonicalFile: await canonicalFile(entry.file) }
+  } catch (error) {
+    return { ...entry, unreadable: error }
+  }
+}))
+
+const remoteCatalogDelta = (indexed, current) => {
+  const indexedRemote = indexed.filter((entry) => /^https?:\/\//i.test(entry.file))
+  const currentRemote = current.filter((entry) => /^https?:\/\//i.test(entry.file))
+  const same = (left, right) => (
+    left.name === right.name && left.file === right.file && left.description === right.description
+  )
+  const added = currentRemote.filter((entry) => !indexedRemote.some((old) => same(old, entry))).length
+  const removed = indexedRemote.filter((entry) => !currentRemote.some((now) => same(now, entry))).length
+  return { added, removed, remote: currentRemote.length }
+}
+
+const mergedEntries = async (localEntries, remoteFile) => {
+  let catalogContent = ''
+  try { catalogContent = await fs.readFile(path.resolve(remoteFile), 'utf8') } catch (error) {
+    if (error.code !== 'ENOENT') throw Object.assign(error, { path: remoteFile })
+  }
+  return mergeRemoteEntries(localEntries, catalogContent)
+}
+
+async function runCheck({ outFile, scanRoots, remote }) {
+  const index = await readIndexForCheck(outFile)
+  if (index.stale) return { check: true, ...index }
+  const { entries: localEntries } = await buildIndex(scanRoots)
+  const scanned = await scanForCheck(localEntries)
+  const unreadable = scanned.find((entry) => entry.unreadable)
+  if (unreadable) {
+    const error = unreadable.unreadable
+    return { check: true, stale: true, reason: `unreadable: ${unreadable.file} (${error.code ?? 'UNKNOWN'})` }
+  }
+  const indexed = await canonicalizeIndexed(parseCatalog(index.content))
+  const roots = await canonicalRoots(scanRoots)
+  const recordedRoots = rootsHeader(index.content)
+  if (recordedRoots && !rootsMatch(recordedRoots, roots)) {
+    return {
+      check: true,
+      stale: true,
+      reason: `scanned roots differ from the index (index: ${JSON.stringify(recordedRoots)}; ` +
+        `check: ${JSON.stringify(roots)})`,
+    }
+  }
+  const remoteFile = remote ?? path.join(path.dirname(outFile), 'REMOTE.md')
+  let merged
+  try { merged = await mergedEntries(localEntries, remoteFile) } catch (error) {
+    return { check: true, stale: true, reason: `unreadable: ${error.path ?? remoteFile} (${error.code ?? 'UNKNOWN'})` }
+  }
+  const delta = remoteCatalogDelta(indexed, merged)
+  if (delta.added || delta.removed) {
+    return { check: true, stale: true, reason: `remote catalog changed: +${delta.added} −${delta.removed}` }
+  }
+  const result = indexStaleness({ indexEntries: indexed, indexMtimeMs: index.indexStat.mtimeMs, scanned })
+  if (result.stale) return { check: true, ...result }
+  const built = index.content.match(/^# Rebuilt: (.+)$/m)?.[1] ?? 'unknown'
+  return { check: true, stale: false, count: merged.length, remote: delta.remote, built }
+}
+
 /**
  * Merge remote catalog entries into locally scanned ones. Local skills (fetched,
  * reviewed, saved to the library) always shadow remote entries with the same name.
@@ -574,12 +710,13 @@ export function mergeRemoteEntries(localEntries, catalogContent) {
 }
 
 /** Render entries as the grep-friendly INDEX.md content. */
-export function renderIndex(entries) {
+export function renderIndex(entries, roots = []) {
   const header = [
     '# Skill Index — generated by codex-flow build-skills-index',
     `# Rebuilt: ${new Date().toISOString()}`,
     '# Format: <name> | <description> | <SKILL.md path> [| vetted:<true|false>]',
     '# Remote-origin entries carry a vetted flag; load ONLY vetted:true remote skills.',
+    `<!-- roots: ${JSON.stringify(roots)} -->`,
     '',
   ]
   const lines = entries.map(
@@ -718,6 +855,7 @@ async function runVetRepo(dir, manifestArg, trusted = []) {
 export async function runCli(argv) {
   const roots = []
   let out = null
+  let check = false
   let remote = null
   let vet = null
   let vetRepo = null
@@ -726,7 +864,9 @@ export async function runCli(argv) {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
-    if (arg === '--out' || arg === '-o') {
+    if (arg === '--check') {
+      check = true
+    } else if (arg === '--out' || arg === '-o') {
       out = argv[++i]
       if (!out) throw new Error(`${arg} requires a file path`)
     } else if (arg === '--remote' || arg === '-r') {
@@ -751,6 +891,9 @@ export async function runCli(argv) {
   }
 
   if (vet && vetRepo) throw new Error('--vet and --vet-repo are mutually exclusive')
+  if (check && (vet || vetRepo || trusted.length > 0 || manifest)) {
+    throw new Error('--check cannot be combined with --vet, --vet-repo, --trust or --manifest')
+  }
   // --vet is an explicit human decision about one file: it IS the allowlist override.
   if (vet) return runVet(vet, manifest)
   if (vetRepo) return runVetRepo(vetRepo, manifest, trusted)
@@ -760,13 +903,20 @@ export async function runCli(argv) {
   const scanRoots = roots.length > 0 ? roots : await defaultRoots()
   const outFile = path.resolve(out ?? process.env.CODEX_FLOW_SKILLS_INDEX ?? defaultOut())
 
+  if (check) return runCheck({ outFile, scanRoots, remote })
+
   const { entries: localEntries, warnings } = await buildIndex(scanRoots)
 
   // The remote catalog (synced from awesome-claude-skills) is the foundation layer;
   // locally vetted skills shadow it by name.
   const remoteFile = remote ?? path.join(path.dirname(outFile), 'REMOTE.md')
-  const catalogContent = await fs.readFile(path.resolve(remoteFile), 'utf8').catch(() => '')
-  const entries = mergeRemoteEntries(localEntries, catalogContent)
+  // A build treats an unreadable remote catalog as empty, as it always has; --check reports it.
+  let entries
+  try {
+    entries = await mergedEntries(localEntries, remoteFile)
+  } catch {
+    entries = mergeRemoteEntries(localEntries, '')
+  }
 
   if (entries.length === 0) {
     throw new Error(
@@ -775,7 +925,7 @@ export async function runCli(argv) {
   }
 
   await fs.mkdir(path.dirname(outFile), { recursive: true })
-  await fs.writeFile(outFile, renderIndex(entries), 'utf8')
+  await fs.writeFile(outFile, renderIndex(entries, await canonicalRoots(scanRoots)), 'utf8')
   return { count: entries.length, local: localEntries.length, out: outFile, warnings }
 }
 
@@ -789,6 +939,17 @@ if (isDirectRun) {
         console.log(`Vetted ${summary.vetted}`)
         console.log(`→ ${summary.manifest} (sha256 ${summary.record.sha256.slice(0, 12)}…)`)
         console.log('Rebuild the index to mark it vetted:true: node scripts/build-skills-index.mjs')
+        return
+      }
+      if (summary.check) {
+        if (summary.stale) {
+          console.log(`skills-index: stale — ${summary.reason}`)
+          process.exitCode = 1
+        } else {
+          console.log(
+            `skills-index: current (${summary.count} entries, ${summary.remote} remote, built ${summary.built})`,
+          )
+        }
         return
       }
       if (typeof summary.vettedCount === 'number') {

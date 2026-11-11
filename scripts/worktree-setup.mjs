@@ -1,14 +1,33 @@
+import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import { constants as FS_CONSTANTS } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 
 const TASK_ID = /^T\d+$/
 const REQUIRED_FILES = Object.freeze(['PLAN.md', 'TASKS.md'])
 const USAGE = 'usage: node scripts/worktree-setup.mjs --worktree <path> --task T<n> [--source <dir>]'
+const GIT_TIMEOUT_MS = 10_000
+const runExecFile = promisify(execFile)
 
 const errorMessage = (error) =>
   (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').trim()
+
+async function defaultGit(args) {
+  const gitEnvironment = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => {
+      const normalizedName = process.platform === 'win32' ? name.toUpperCase() : name
+      return !normalizedName.startsWith('GIT_')
+    }),
+  )
+  const result = await runExecFile('git', args, {
+    encoding: 'utf8',
+    timeout: GIT_TIMEOUT_MS,
+    env: { ...gitEnvironment, LC_ALL: 'C' },
+  })
+  return result.stdout
+}
 
 /** Parse and validate the worktree setup CLI arguments. */
 export function parseCliArgs(args) {
@@ -78,6 +97,7 @@ export async function setupWorktreeControlFiles({
   sourceDir = '.codex-flow',
   cwd = process.cwd(),
   fsImpl = fs,
+  git = defaultGit,
 }) {
   if (typeof worktree !== 'string' || worktree.trim() === '') {
     throw new TypeError('worktree must be a non-empty string')
@@ -87,20 +107,50 @@ export async function setupWorktreeControlFiles({
     throw new TypeError('sourceDir must be a non-empty string')
   }
   const resolvedWorktree = path.resolve(cwd, worktree)
+  let realWorktree
+  try {
+    realWorktree = await fsImpl.realpath(resolvedWorktree)
+  } catch (error) {
+    throw new Error(`worktree path cannot be resolved: ${resolvedWorktree}: ${errorMessage(error)}`)
+  }
+  const worktreeStat = await fsImpl.lstat(realWorktree)
+  if (!worktreeStat.isDirectory()) throw new Error(`worktree path is not a directory: ${realWorktree}`)
+  let gitTopLevel
+  try {
+    gitTopLevel = (await git(['-C', realWorktree, 'rev-parse', '--show-toplevel'])).trim()
+    gitTopLevel = await fsImpl.realpath(gitTopLevel)
+  } catch (error) {
+    throw new Error(`worktree path is not a git work-tree top level: ${realWorktree}: ${errorMessage(error)}`)
+  }
+  const relativeTopLevel = path.relative(realWorktree, gitTopLevel)
+  if (relativeTopLevel !== '') throw new Error(`worktree path is not a git work-tree top level: ${realWorktree}`)
   const resolvedSourceDir = path.resolve(cwd, sourceDir)
-  const destinationDir = path.join(resolvedWorktree, '.codex-flow')
-  await assertNotSymlink(destinationDir, 'destination directory', fsImpl)
-  await fsImpl.mkdir(destinationDir, { recursive: true })
+  const destinationDir = path.join(realWorktree, '.codex-flow')
   await assertNotSymlink(destinationDir, 'destination directory', fsImpl)
 
   const fileNames = [...REQUIRED_FILES, `CONTEXT-${task}.md`, `SKILLS-${task}.md`]
-  const copied = []
+  const sourcePaths = []
   for (const fileName of fileNames) {
     const sourcePath = path.join(resolvedSourceDir, fileName)
     const required = !fileName.startsWith('SKILLS-')
-    if (!(await assertRegularSource(sourcePath, required, fsImpl))) continue
-    await copyAndVerify(sourcePath, path.join(destinationDir, fileName), fsImpl)
-    copied.push(fileName)
+    if (await assertRegularSource(sourcePath, required, fsImpl)) sourcePaths.push({ fileName, sourcePath })
+  }
+  await fsImpl.mkdir(destinationDir, { recursive: true })
+  await assertNotSymlink(destinationDir, 'destination directory', fsImpl)
+  const copied = []
+  const attemptedDestinations = []
+  try {
+    for (const { fileName, sourcePath } of sourcePaths) {
+      const destinationPath = path.join(destinationDir, fileName)
+      attemptedDestinations.push(destinationPath)
+      await copyAndVerify(sourcePath, destinationPath, fsImpl)
+      copied.push(fileName)
+    }
+  } catch (error) {
+    await Promise.all(attemptedDestinations.map(async (destinationPath) => {
+      try { await fsImpl.unlink(destinationPath) } catch { /* best effort cleanup */ }
+    }))
+    throw error
   }
   return { copied }
 }

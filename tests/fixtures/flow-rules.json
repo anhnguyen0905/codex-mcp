@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "helper-fail-closed",
+      "obligation": "Missing helpers stop with reinstall instructions, non-zero helpers surface errors and stop, and control files are never hand-edited.",
+      "clauses": ["missing helper reinstall", "non-zero helper stops", "no hand-edited fallback"],
+      "documents": [
+        { "path": "AGENTS.md", "patterns": [
+          { "clause": "missing helper reinstall", "pattern": "missing helper means the plugin install is broken, so the flow STOPS and the user is told to reinstall it", "flags": "i" },
+          { "clause": "non-zero helper stops", "pattern": "a helper that exits non-zero surfaces its error and STOPS", "flags": "i" },
+          { "clause": "no hand-edited fallback", "pattern": "Never hand-edit those files in the flow, and never fall back to editing them", "flags": "i" }
+        ] },
+        { "path": "commands/codex-flow.md", "patterns": [
+          { "clause": "missing helper reinstall", "pattern": "If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin", "flags": "i" },
+          { "clause": "non-zero helper stops", "pattern": "if it is present but exits non-zero, surface the error to the user and STOP", "flags": "i" },
+          { "clause": "no hand-edited fallback", "pattern": "Never edit control files by hand\\.", "flags": "i" }
+        ] },
+        { "path": "skills/preflight/SKILL.md", "patterns": [
+          { "clause": "missing helper reinstall", "pattern": "missing → STOP and tell the user to reinstall the codex-flow plugin", "flags": "i" },
+          { "clause": "non-zero helper stops", "pattern": "non-zero exit → surface the error and STOP", "flags": "i" },
+          { "clause": "no hand-edited fallback", "pattern": "Never edit control files by hand\\.\\s+The orchestrator is the only writer", "flags": "i" }
+        ] }
+      ]
+    },
+    {
+      "id": "outage-routing",
+      "obligation": "A Codex outage routes through one explicit AskUserQuestion Executor-fallback choice and never switches silently.",
+      "clauses": ["explicit outage choice", "no silent switch"],
+      "documents": [
+        { "path": "commands/codex-flow.md", "patterns": [
+          { "clause": "explicit outage choice", "pattern": "outage triggers exactly one AskUserQuestion per the Executor fallback section", "flags": "i" },
+          { "clause": "no silent switch", "pattern": "Never switch executors silently or mid-task", "flags": "i" }
+        ] },
+        { "path": "skills/executor-fallback/SKILL.md", "patterns": [
+          { "clause": "explicit outage choice", "pattern": "AskUserQuestion exactly once per outage with two options", "flags": "i" },
+          { "clause": "no silent switch", "pattern": "Never switch executors silently, and never switch mid-task", "flags": "i" }
+        ] }
+      ]
+    },
+    {
+      "id": "cost-inclusion-set",
+      "obligation": "Cost reports pass every task and review session id to session-cost and use cwd only when no ids exist.",
+      "clauses": ["all task and review ids", "cwd only without ids"],
+      "documents": [
+        { "path": "commands/codex-flow.md", "patterns": [
+          { "clause": "all task and review ids", "pattern": "using every task `- Session:` id and every `Codex review session:` id recorded in `reviews\\.md`", "flags": "i" },
+          { "clause": "cwd only without ids", "pattern": "use `--cwd <project root>` only when no session id exists", "flags": "i" }
+        ] },
+        { "path": "skills/session-report/SKILL.md", "patterns": [
+          { "clause": "all task and review ids", "pattern": "--session <every task Session id> --session <review session ids from reviews\\.md>", "flags": "i" },
+          { "clause": "cwd only without ids", "pattern": "Use `--cwd <project root>` only when no session ids exist", "flags": "i" }
+        ] }
+      ]
+    },
+    {
+      "id": "done-is-last-write",
+      "obligation": "Done is written only after the durable review handoff and report writes, making it the last task write.",
+      "clauses": ["durable handoff before done", "done is last write"],
+      "documents": [
+        { "path": "commands/codex-flow.md", "patterns": [
+          { "clause": "durable handoff before done", "pattern": "After every required write succeeds, update TaskUpdate, then make the LAST durable task write", "flags": "i" },
+          { "clause": "done is last write", "pattern": "Phase 5 step 7 makes that the last durable task write", "flags": "i" }
+        ] },
+        { "path": "skills/review-feedback/SKILL.md", "patterns": [
+          { "clause": "durable handoff before done", "pattern": "Clean review → proceed to the Phase 5 step 7 durable handoff", "flags": "i" },
+          { "clause": "done is last write", "pattern": "where `done` is the last write", "flags": "i" }
+        ] }
+      ]
+    },
+    {
+      "id": "medium-low-routing",
+      "obligation": "MEDIUM/LOW findings piggyback on an existing round or enter the improvements ledger and never block completion.",
+      "clauses": ["piggyback or ledger", "never block completion"],
+      "documents": [
+        { "path": "commands/codex-flow.md", "patterns": [
+          { "clause": "piggyback or ledger", "pattern": "append non-blocking suggestions from BOTH reviews to `\\.codex-flow/IMPROVEMENTS\\.md` per that skill", "flags": "i" },
+          { "clause": "never block completion", "pattern": "they never block the task", "flags": "i" }
+        ] },
+        { "path": "skills/review-dual/SKILL.md", "patterns": [
+          { "clause": "piggyback or ledger", "pattern": "MEDIUM/LOW piggyback only on a round already being sent for CRITICAL/HIGH", "flags": "i" },
+          { "clause": "never block completion", "pattern": "The ledger NEVER blocks marking a task done", "flags": "i" }
+        ] }
+      ]
+    },
+    {
+      "id": "resume-selector-reset",
+      "obligation": "A resume outside execution resets the task selectors.",
+      "clauses": ["resume selector reset"],
+      "documents": [
+        { "path": "skills/preflight/SKILL.md", "patterns": [
+          { "clause": "resume selector reset", "pattern": "A resume writes `resumeHead` and `phase`; outside `execution`, it resets `currentTask`, `taskStage`, and `wave`", "flags": "i" }
+        ] },
+        { "path": "commands/codex-flow.md", "patterns": [
+          { "clause": "resume selector reset", "pattern": "outside `execution`, `resume` resets `currentTask`, `taskStage`, and `wave`", "flags": "i" }
+        ] }
+      ]
+    },
+    {
+      "id": "decision-log-check",
+      "obligation": "The single Decision-log writer runs context-slice.mjs --check-plan after appending.",
+      "clauses": ["post-append plan check"],
+      "documents": [
+        { "path": "skills/plan-architecture/SKILL.md", "patterns": [
+          { "clause": "post-append plan check", "pattern": "After appending, run[^.]{0,80}context-slice\\.mjs\" --check-plan", "flags": "i" }
+        ] },
+        { "path": "commands/codex-flow.md", "patterns": [
+          { "clause": "post-append plan check", "pattern": "then run `node \"\\$\\{CLAUDE_PLUGIN_ROOT\\}/scripts/context-slice\\.mjs\" --check-plan` and fix the block before the next task if it exits non-zero", "flags": "i" }
+        ] }
+      ]
+    },
+    {
+      "id": "event-journal-archive",
+      "obligation": "Restart and completed-run archives move EVENTS.jsonl with the other control files.",
+      "clauses": ["journal archived with controls"],
+      "documents": [
+        { "path": "commands/codex-flow.md", "patterns": [
+          { "clause": "journal archived with controls", "pattern": "archive the old control files that exist, including `EVENTS\\.jsonl`", "flags": "i" }
+        ] },
+        { "path": "skills/preflight/SKILL.md", "patterns": [
+          { "clause": "journal archived with controls", "pattern": "Archive `EVENTS\\.jsonl` with them", "flags": "i" }
+        ] }
+      ]
+    }
+  ]
+}

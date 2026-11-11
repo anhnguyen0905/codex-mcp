@@ -30,14 +30,16 @@ terminal-status validation runs too. When both `.codex-flow/PLAN.md` and `.codex
 exist, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --resume` and read
 `.codex-flow/RESUME.md` instead of the raw files; when either file is missing, read only the control files that exist.
 On resume, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" resume --head <sha>` with the
-current `git rev-parse HEAD`; add `--phase <phase>` only when entering an earlier phase. Apart
-from that legacy-key backfill, change no other state field. On restart,
-archive the old control files that exist to `.codex-flow/archive/<timestamp>/` and begin fresh.
+current `git rev-parse HEAD`; add `--phase <phase>` only when entering an earlier phase.
+Outside `execution`, `resume` resets `currentTask`, `taskStage`, and `wave`; apart from that and
+the legacy-key backfill, it changes no other state field. On restart,
+archive the old control files that exist, including `EVENTS.jsonl`, to
+`.codex-flow/archive/<timestamp>/` and begin fresh; fresh initialization refuses while that journal remains.
 
 `phase: complete` is terminal: the previous run is finished, so do NOT offer resume for it. Archive
 the run's control files to `.codex-flow/archive/<timestamp>/` and begin fresh, exactly as a restart
 would. Resume is offered only for a non-complete `phase`. If STATE.md does not exist, do not offer
-resume: treat any PLAN.md or TASKS.md as orphaned control files and offer to archive them before
+resume: treat any PLAN.md, TASKS.md or EVENTS.jsonl as orphaned control files and offer to archive them before
 beginning a fresh run.
 
 Before any `codex_health` call and before baselining, evaluate the **Fast-path gate** (section
@@ -106,7 +108,8 @@ Then baseline the workspace per `codex-flow:preflight` Step 3 (in the project ro
    `plan-drift`, `improvement-gate`, and `resume`. The initial state has `phase: interview` and every
    approval `no`; record the run-start HEAD, compact original `knownRed` list, and fallback executor
    value as applicable. The orchestrator is the only writer. Never modify `runBaselineRef`, `knownRed`, or
-   `dirtyBaseline` on resume.
+   `dirtyBaseline` on resume. Typed commands journal to `.codex-flow/EVENTS.jsonl`; `flow-state check`
+   reports a hand-edited gate key or an unfinished transaction.
 
 ## Fast-path gate — small and analysis-only tasks
 
@@ -382,7 +385,9 @@ in step 8, after the last task.
    mode first set `taskStage handoff` with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set taskStage handoff`
    (parallel mode does this once per wave in Step 3.8).
    **Sequential mode**: append the Decision-log schema block, append this
-   task's section to the report dir's `tasks.md`, append its dual-review record to `reviews.md`, and
+   task's section to the report dir's `tasks.md`, append its dual-review record to `reviews.md`, then run
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --check-plan` and fix the block before
+   the next task if it exits non-zero, and
    make the checkpoint commit when enabled. When a task is dropped or abandoned, record it with
    `Result: dropped` at the moment of that decision. After every required write succeeds, update
    TaskUpdate, then make the LAST durable task write: set `- Status:` to `done` via

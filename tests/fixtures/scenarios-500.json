@@ -17,6 +17,11 @@
       "expectAny": [
         "exploratory-data-analysis",
         "xlsx"
+      ],
+      "rejectAny": [
+        "game-designer-balance",
+        "scanpy",
+        "genotoxic"
       ]
     },
     {
@@ -35,6 +40,10 @@
         "exploratory-data-analysis",
         "xlsx",
         "polars"
+      ],
+      "rejectAny": [
+        "sarif-parsing",
+        "scanpy"
       ]
     },
     {
@@ -83,6 +92,9 @@
       ],
       "expectAny": [
         "statistical-analysis"
+      ],
+      "rejectAny": [
+        "clinical-decision-support"
       ]
     },
     {
@@ -100,6 +112,10 @@
       "expectAny": [
         "polars",
         "exploratory-data-analysis"
+      ],
+      "rejectAny": [
+        "sales-pipeline-crm",
+        "production-audit"
       ]
     },
     {
@@ -119,6 +135,10 @@
         "polars",
         "exploratory-data-analysis",
         "cohort-retention-analysis"
+      ],
+      "rejectAny": [
+        "eas-observe",
+        "hr-recruiting"
       ]
     },
     {
@@ -137,6 +157,9 @@
         "data-quality-checks",
         "exploratory-data-analysis",
         "data-quality"
+      ],
+      "rejectAny": [
+        "prediction-market-risk-review"
       ]
     },
     {
@@ -158,6 +181,9 @@
         "polars",
         "liteparse",
         "xlsx"
+      ],
+      "rejectAny": [
+        "sarif-parsing"
       ]
     },
     {
@@ -193,6 +219,9 @@
         "warehouse-modeling",
         "postgres-patterns",
         "clickhouse-io"
+      ],
+      "rejectAny": [
+        "clinical-decision-support"
       ]
     },
     {
@@ -229,6 +258,9 @@
         "warehouse-modeling",
         "clickhouse-io",
         "postgres-patterns"
+      ],
+      "rejectAny": [
+        "bulk-rnaseq"
       ]
     },
     {
@@ -265,6 +297,9 @@
         "warehouse-modeling",
         "dbt-patterns",
         "postgres-patterns"
+      ],
+      "rejectAny": [
+        "scvi-tools"
       ]
     },
     {
@@ -299,6 +334,10 @@
         "warehouse-modeling",
         "funnel-analytics",
         "postgres-patterns"
+      ],
+      "rejectAny": [
+        "generating-python-installer",
+        "sarif-parsing"
       ]
     },
     {
@@ -369,6 +408,10 @@
         "timesfm-forecasting",
         "inventory-demand-planning",
         "statsmodels"
+      ],
+      "rejectAny": [
+        "manufacturing-ops-planning",
+        "hr-recruiting"
       ]
     },
     {
@@ -422,6 +465,9 @@
         "mle-workflow",
         "scikit-learn",
         "mle-reviewer"
+      ],
+      "rejectAny": [
+        "codeql"
       ]
     },
     {
@@ -439,6 +485,9 @@
       "expectAny": [
         "scikit-learn",
         "umap-learn"
+      ],
+      "rejectAny": [
+        "scanpy"
       ]
     },
     {
@@ -456,6 +505,10 @@
       "expectAny": [
         "exploratory-data-analysis",
         "statistical-analysis"
+      ],
+      "rejectAny": [
+        "clinical-decision-support",
+        "scanpy"
       ]
     },
     {
@@ -475,6 +528,9 @@
         "ltv-cohort-modeling",
         "statsmodels",
         "finance-billing-ops"
+      ],
+      "rejectAny": [
+        "clinical-decision-support"
       ]
     },
     {
@@ -527,6 +583,10 @@
       "expectAny": [
         "transformers",
         "regex-vs-llm-structured-text"
+      ],
+      "rejectAny": [
+        "neuropixels-analysis",
+        "prediction-market-risk-review"
       ]
     },
     {
@@ -562,6 +622,9 @@
         "matplotlib",
         "seaborn",
         "dashboard-builder"
+      ],
+      "rejectAny": [
+        "imaging-data-commons"
       ]
     },
     {
@@ -629,6 +692,9 @@
       "expectAny": [
         "internal-comms",
         "article-writing"
+      ],
+      "rejectAny": [
+        "eas-update-insights"
       ]
     },
     {
@@ -647,6 +713,9 @@
         "docx",
         "internal-comms",
         "theme-factory"
+      ],
+      "rejectAny": [
+        "clinical-decision-support"
       ]
     },
     {
@@ -681,6 +750,9 @@
         "accessibility",
         "design-system",
         "d3-viz"
+      ],
+      "rejectAny": [
+        "game-designer-systems"
       ]
     },
     {
@@ -715,6 +787,10 @@
       "expectAny": [
         "marketing-campaign",
         "game-director"
+      ],
+      "rejectAny": [
+        "prediction-market-risk-review",
+        "personal-finance"
       ]
     },
     {
@@ -749,6 +825,10 @@
       "expectAny": [
         "marketing-campaign",
         "project-manager"
+      ],
+      "rejectAny": [
+        "prediction-market-risk-review",
+        "eas-update-insights"
       ]
     },
     {
@@ -767,6 +847,9 @@
         "content-engine",
         "crosspost",
         "social-publisher"
+      ],
+      "rejectAny": [
+        "c-review"
       ]
     },
     {
@@ -801,6 +884,10 @@
       "expectAny": [
         "media-planning",
         "marketing-campaign"
+      ],
+      "rejectAny": [
+        "game-designer-balance",
+        "eas-update-insights"
       ]
     },
     {
@@ -818,6 +905,9 @@
       "expectAny": [
         "project-manager",
         "marketing-campaign"
+      ],
+      "rejectAny": [
+        "inventory-demand-planning"
       ]
     },
     {
@@ -870,6 +960,9 @@
       "expectAny": [
         "internal-comms",
         "crisis-communication"
+      ],
+      "rejectAny": [
+        "financial-audit"
       ]
     },
     {
@@ -904,6 +997,12 @@
       "expectAny": [
         "media-planning",
         "performance-marketing"
+      ],
+      "rejectAny": [
+        "eas-update-insights",
+        "inventory-demand-planning",
+        "manufacturing-ops-planning",
+        "game-designer-balance"
       ]
     },
     {
@@ -921,6 +1020,11 @@
       "expectAny": [
         "performance-marketing",
         "marketing-campaign"
+      ],
+      "rejectAny": [
+        "eas-app-stores",
+        "eas-hosting",
+        "eas-simulator"
       ]
     },
     {
@@ -939,6 +1043,9 @@
         "content-engine",
         "marketing-campaign",
         "article-writing"
+      ],
+      "rejectAny": [
+        "semgrep-rule-variant-creator"
       ]
     },
     {
@@ -956,6 +1063,9 @@
       "expectAny": [
         "performance-marketing",
         "content-engine"
+      ],
+      "rejectAny": [
+        "sales-pipeline-crm"
       ]
     },
     {
@@ -1042,6 +1152,9 @@
       "expectAny": [
         "performance-marketing",
         "marketing-campaign"
+      ],
+      "rejectAny": [
+        "financial-audit"
       ]
     },
     {
@@ -1060,6 +1173,9 @@
         "market-research",
         "market-research-reports",
         "competitive-platform-analysis"
+      ],
+      "rejectAny": [
+        "personal-finance"
       ]
     },
     {
@@ -1077,6 +1193,10 @@
       "expectAny": [
         "benchmark-methodology",
         "competitive-platform-analysis"
+      ],
+      "rejectAny": [
+        "hr-recruiting",
+        "real-estate-analysis"
       ]
     },
     {
@@ -1130,6 +1250,9 @@
       "expectAny": [
         "statistical-analysis",
         "interpreting-culture-index"
+      ],
+      "rejectAny": [
+        "clinical-decision-support"
       ]
     },
     {
@@ -1148,6 +1271,9 @@
         "market-research-reports",
         "competitive-report-structure",
         "market-research"
+      ],
+      "rejectAny": [
+        "clinical-decision-support"
       ]
     },
     {
@@ -1183,6 +1309,10 @@
         "competitive-platform-analysis",
         "design-system",
         "accessibility"
+      ],
+      "rejectAny": [
+        "hr-recruiting",
+        "production-audit"
       ]
     },
     {
@@ -1200,6 +1330,9 @@
       "expectAny": [
         "benchmark-methodology",
         "game-designer-balance"
+      ],
+      "rejectAny": [
+        "hr-recruiting"
       ]
     },
     {
@@ -1217,6 +1350,11 @@
       "expectAny": [
         "what-if-oracle",
         "market-research"
+      ],
+      "rejectAny": [
+        "prediction-market-risk-review",
+        "financial-audit",
+        "game-designer-systems"
       ]
     },
     {
@@ -1233,6 +1371,9 @@
       ],
       "expectAny": [
         "seo"
+      ],
+      "rejectAny": [
+        "entry-point-analyzer"
       ]
     },
     {
@@ -1337,6 +1478,11 @@
         "aso",
         "seo",
         "marketing-campaign"
+      ],
+      "rejectAny": [
+        "eas-hosting",
+        "expo-dev-client",
+        "generating-python-installer"
       ]
     },
     {
@@ -1425,6 +1571,10 @@
         "product-manager",
         "product-lens",
         "project-manager"
+      ],
+      "rejectAny": [
+        "prediction-market-risk-review",
+        "hr-recruiting"
       ]
     },
     {
@@ -1489,6 +1639,12 @@
       ],
       "expectAny": [
         "project-manager"
+      ],
+      "rejectAny": [
+        "manufacturing-ops-planning",
+        "prediction-market-risk-review",
+        "financial-audit",
+        "inventory-demand-planning"
       ]
     },
     {
@@ -1508,6 +1664,9 @@
         "investor-materials",
         "finance-billing-ops",
         "game-director"
+      ],
+      "rejectAny": [
+        "personal-finance"
       ]
     },
     {
@@ -1543,6 +1702,10 @@
       "expectAny": [
         "okr-planning",
         "product-lens"
+      ],
+      "rejectAny": [
+        "inventory-demand-planning",
+        "personal-finance"
       ]
     },
     {
@@ -1597,6 +1760,9 @@
         "exec-python",
         "python-patterns",
         "data-scraper-agent"
+      ],
+      "rejectAny": [
+        "generating-python-installer"
       ]
     },
     {
@@ -1667,6 +1833,9 @@
         "localization-copy",
         "visa-doc-translate",
         "finance-billing-ops"
+      ],
+      "rejectAny": [
+        "financial-audit"
       ]
     },
     {
@@ -1686,6 +1855,9 @@
         "codebase-onboarding",
         "internal-comms",
         "doc-coauthoring"
+      ],
+      "rejectAny": [
+        "financial-audit"
       ]
     },
     {
@@ -1703,6 +1875,10 @@
       "expectAny": [
         "what-if-oracle",
         "council"
+      ],
+      "rejectAny": [
+        "real-estate-analysis",
+        "clinical-decision-support"
       ]
     },
     {
@@ -1721,6 +1897,9 @@
         "statistical-analysis",
         "security-review",
         "hipaa-compliance"
+      ],
+      "rejectAny": [
+        "clinical-decision-support"
       ]
     },
     {
@@ -1761,6 +1940,10 @@
       ],
       "expectAny": [
         "sme-operations"
+      ],
+      "rejectAny": [
+        "manufacturing-ops-planning",
+        "sales-pipeline-crm"
       ]
     },
     {
@@ -1778,6 +1961,10 @@
       "expectAny": [
         "sme-operations",
         "unit-economics"
+      ],
+      "rejectAny": [
+        "sales-pipeline-crm",
+        "game-designer-systems"
       ]
     },
     {
@@ -1794,6 +1981,10 @@
       ],
       "expectAny": [
         "sme-operations"
+      ],
+      "rejectAny": [
+        "real-estate-analysis",
+        "cafe-pos-domain"
       ]
     },
     {
@@ -5166,6 +5357,9 @@
       "expectAny": [
         "ecommerce-operations",
         "returns-reverse-logistics"
+      ],
+      "rejectAny": [
+        "real-estate-analysis"
       ]
     },
     {

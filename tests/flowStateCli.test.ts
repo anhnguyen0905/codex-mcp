@@ -66,6 +66,25 @@ describe('flow-state CLI parsing', () => {
   })
 
   test.each([
+    ['init', ['init', '--baseline', 'b', '--known-red', 'n', '--events', 'e'], 'e'],
+    ['approve', ['approve', 'requirements', '--events', 'e'], 'e'],
+    ['advance', ['advance', '--events', 'e'], 'e'],
+    ['requirement-delta', ['requirement-delta', '--events', 'e'], 'e'],
+    ['plan-drift', ['plan-drift', '--events', 'e'], 'e'],
+    ['improvement-gate', ['improvement-gate', '--events', 'e'], 'e'],
+    ['resume', ['resume', '--head', 'h', '--events', 'e'], 'e'],
+    ['check', ['check', '--events', 'e'], 'e'],
+  ])('parses --events for %s', (_, argv, events) => {
+    expect(parseCliArgs(argv)).toMatchObject({ events })
+  })
+
+  test.each(['set', 'task'])('rejects --events on %s', (command) => {
+    expect(() => parseCliArgs(command === 'set'
+      ? ['set', 'phase', 'plan', '--events', 'e']
+      : ['task', 'T1', 'done', '--events', 'e'])).toThrow('unknown option --events')
+  })
+
+  test.each([
     ['unknown option', ['advance', '--wat'], 'unknown option --wat'],
     ['duplicate option', ['advance', '--state', 'a', '--state', 'b'], 'duplicate option --state'],
     ['missing option value', ['advance', '--state'], '--state requires a value'],
@@ -94,6 +113,11 @@ describe('flow-state CLI parsing', () => {
 
     // Assert
     expect(Object.isFrozen(PHASES)).toBe(true)
+    expect(Object.isFrozen(APPROVAL_GATES)).toBe(true)
+    expect(Object.isFrozen(NON_LINEAR_COMMANDS)).toBe(true)
+    expect(() => (PHASES as string[]).push('bad')).toThrow(TypeError)
+    expect(() => (APPROVAL_GATES as string[]).push('bad')).toThrow(TypeError)
+    expect(() => (NON_LINEAR_COMMANDS as string[]).push('bad')).toThrow(TypeError)
     expect(PHASES).toEqual(stateKernel.PHASES)
     expect(APPROVAL_GATES).toEqual(Object.keys(stateKernel.APPROVE_RULES))
     expect(NON_LINEAR_COMMANDS).toEqual(Object.keys(stateKernel.NON_LINEAR_RULES))

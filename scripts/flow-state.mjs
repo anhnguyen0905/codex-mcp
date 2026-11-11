@@ -3,6 +3,12 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
+  JournalRejectedError, eventsPathFor, journalCheck, journalInit, journalPathFor, journalTransition,
+  journalViolations,
+  prepareJournal,
+  readTasksForAdvance,
+} from './flow-events.mjs'
+import {
   APPROVAL_GATES,
   NON_LINEAR_COMMANDS,
   PHASES,
@@ -309,7 +315,9 @@ function requireStateSelectors(text, command) {
 function requireNonLinearPhase(text, command) {
   const phase = stateValueOf(text, 'phase')
   const rule = NON_LINEAR_RULES[command]
-  if (!rule.phases.includes(phase)) rejectTransition(`${command} requires phase ${rule.phases.join(' or ')} (was ${phase})`)
+  if (!rule.phases.includes(phase)) {
+    rejectTransition(`${command} requires phase ${rule.phases.join(' or ')} (was ${phase})`)
+  }
 }
 /** Return a new state text after recording a requirements delta. */
 export function requirementDeltaState(text, { at } = {}) {
@@ -417,7 +425,7 @@ function approvalViolations(lines) {
       : [{ key, reason: `phase ${phase} requires ${key} to start with yes` }]
   ))
 }
-export function checkState(text, { tasksText = null } = {}) {
+export function checkState(text, { tasksText = null, events, journal = null } = {}) {
   assertString(text, 'text')
   if (tasksText !== null && typeof tasksText !== 'string') {
     throw new TypeError('tasksText must be a string or null')
@@ -434,13 +442,14 @@ export function checkState(text, { tasksText = null } = {}) {
   const taskViolations = isComplete && tasksText !== null
     ? terminalStatusViolations(tasksText)
     : []
-  return [
+  const base = [
     ...keyViolations,
     ...approvalViolations(lines),
     ...selectorViolations(lines),
     ...phaseSelectorViolations(lines),
     ...taskViolations,
   ]
+  return journal ? [...base, ...journalViolations(text, events ?? [], journal.corrupt ?? null)] : base
 }
 function taskSectionsOf(text) {
   const headings = [...text.matchAll(TASK_HEADING)]
@@ -450,6 +459,7 @@ function taskSectionsOf(text) {
     end: headings[index + 1]?.index ?? text.length,
   }))
 }
+
 /** Every `- Status:` line inside one task section, with absolute offsets. */
 function statusMatchesOf(tasksText, section) {
   const block = tasksText.slice(section.start, section.end)
@@ -489,6 +499,7 @@ function validateTimestamp(at) {
     throw new Error(`invalid ISO 8601 timestamp ${JSON.stringify(at)}`)
   }
 }
+
 function transitionInsertionOf(text, statusLine) {
   let at = statusLine.end
   let ending = statusLine.ending
@@ -511,7 +522,6 @@ export function setTaskStatus(tasksText, id, status, { at = new Date().toISOStri
   if (!TASK_ID.test(id)) throw new Error(`invalid task id ${JSON.stringify(id)}`)
   if (!TASK_STATUS_SET.has(status)) throw new Error(`unknown task status ${status}`)
   validateTimestamp(at)
-
   const sections = taskSectionsOf(tasksText).filter((section) => section.id === id)
   if (sections.length === 0) throw new Error(`task ${id} is missing`)
   if (sections.length > 1) throw new Error(`task ${id} appears more than once`)
@@ -519,10 +529,10 @@ export function setTaskStatus(tasksText, id, status, { at = new Date().toISOStri
   if (!TASK_STATUS_SET.has(statusLine.value)) {
     throw new Error(`task ${id} has unknown status ${JSON.stringify(statusLine.value)}`)
   }
+
   if (!TASK_TRANSITIONS[statusLine.value].includes(status)) {
     throw new Error(`illegal task transition ${id}: ${statusLine.value} -> ${status}`)
   }
-
   const lineEnding = lineEndingOf(tasksText)
   const insertion = transitionInsertionOf(tasksText, statusLine)
   const transitionLine = [
@@ -622,18 +632,6 @@ async function assertArtifactExists(directory, filename) {
     throw error
   }
 }
-async function tasksForAdvance(stateText, tasksPath) {
-  const phase = stateValueOf(stateText, 'phase')
-  if (phase !== 'execution' && phase !== 'review') return null
-  try {
-    return await fs.readFile(tasksPath, 'utf8')
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      rejectTransition(`advance ${phase} requires TASKS.md`)
-    }
-    throw error
-  }
-}
 function setStateWithGuards(text, key, value) {
   if (Object.hasOwn(TYPED_APPROVAL_COMMANDS, key)) {
     rejectTransition(`${key} is controlled by ${TYPED_APPROVAL_COMMANDS[key]}`)
@@ -650,11 +648,34 @@ async function updateFile(filePath, update, label) {
 }
 async function runCheck(config, cwd) {
   const tasksText = config.tasks ? await fs.readFile(path.resolve(cwd, config.tasks), 'utf8') : null
-  const violations = checkState(await fs.readFile(path.resolve(cwd, config.state), 'utf8'), { tasksText })
+  const statePath = path.resolve(cwd, config.state)
+  const stateText = await fs.readFile(statePath, 'utf8')
+  const violations = await journalCheck({
+    statePath, cwd, eventsOption: config.events, stateText, tasksText, checkState,
+  })
   for (const violation of violations) console.error(`flow-state: violation: ${violation.key}: ${violation.reason}`)
   return violations.length ? 1 : 0
 }
-async function runTypedCommand(config, cwd, statePath) {
+async function runTypedCommand(
+  config, cwd, statePath,
+  writeState = (text) => writeFileAtomically(statePath, text, 'state file'),
+) {
+  const beforeText = await fs.readFile(statePath, 'utf8')
+  let eventPath
+  let journal
+  try {
+    eventPath = await journalPathFor({ statePath, cwd, eventsOption: config.events })
+    journal = await prepareJournal({ eventsPath: eventPath, stateText: beforeText })
+  } catch (error) {
+    if (error instanceof JournalRejectedError) rejectTransition(error.message)
+    throw error
+  }
+  const journaled = journal.journaled
+  const transact = (updated, artifact = null) => journalTransition({
+    journaled, eventsPath: eventPath, command: config.command, beforeText, afterText: updated,
+    extra: artifact ? { gate: config.gate, artifact: path.basename(artifact), artifactPath: artifact } : {},
+    writeState,
+  })
   if (config.command === 'approve') {
     const directory = path.resolve(cwd, config.dir)
     if (config.gate !== 'backlog'
@@ -666,40 +687,69 @@ async function runTypedCommand(config, cwd, statePath) {
       && !['yes', 'no'].includes(config.checkpointCommits)) {
       throw new Error('--checkpoint-commits must be yes or no')
     }
-    if (config.executionMode !== undefined && /[\r\n]/.test(config.executionMode)) throw new Error('--execution-mode must be a single line')
-    await updateFile(statePath, (text) => approveState(text, config.gate, config), 'state file')
+    if (config.executionMode !== undefined && /[\r\n]/.test(config.executionMode)) {
+      throw new Error('--execution-mode must be a single line')
+    }
+    const updated = approveState(beforeText, config.gate, config)
+    await transact(updated, path.join(directory, APPROVE_RULES[config.gate].artifact))
     return 0
   }
   if (config.command === 'advance') {
-    const stateText = await fs.readFile(statePath, 'utf8')
-    const tasksText = await tasksForAdvance(stateText, path.resolve(cwd, config.tasks))
-    await writeFileAtomically(statePath, advanceState(stateText, { tasksText }), 'state file')
+    const stateText = beforeText
+    const tasksText = await readTasksForAdvance({
+      stateText, tasksPath: path.resolve(cwd, config.tasks),
+      readState: (file) => fs.readFile(file, 'utf8'),
+      reject: (message) => rejectTransition(message),
+    })
+    await transact(advanceState(stateText, { tasksText }))
     return 0
   }
-  const transitions = { 'requirement-delta': requirementDeltaState, 'plan-drift': planDriftState, 'improvement-gate': improvementGateState }
+  const transitions = {
+    'requirement-delta': requirementDeltaState,
+    'plan-drift': planDriftState,
+    'improvement-gate': improvementGateState,
+  }
   if (transitions[config.command]) {
-    await updateFile(statePath, (text) => transitions[config.command](text, config), 'state file')
+    await transact(transitions[config.command](beforeText, config))
     return 0
   }
   if (config.command === 'resume') {
-    await updateFile(statePath, (text) => resumeState(text, config.head, config), 'state file')
+    await transact(resumeState(beforeText, config.head, config))
     return 0
   }
   throw new Error(`unknown command ${config.command}`)
 }
 /** Execute the flow-state CLI and return its exit code. */
-export async function main(argv = process.argv.slice(2), { cwd = process.cwd() } = {}) {
+export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), writeState } = {}) {
   assertString(cwd, 'cwd')
   if (!cwd.trim()) throw new Error('cwd must be a non-empty string')
   const config = parseCliArgs(argv)
   try {
     if (config.command === 'init') {
       const target = path.resolve(cwd, config.state)
-      await createFileExclusively(target, createInitialState(config), 'state file')
+      const stateText = createInitialState(config)
+      try {
+        await journalInit({
+          eventsPath: await journalPathFor({ statePath: target, cwd, eventsOption: config.events }),
+          defaultEventsPath: path.resolve(eventsPathFor(target)),
+          statePath: target,
+          stateText,
+          createState: () => createFileExclusively(target, stateText, 'state file'),
+        })
+      } catch (error) {
+        if (error instanceof JournalRejectedError) {
+          throw new TransitionRejectedError(error.message)
+        }
+        throw error
+      }
       return 0
     }
     if (config.command === 'set') {
-      await updateFile(path.resolve(cwd, config.state), (text) => setStateWithGuards(text, config.key, config.value), 'state file')
+      await updateFile(
+        path.resolve(cwd, config.state),
+        (text) => setStateWithGuards(text, config.key, config.value),
+        'state file',
+      )
       return 0
     }
     if (config.command === 'task') {
@@ -711,7 +761,9 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd() }
       return 0
     }
     if (config.command === 'check') return runCheck(config, cwd)
-    return await runTypedCommand(config, cwd, path.resolve(cwd, config.state))
+    const statePath = path.resolve(cwd, config.state)
+    const writer = writeState ?? ((text) => writeFileAtomically(statePath, text, 'state file'))
+    return await runTypedCommand(config, cwd, statePath, writer)
   } catch (error) {
     if (error instanceof TransitionRejectedError) {
       console.error(`flow-state: rejected: ${error.message}`)
@@ -720,7 +772,6 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd() }
     throw error
   }
 }
-
 const isDirectRun =
   process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 if (isDirectRun) {

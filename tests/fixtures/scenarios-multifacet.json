@@ -1,17 +1,115 @@
 {
-  "note": "Multi-facet requests: `terms` carries [{name, terms}] facet groups so selectSkills gives each facet its own budget share. On a single combined term list the strong facet crowds the weak one out entirely — the limitation the 32-scenario eval documents as S31.",
+  "note": "Multi-facet requests: `terms` carries [{name, terms}] facet groups so selectSkills gives each facet its own budget share. A facet without expectAny is expected uncovered.",
   "scenarios": [
     { "id": "M01", "scope": "cross", "facet": "data+marketing", "request": "Build the KPI dashboard and write the launch post announcing it",
-      "terms": [{ "name": "visualization", "terms": ["dashboard", "kpi", "chart", "metrics panel"] }, { "name": "marketing", "terms": ["launch announcement", "campaign", "content engine", "copywriting"] }],
-      "expectAny": ["dashboard-builder"], "expectAll": ["dashboard-builder"] },
+      "terms": [
+        {"name": "visualization", "terms": ["dashboard", "kpi", "chart", "metrics panel"], "expectAny": ["dashboard-builder"]},
+        {"name": "marketing", "terms": ["launch announcement", "campaign", "content engine", "copywriting"], "expectAny": ["marketing-campaign", "content-engine"]}
+      ], "expectAny": ["dashboard-builder"], "expectAll": ["dashboard-builder"] },
     { "id": "M02", "scope": "cross", "facet": "engineering+reporting", "request": "Fix the CPI calculation bug and write the stakeholder postmortem",
-      "terms": [{ "name": "engineering", "terms": ["debugging", "root cause", "typescript", "regression test"] }, { "name": "reporting", "terms": ["postmortem", "internal communication", "stakeholder writeup"] }],
-      "expectAny": ["internal-comms", "systematic-debugging"] },
+      "terms": [
+        {"name": "engineering", "terms": ["debugging", "root cause", "typescript", "regression test"], "expectAny": ["systematic-debugging"]},
+        {"name": "reporting", "terms": ["postmortem", "internal communication", "stakeholder writeup"], "expectAny": ["internal-comms"]}
+      ], "expectAny": ["internal-comms", "systematic-debugging"] },
     { "id": "M03", "scope": "cross", "facet": "research+design", "request": "Competitive teardown of rivals' onboarding UX with an accessibility read",
-      "terms": [{ "name": "research", "terms": ["competitive analysis", "benchmark", "teardown"] }, { "name": "design", "terms": ["accessibility", "design system", "onboarding ux"] }],
-      "expectAny": ["accessibility", "competitive-platform-analysis"] },
+      "terms": [
+        {"name": "research", "terms": ["competitive analysis", "benchmark", "teardown"], "expectAny": ["competitive-platform-analysis"]},
+        {"name": "design", "terms": ["accessibility", "design system", "onboarding ux"], "expectAny": ["accessibility"]}
+      ], "expectAny": ["accessibility", "competitive-platform-analysis"] },
     { "id": "M04", "scope": "cross", "facet": "data+product", "request": "Cohort retention analysis feeding a PRD for the retention feature",
-      "terms": [{ "name": "data", "terms": ["cohort retention", "statistical analysis", "segmentation"] }, { "name": "product", "terms": ["prd", "product requirements", "success metrics"] }],
-      "expectAny": ["product-manager", "statistical-analysis"] }
+      "terms": [
+        {"name": "data", "terms": ["cohort retention", "statistical analysis", "segmentation"], "expectAny": ["statistical-analysis", "cohort-retention-analysis"]},
+        {"name": "product", "terms": ["prd", "product requirements", "success metrics"], "expectAny": ["product-manager"]}
+      ], "expectAny": ["product-manager", "statistical-analysis"] },
+    { "id": "M05", "scope": "cross", "facet": "analysis+report", "request": "Analyze revenue cohorts and prepare an executive report",
+      "terms": [
+        {"name": "analysis", "terms": ["cohort analysis", "revenue metrics", "statistical analysis"], "expectAny": ["statistical-analysis", "exploratory-data-analysis", "cohort-retention-analysis"]},
+        {"name": "report", "terms": ["executive report", "stakeholder summary", "business writing"], "expectAny": ["internal-comms", "docx", "docs", "article-writing"]}
+      ] },
+    { "id": "M06", "scope": "cross", "facet": "sql+dashboard", "request": "Build a SQL model and a monitoring dashboard",
+      "terms": [
+        {"name": "sql", "terms": ["sql model", "database query", "data warehouse"], "expectAny": ["warehouse-modeling", "postgres-patterns", "clickhouse-io"]},
+        {"name": "dashboard", "terms": ["dashboard", "monitoring", "kpi chart"], "expectAny": ["dashboard-builder"]}
+      ] },
+    { "id": "M07", "scope": "cross", "facet": "marketing+budget", "request": "Create a campaign plan and budget model",
+      "terms": [
+        {"name": "marketing", "terms": ["campaign strategy", "launch campaign", "audience messaging"], "expectAny": ["marketing-campaign"]},
+        {"name": "budget", "terms": ["budget model", "cost forecast", "financial plan"], "expectAny": ["media-planning", "unit-economics", "xlsx"]}
+      ] },
+    { "id": "M08", "scope": "cross", "facet": "research+slides", "request": "Research the market and prepare a slide deck",
+      "terms": [
+        {"name": "research", "terms": ["market research", "competitive analysis", "market landscape"], "expectAny": ["market-research", "competitive-platform-analysis", "market-research-reports"]},
+        {"name": "slides", "terms": ["presentation slides", "executive deck", "storyline"], "expectAny": ["pptx", "frontend-slides", "investor-materials"]}
+      ] },
+    { "id": "M09", "scope": "cross", "facet": "review+email", "request": "Review a contract and write a summary email",
+      "terms": [
+        {"name": "review", "terms": ["contract review", "legal clauses", "risk review"], "expectAny": ["legal-contract-basics"]},
+        {"name": "email", "terms": ["summary email", "stakeholder communication", "internal message"], "expectAny": ["internal-comms", "email-ops"]}
+      ] },
+    { "id": "M10", "scope": "cross", "facet": "hr+dashboard", "request": "Analyze the HR pipeline and build a dashboard",
+      "terms": [
+        {"name": "hr", "terms": ["recruiting pipeline", "candidate metrics", "hiring funnel"], "expectAny": ["hr-recruiting"]},
+        {"name": "dashboard", "terms": ["dashboard", "funnel chart", "kpi monitoring"], "expectAny": ["dashboard-builder"]}
+      ] },
+    { "id": "M11", "scope": "cross", "facet": "ecommerce+seo", "request": "Write an ecommerce listing and optimize its SEO",
+      "terms": [
+        {"name": "ecommerce", "terms": ["product listing", "catalog copy", "online store"], "expectAny": ["ecommerce-operations"]},
+        {"name": "seo", "terms": ["seo", "keyword research", "search ranking"], "expectAny": ["seo"]}
+      ] },
+    { "id": "M12", "scope": "cross", "facet": "api+docs", "request": "Implement an API and write user documentation",
+      "terms": [
+        {"name": "api", "terms": ["api implementation", "endpoint design", "backend service"], "expectAny": ["api-design", "backend-patterns"]},
+        {"name": "docs", "terms": ["user documentation", "technical guide", "how to"], "expectAny": ["doc-coauthoring", "docs", "docx", "article-writing"]}
+      ] },
+    { "id": "M13", "scope": "cross", "facet": "ux+wireframe", "request": "Conduct UX research and sketch a wireframe",
+      "terms": [
+        {"name": "ux", "terms": ["ux research", "user interview", "usability study"], "expectAny": ["ux-research-wireframing"]},
+        {"name": "wireframe", "terms": ["wireframe", "interface design", "user flow"], "expectAny": ["ux-research-wireframing", "design-fundamentals"]}
+      ] },
+    { "id": "M14", "scope": "cross", "facet": "audit+spreadsheet", "request": "Perform a financial audit and update the spreadsheet",
+      "terms": [
+        {"name": "audit", "terms": ["financial audit", "reconciliation", "controls testing"], "expectAny": ["financial-audit"]},
+        {"name": "sheet", "terms": ["spreadsheet", "excel model", "financial table"], "expectAny": ["xlsx", "accounting-bookkeeping"]}
+      ] },
+    { "id": "M15", "scope": "cross", "facet": "phan tich+bao cao", "request": "Phan tich doanh thu va viet bao cao cho lanh dao",
+      "terms": [
+        {"name": "phan tich", "terms": ["revenue analysis", "data analysis", "business metrics"], "expectAny": ["exploratory-data-analysis", "statistical-analysis", "polars"]},
+        {"name": "bao cao", "terms": ["executive report", "stakeholder summary", "internal communication"], "expectAny": ["internal-comms", "docx", "docs"]}
+      ] },
+    { "id": "M16", "scope": "cross", "facet": "campaign+analysis", "request": "Measure a campaign and recommend the next launch",
+      "terms": [
+        {"name": "campaign", "terms": ["campaign performance", "marketing campaign", "launch results"], "expectAny": ["marketing-campaign", "performance-marketing"]},
+        {"name": "analysis", "terms": ["statistical analysis", "experiment results", "conversion metrics"], "expectAny": ["statistical-analysis"]}
+      ] },
+    { "id": "M17", "scope": "cross", "facet": "debug+comms", "request": "Debug a production regression and send a stakeholder update",
+      "terms": [
+        {"name": "debug", "terms": ["debugging", "root cause", "regression test"], "expectAny": ["systematic-debugging"]},
+        {"name": "comms", "terms": ["stakeholder update", "incident summary", "internal communication"], "expectAny": ["internal-comms"]}
+      ] },
+    { "id": "M18", "scope": "cross", "facet": "market+product", "request": "Research competitors and define the product requirements",
+      "terms": [
+        {"name": "market", "terms": ["competitive analysis", "market research", "competitor benchmark"], "expectAny": ["market-research", "competitive-platform-analysis"]},
+        {"name": "product", "terms": ["product requirements", "prd", "success metrics"], "expectAny": ["product-manager", "product-lens"]}
+      ] },
+    { "id": "M19", "scope": "cross", "facet": "dashboard+marketing", "request": "Create a KPI dashboard and launch campaign content",
+      "terms": [
+        {"name": "dashboard", "terms": ["dashboard", "kpi", "monitoring"], "expectAny": ["dashboard-builder"]},
+        {"name": "marketing", "terms": ["campaign content", "launch copy", "marketing campaign"], "expectAny": ["marketing-campaign", "content-engine"]}
+      ] },
+    { "id": "M20", "scope": "cross", "facet": "research+design", "request": "Compare competitors and document accessibility requirements",
+      "terms": [
+        {"name": "research", "terms": ["competitive teardown", "benchmark", "market research"], "expectAny": ["competitive-platform-analysis", "market-research"]},
+        {"name": "design", "terms": ["accessibility", "design system", "inclusive design"], "expectAny": ["accessibility"]}
+      ] },
+    { "id": "M21", "scope": "cross", "facet": "research+taxonomy", "request": "Research the market and classify Martian soil minerals",
+      "terms": [
+        {"name": "research", "terms": ["market research", "competitor analysis", "market landscape"], "expectAny": ["market-research"]},
+        {"name": "taxonomy", "terms": ["martian soil classification", "planetary mineralogy", "regolith taxonomy"], "note": "Planetary mineralogy is expected uncovered in the live index."}
+      ] },
+    { "id": "M22", "scope": "cross", "facet": "campaign+mycology", "request": "Plan a campaign and classify bioluminescent fungal spores",
+      "terms": [
+        {"name": "campaign", "terms": ["campaign strategy", "launch campaign", "audience messaging"], "expectAny": ["marketing-campaign"]},
+        {"name": "mycology", "terms": ["fungal spore taxonomy", "mycology classification", "bioluminescent fungi"], "note": "Mycology is expected uncovered in the live index."}
+      ] }
   ]
 }

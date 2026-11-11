@@ -66,8 +66,9 @@ not been created yet:
   checkpoint commit when `checkpointCommits` is enabled. Never blindly re-execute an in-progress
   task.
 - **`phase: complete`** → terminal, not resumable. Do NOT offer resume: archive the run's control
-  files to `.codex-flow/archive/<timestamp>/` and begin fresh, exactly as **Restart** does. Resume
-  is offered only for a non-complete `phase`.
+  files to `.codex-flow/archive/<timestamp>/` and begin fresh, exactly as **Restart** does.
+  Archive `EVENTS.jsonl` with them.
+  Resume is offered only for a non-complete `phase`.
 - **Resume** → first run `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check`, adding
   `--tasks .codex-flow/TASKS.md` whenever that file exists so the terminal-status validation runs
   (`node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check --tasks .codex-flow/TASKS.md`); when it reports only missing keys on a legacy file, add them
@@ -91,9 +92,10 @@ not been created yet:
 - On resume, reuse the report dir recorded under `## Session report` in PLAN.md; create it only if
   missing.
 - **Restart** → archive the old control files that exist to `.codex-flow/archive/<timestamp>/`,
+  including `EVENTS.jsonl`,
   then begin fresh with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" init --baseline <run-start HEAD> --known-red "<compact list>"`.
 
-If STATE.md does not exist, do not offer resume. Treat any PLAN.md or TASKS.md as orphaned control
+If STATE.md does not exist, do not offer resume. Treat any PLAN.md, TASKS.md or EVENTS.jsonl as orphaned control
 files and offer to archive them before beginning a fresh run.
 
 ## Step 3 — Baseline the workspace
@@ -142,15 +144,21 @@ files and offer to archive them before beginning a fresh run.
    progress lives in `currentTask` + `taskStage`; `phase: review` means the whole-feature review
    after the last task.
 
-   `phase` and the three approvals change only through `approve`, `advance`, `requirement-delta`, `plan-drift`, `improvement-gate`, and `resume`; change other keys through `set`. Write STATE.md and TASKS.md status lines only through the helper:
+   `phase` and the three approvals change only through `approve`, `advance`, `requirement-delta`,
+   `plan-drift`, `improvement-gate`, and `resume`; typed commands journal to
+   `.codex-flow/EVENTS.jsonl`, and `check` reports hand-edited gate keys or unfinished transactions;
+   change other keys through `set`. The helper takes no file lock and assumes one orchestrator
+   writes STATE.md and the journal; parallel workers never do.
+   Write STATE.md and TASKS.md status lines only through the helper:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set <key> <value>`, `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" check`, and
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" task <T-id> <status>` (which appends the transition
    line). If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.
 
    The orchestrator is the only writer. `runBaselineRef`, `knownRed`, and `dirtyBaseline` are
-   written once at run start and NEVER modified on resume. A resume writes only `resumeHead` and
-   `phase`, and outside `execution` resets the task selectors (apart from the legacy-key backfill); later approval or execution transitions update only
-   their corresponding mutable fields.
+   written once at run start and NEVER modified on resume. A resume writes `resumeHead` and `phase`;
+   outside `execution`, it resets `currentTask`, `taskStage`, and `wave` (apart from the legacy-key
+   backfill); later approval or execution transitions update only their corresponding mutable
+   fields.
 
 ## Why it's a gate
 

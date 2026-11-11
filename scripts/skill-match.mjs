@@ -271,6 +271,51 @@ export const DEFAULT_TOKEN_BUDGET = Math.round(CONTEXT_WINDOW_TOKENS * 0.03) // 
 // blow the budget or crowd out more relevant ones.
 export const DISTILL_TOKENS_CAP = 600
 const DEFAULT_SKILL_TOKENS = DISTILL_TOKENS_CAP // fallback when real size is unknown
+/** Relative score cutoff against each facet's top score; 0 disables it. */
+export const RELATIVE_SCORE_FLOOR = 0.2
+
+/** English function words removed from raw requests. */
+export const ENGLISH_STOP_WORDS = Object.freeze(new Set(
+  ['a an and are as at be by can could for from has have i in is it of on or our that the',
+    'their this to was we what when where which with you your'].join(' ').split(' '),
+))
+/** Vietnamese no-diacritic function words removed from raw requests. */
+export const VIETNAMESE_STOP_WORDS = Object.freeze(new Set(
+  ['cho cua va la cac nhung mot de voi trong toi can giup hay viet', 'lam tao'].join(' ').split(' '),
+))
+/** Request verbs removed before vocabulary extraction. */
+export const REQUEST_VERBS = Object.freeze(new Set(
+  ['build write create make help need want please analyze prepare draft',
+    'generate develop show give get'].join(' ').split(' '),
+))
+
+/** Extract deterministic search vocabulary from a raw English or Vietnamese request. */
+export function deriveTerms(request, { maxTerms = 12 } = {}) {
+  if (typeof request !== 'string') throw new TypeError('request must be a string')
+  if (!request.trim()) return []
+  if (!Number.isInteger(maxTerms) || maxTerms < 0) throw new RangeError('maxTerms must be a non-negative integer')
+  const ascii = request.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd')
+  const raw = [...ascii.toLowerCase().matchAll(/[a-z]+(?:[._-][a-z]+)*|\d+(?:[./-]\d+)*/g)]
+  const isMeaningful = (token) => !/[0-9]/.test(token) && !/[._/-]/.test(token) && token.length >= 2
+    && !ENGLISH_STOP_WORDS.has(token)
+    && !VIETNAMESE_STOP_WORDS.has(token)
+    && !REQUEST_VERBS.has(token)
+  const records = raw.map((match) => ({
+    token: match[0], start: match.index, end: match.index + match[0].length,
+  }))
+  const isUsable = (record) => isMeaningful(record.token)
+    && !/[\\/]/.test(ascii[record.start - 1] ?? '')
+    && !/[\\/]/.test(ascii[record.end] ?? '')
+  const tokens = records.filter(isUsable).map(({ token }) => token)
+  const singles = [...new Set(tokens)]
+  const phrases = [...new Set(records.flatMap((record, index) => {
+    const next = records[index + 1]
+    if (!next || !isUsable(record) || !isUsable(next)) return []
+    if (!/^\s+$/.test(ascii.slice(record.end, next.start))) return []
+    return [`${record.token} ${next.token}`]
+  }))]
+  return [...phrases, ...singles].slice(0, maxTerms)
+}
 
 /**
  * Greedily take ranked entries (highest relevance first) whose cumulative token
@@ -288,6 +333,18 @@ export function fitToBudget(ranked, { tokenBudget = DEFAULT_TOKEN_BUDGET, tokens
     taken.push({ ...entry, tokens })
   }
   return taken
+}
+
+/** Pick the first candidate that fits while reserving one pick for later facets. */
+function firstFacetPick(ranked, chosen, used, tokenBudget, reserveFor, sizeOf) {
+  return ranked
+    .filter((entry) => !chosen.has(entry.name))
+    .find((entry) => {
+      const excluded = new Set(chosen)
+      excluded.add(entry.name)
+      const cost = sizeOf(entry)
+      return used + cost + reserveFor(excluded) <= tokenBudget
+    })
 }
 
 /** Rank entries by descending score, dropping non-matches. Ties broken by name. */
@@ -312,6 +369,10 @@ export function selectSkills(
 ) {
   const facets = normalizeFacets(termsOrFacets)
   const stats = buildDocFrequency(entries)
+  const relativeScoreFloor = tuning.relativeScoreFloor ?? RELATIVE_SCORE_FLOOR
+  if (!Number.isFinite(relativeScoreFloor) || relativeScoreFloor < 0 || relativeScoreFloor >= 1) {
+    throw new RangeError('tuning.relativeScoreFloor must be finite and in [0, 1)')
+  }
   const rankFor = (terms) => {
     const ranked = entries
       .map((entry) => ({ ...entry, ...matchDetail(entry, terms, stats, tuning) }))
@@ -320,7 +381,10 @@ export function selectSkills(
     // The index can carry the same skill name from several roots (user copy +
     // library copy): keep only the strongest entry per name.
     const seenNames = new Set()
-    return ranked.filter((entry) => !seenNames.has(entry.name) && seenNames.add(entry.name))
+    const unique = ranked.filter((entry) => !seenNames.has(entry.name) && seenNames.add(entry.name))
+    if (relativeScoreFloor === 0 || unique.length === 0) return unique
+    const topScore = unique[0].score
+    return unique.filter((entry, index) => index === 0 || entry.score >= relativeScoreFloor * topScore)
   }
 
   // Each facet gets its own share of the budget: on a combined term list a strong
@@ -330,15 +394,47 @@ export function selectSkills(
   const taken = []
   const chosen = new Set()
   let used = 0
+  const sizeOf = tokensOf ?? ((entry) => entry.tokens ?? DEFAULT_SKILL_TOKENS)
+  const rankings = facets.map((facet) => rankFor(facet.terms))
+  const spentByFacet = new Map()
+  const reserveFor = (start, excluded) => {
+    let reserved = 0
+    const blocked = new Set(excluded)
+    for (let index = start; index < rankings.length; index++) {
+      const candidate = rankings[index].find((entry) => !blocked.has(entry.name))
+      if (candidate) {
+        reserved += sizeOf(candidate)
+        blocked.add(candidate.name)
+      }
+    }
+    return reserved
+  }
 
-  for (const facet of facets) {
+  for (let index = 0; index < facets.length && facets.length > 1; index++) {
+    const facet = facets[index]
+    const candidate = firstFacetPick(
+      rankings[index], chosen, used, tokenBudget,
+      (excluded) => reserveFor(index + 1, excluded), sizeOf,
+    ) ?? rankings[index].find(
+      (entry) => !chosen.has(entry.name) && used + sizeOf(entry) <= tokenBudget,
+    )
+    if (!candidate) continue
+    const selected = { ...candidate, tokens: sizeOf(candidate) }
+    chosen.add(candidate.name)
+    used += selected.tokens
+    spentByFacet.set(facet.name, selected.tokens)
+    taken.push(facets.length > 1 ? { ...selected, facet: facet.name } : selected)
+  }
+
+  for (const [index, facet] of facets.entries()) {
     const fitted = fitToBudget(
-      rankFor(facet.terms).filter((entry) => !chosen.has(entry.name)),
-      { tokenBudget: share, tokensOf },
+      rankings[index].filter((entry) => !chosen.has(entry.name)),
+      { tokenBudget: Math.max(0, share - (spentByFacet.get(facet.name) ?? 0)), tokensOf },
     )
     for (const entry of fitted) {
       chosen.add(entry.name)
       used += entry.tokens
+      spentByFacet.set(facet.name, (spentByFacet.get(facet.name) ?? 0) + entry.tokens)
       taken.push(facets.length > 1 ? { ...entry, facet: facet.name } : entry)
     }
   }
@@ -348,7 +444,7 @@ export function selectSkills(
   const remaining = tokenBudget - used
   if (remaining > 0 && facets.length > 1) {
     const rest = facets
-      .flatMap((facet) => rankFor(facet.terms).map((entry) => ({ ...entry, facet: facet.name })))
+      .flatMap((facet, index) => rankings[index].map((entry) => ({ ...entry, facet: facet.name })))
       .filter((entry) => !chosen.has(entry.name))
       .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
     for (const entry of fitToBudget(rest, { tokenBudget: remaining, tokensOf })) {

@@ -30,6 +30,7 @@ const INTERVIEW_ELICITATION_PATH = path.join(
   'SKILL.md',
 )
 const FAST_PATH_PATH = path.join(REPO_ROOT, 'skills', 'fast-path', 'SKILL.md')
+const JEV_ASSIST_PATH = path.join(REPO_ROOT, 'skills', 'jev-assist', 'SKILL.md')
 const EXECUTOR_FALLBACK_PATH = path.join(REPO_ROOT, 'skills', 'executor-fallback', 'SKILL.md')
 const SESSION_REPORT_PATH = path.join(REPO_ROOT, 'skills', 'session-report', 'SKILL.md')
 const SKILLS_DIR = path.join(REPO_ROOT, 'skills')
@@ -186,6 +187,7 @@ const EXACT_FRONTMATTER_SKILLS = [
   'context-discipline',
   'parallel-execution',
   'agent-context-persistence',
+  'jev-assist',
 ] as const
 
 function readText(filePath: string): string {
@@ -634,7 +636,12 @@ describe('skill frontmatter contracts', () => {
 
 describe('T7 helper call-site inventory', () => {
   const flowSkillNames = [...new Set(PHASE_SKILL_MAP.flatMap(({ skills }) => skills))]
-  const scope = [COMMAND_PATH, ...flowSkillNames.map((name) => path.join(SKILLS_DIR, name, 'SKILL.md'))]
+  const OPT_IN_SKILLS = ['jev-assist'] as const
+  const scope = [
+    COMMAND_PATH,
+    ...flowSkillNames.map((name) => path.join(SKILLS_DIR, name, 'SKILL.md')),
+    ...OPT_IN_SKILLS.map((name) => path.join(SKILLS_DIR, name, 'SKILL.md')),
+  ]
 
   test('classifies every helper occurrence with one strict Helpers line', () => {
     for (const filePath of scope) {
@@ -664,6 +671,21 @@ describe('T7 helper call-site inventory', () => {
     }
   })
 
+  test('skill-selection Step 4 names the shortlist CLI with the plugin root', () => {
+    const skill = readText(SKILL_SELECTION_PATH)
+    expect(skill).toContain(
+      'deterministic retrieval as a **shortlist producer, never the final selection**',
+    )
+    expect(skill).toContain('${CLAUDE_PLUGIN_ROOT}/scripts/skill-shortlist.mjs')
+    expect(skill).toContain('derive the\n  facet terms yourself (Step 2)')
+  })
+
+  test('skill-selection Step 1 checks index staleness with the plugin-root helper', () => {
+    const skill = readText(SKILL_SELECTION_PATH)
+    expect(skill).toContain('node "${CLAUDE_PLUGIN_ROOT}/scripts/build-skills-index.mjs" --check')
+    expect(skill).not.toContain('Sanity-check the count')
+  })
+
   test('guards T7 kernel migrations and prohibited shell/state writes', () => {
     const preflight = readText(PREFLIGHT_PATH)
     const parallel = readText(PARALLEL_EXECUTION_PATH)
@@ -686,6 +708,44 @@ describe('T7 helper call-site inventory', () => {
       expect(text).not.toContain('set `phase`')
       expect(text).not.toContain('restore `backlogApproved`')
     }
+  })
+})
+
+describe('opt-in Jev procedure move (C3)', () => {
+  test('source skills keep only the opt-in pointer and the new skill owns all procedures', () => {
+    const sources = [FAST_PATH_PATH, REVIEW_DUAL_PATH, SKILL_SELECTION_PATH]
+    for (const filePath of sources) {
+      const lines = readText(filePath).split('\n').filter((line) => /jev/i.test(line))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('codex-flow:jev-assist')
+    }
+
+    const jev = readText(JEV_ASSIST_PATH)
+    expect(jev).toContain('Jev-assisted lane routing')
+    expect(jev).toContain('Jev-assisted relevance scoring')
+    expect(jev).toContain('Jev-assisted finding triage')
+    expect(jev).toContain('Jev-assisted root-cause classification')
+    expect(jev).toContain('Jev-assisted improvement prioritization')
+    for (const point of ['fast-path-lane', 'skill-relevance', 'review-triage', 'improvement-priority']) {
+      expect(jev).toContain(`--point ${point}`)
+    }
+    expect(jev).toContain('Choice question `root_cause`')
+    for (const category of [
+      'auth/session',
+      'database queries',
+      'file paths',
+      'external API calls',
+      'crypto',
+      'payments',
+      'secrets/env',
+    ]) {
+      expect(jev).toContain(category)
+    }
+    for (const threshold of ['0.6', '0.85', '0.8']) expect(jev).toContain(threshold)
+    expect(jev).toContain('never call-then-filter')
+    expect(jev).toContain('one batched')
+    expect(jev).toContain('codex_continue')
+    expect(PHASE_SKILL_MAP.flatMap(({ skills }) => skills)).not.toContain('jev-assist')
   })
 })
 
@@ -869,16 +929,29 @@ describe('plan-architecture Decision log schema', () => {
 
     expect(skill).toContain('Writers SHOULD fill `Applies to`; run-wide constraints use `all`.')
   })
+
+  test('tells the Decision-log writer to check each appended block', () => {
+    const skill = readText(PLAN_ARCHITECTURE_PATH)
+    const writer = skill.slice(skill.indexOf('The ONLY per-task writer'), skill.indexOf('## Design principles'))
+    expect(writer).toContain('--check-plan')
+  })
 })
 
 describe('preflight resume protocol', () => {
+  test('documents the single-operator no-lock journal limit', () => {
+    const skill = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
+    expect(skill).toContain(
+      'The helper takes no file lock and assumes one orchestrator writes STATE.md and the journal; parallel workers never do.',
+    )
+  })
+
   test('documents that resume resets task selectors outside execution', () => {
     // Arrange
     const normalizedSkill = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
 
     // Act / Assert
     expect(normalizedSkill).toContain(
-      'A resume writes only `resumeHead` and `phase`, and outside `execution` resets the task selectors',
+      'A resume writes `resumeHead` and `phase`; outside `execution`, it resets `currentTask`, `taskStage`, and `wave',
     )
     expect(normalizedSkill).not.toContain('updates `phase` as its resume operation')
   })
@@ -1226,8 +1299,19 @@ describe('sufficiency check and brief-grounded authoring contract', () => {
     expect(normalizedStep7d).toContain('must cite the R-IDs it serves')
     expect(step7dToStep8).toContain('scripts/skill-lint.mjs')
     expect(step7dToStep8).toContain('one batched AskUserQuestion')
-    expect(normalizedStep7d).toContain('brief → author → lint → one batched approval')
+    expect(normalizedStep7d).toContain('brief → author → lint → independent review → one batched approval')
+    expect(normalizedStep7d).toContain('mcp__codex__codex_review')
+    expect(normalizedStep7d).toContain('lint result')
+    expect(normalizedStep7d).toContain('unverified: n/total')
+    expect(normalizedStep7d).toContain('reviewer verdict')
     expect(normalizedStep7d).toContain('quarantine/authored')
+    expect(normalizedStep7d.indexOf('independent review')).toBeLessThan(
+      normalizedStep7d.indexOf('one batched AskUserQuestion'),
+    )
+    expect(normalizedStep7d.indexOf('PASS')).toBeLessThan(
+      normalizedStep7d.indexOf('one batched AskUserQuestion'),
+    )
+    expect(normalizedStep7d).not.toMatch(/(?:^|[.!?]\s)Present(?:[.!?]|$)/)
   })
 
   test('wires loaded-but-insufficient authoring into Phase 2 step 2', () => {
@@ -1246,7 +1330,7 @@ describe('sufficiency check and brief-grounded authoring contract', () => {
     expect(skillSelection).toContain(
       'node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-brief.mjs" --facet <facet> --rids <gap R-IDs>',
     )
-    expect(skillSelection).toContain('brief → author → lint → one batched approval')
+    expect(skillSelection).toContain('brief → author → lint → independent review → one batched approval')
   })
 
   test('requires brief-first authoring before Phase 3 execution', () => {
@@ -1267,7 +1351,7 @@ describe('sufficiency check and brief-grounded authoring contract', () => {
     expect(skillSelection).toContain('skill-brief.mjs')
     expect(skillSelection).toContain('skill-lint.mjs')
     expect(skillSelection).toContain('one batched AskUserQuestion')
-    expect(skillSelection).toContain('brief → author → lint → one batched approval')
+    expect(skillSelection).toContain('brief → author → lint → independent review → one batched approval')
     expect(skillSelection).toContain('quarantine/authored')
   })
 })
@@ -3104,5 +3188,51 @@ describe('brainstorm command contract (PDCA two-way debate)', () => {
     const { SYNC_PAIRS } = await import('../scripts/check-command-sync.mjs')
 
     expect(SYNC_PAIRS).toContainEqual(['commands/brainstorm.md', '.claude/commands/brainstorm.md'])
+  })
+})
+
+describe('event journal archive obligation', () => {
+  const sentencesNaming = (text: string, marker: string): string[] => (
+    text.replace(/\s+/g, ' ').split(/(?<=[.;])\s/).filter((sentence) => sentence.includes(marker))
+  )
+
+  test('the command restart instruction archives EVENTS.jsonl', () => {
+    // Arrange
+    const command = readText(path.join(REPO_ROOT, 'commands', 'codex-flow.md'))
+
+    // Act
+    const sentences = sentencesNaming(command, 'EVENTS.jsonl')
+
+    // Assert
+    expect(sentences.some((sentence) => /archive the old control files/.test(sentence))).toBe(true)
+  })
+
+  test('the preflight Restart and phase-complete bullets archive EVENTS.jsonl', () => {
+    // Arrange
+    const skill = readText(path.join(REPO_ROOT, 'skills', 'preflight', 'SKILL.md')).replace(/\s+/g, ' ')
+
+    // Act
+    const restart = skill.match(/\*\*Restart\*\* → .*?then begin fresh/)?.[0] ?? ''
+    const complete = skill.match(/\*\*`phase: complete`\*\* → .*?Resume is offered/)?.[0] ?? ''
+
+    // Assert
+    expect(restart).toContain('EVENTS.jsonl')
+    expect(complete).toContain('EVENTS.jsonl')
+  })
+})
+
+describe('orphaned event journal recovery', () => {
+  test.each([
+    ['command', path.join(REPO_ROOT, 'commands', 'codex-flow.md')],
+    ['preflight skill', path.join(REPO_ROOT, 'skills', 'preflight', 'SKILL.md')],
+  ])('the %s archives an orphaned EVENTS.jsonl when STATE.md is missing', (_, filePath) => {
+    // Arrange
+    const text = readText(filePath).replace(/\s+/g, ' ')
+
+    // Act
+    const sentence = text.match(/If STATE\.md does not exist[^]*?orphaned control files/)?.[0] ?? ''
+
+    // Assert
+    expect(sentence).toContain('EVENTS.jsonl')
   })
 })

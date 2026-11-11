@@ -28,6 +28,8 @@ import {
   tokensOf,
   writeFileAtomically,
 } from '../scripts/context-slice.mjs'
+// @ts-expect-error — plain .mjs script, not part of the tsc build
+import { decisionLogBlockCount, decisionLogProblems as decisionLogProblemsFromModule } from '../scripts/decision-log.mjs'
 
 const CONTEXT_SLICE_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'context-slice.mjs')
 const HEAD_SHA = 'abcdef12'
@@ -215,6 +217,261 @@ describe('parsePlan', () => {
 
     expect(() => parsePlan(null)).toThrow(/planText must be a string/)
     expect(() => parsePlan(malformedBlock)).toThrow(/T1 is missing Why/)
+  })
+})
+
+describe('Decision-log validation', () => {
+  const complete = (id = 'T1', title = 'Complete') => `### ${id} — ${title}
+- Decision: chose it
+- Why: needed
+- Constraint for later tasks: keep it
+- Contracts touched: C1
+- Anchor: abc123
+- Applies to: all
+`
+
+  test('accepts a complete task block', () => {
+    expect(decisionLogProblemsFromModule(`## Decision log\n${complete()}`)).toEqual([])
+  })
+
+  test.each([
+    'Decision', 'Why', 'Constraint for later tasks', 'Contracts touched', 'Anchor', 'Applies to',
+  ])('reports a missing %s field', (field) => {
+    const plan = `## Decision log\n${complete().replace(new RegExp(`^- ${field}:.*\\n`, 'm'), '')}`
+    expect(decisionLogProblemsFromModule(plan)).toEqual([{ id: 'T1', title: 'Complete', field, kind: 'missing' }])
+  })
+
+  test('reports an empty-valued field as missing', () => {
+    expect(decisionLogProblemsFromModule(`## Decision log\n${complete().replace('- Why: needed', '- Why: ')}`))
+      .toEqual([{ id: 'T1', title: 'Complete', field: 'Why', kind: 'missing' }])
+  })
+
+  test('reports only the second broken block with its title', () => {
+    const broken = complete('T2', 'Broken').replace('- Anchor: abc123\n', '')
+    expect(decisionLogProblemsFromModule(`## Decision log\n${complete()}\n${broken}`))
+      .toEqual([{ id: 'T2', title: 'Broken', field: 'Anchor', kind: 'missing' }])
+  })
+
+  test('accepts a plan without a Decision log section', () => {
+    expect(decisionLogProblemsFromModule('# Plan\n\n## Context\ntext')).toEqual([])
+  })
+
+  test('accepts a non-task event block under the existing schema', () => {
+    const event = complete('Wave integration', 'Merged')
+      .replace('- Anchor: abc123', '')
+      .replace('- Applies to: all', '')
+    expect(decisionLogProblemsFromModule(`## Decision log\n${event}`)).toEqual([])
+  })
+
+  test('reports every missing field in schema order', () => {
+    const plan = '## Decision log\n### T3 — two missing\n- Decision: chosen\n'
+    expect(decisionLogProblemsFromModule(plan)).toEqual([
+      { id: 'T3', title: 'two missing', field: 'Why', kind: 'missing' },
+      { id: 'T3', title: 'two missing', field: 'Constraint for later tasks', kind: 'missing' },
+      { id: 'T3', title: 'two missing', field: 'Contracts touched', kind: 'missing' },
+      { id: 'T3', title: 'two missing', field: 'Anchor', kind: 'missing' },
+      { id: 'T3', title: 'two missing', field: 'Applies to', kind: 'missing' },
+    ])
+  })
+
+  test('reports a duplicate field', () => {
+    const plan = `## Decision log\n${complete()}- Decision: again\n`
+    expect(decisionLogProblemsFromModule(plan)).toContainEqual({
+      id: 'T1', title: 'Complete', field: 'Decision', kind: 'duplicate',
+    })
+  })
+
+  test('reports malformed headings', () => {
+    expect(decisionLogProblemsFromModule('## Decision log\n### T2: no dash\n- Decision: chosen\n'))
+      .toEqual([{ id: 'T2: no dash', title: '', kind: 'heading' }])
+  })
+
+  test('reports missing and duplicate problems together', () => {
+    const plan = '## Decision log\n### T3 — mixed\n- Decision: one\n- Decision: two\n'
+    expect(decisionLogProblemsFromModule(plan)).toEqual([
+      { id: 'T3', title: 'mixed', field: 'Why', kind: 'missing' },
+      { id: 'T3', title: 'mixed', field: 'Constraint for later tasks', kind: 'missing' },
+      { id: 'T3', title: 'mixed', field: 'Contracts touched', kind: 'missing' },
+      { id: 'T3', title: 'mixed', field: 'Anchor', kind: 'missing' },
+      { id: 'T3', title: 'mixed', field: 'Applies to', kind: 'missing' },
+      { id: 'T3', title: 'mixed', field: 'Decision', kind: 'duplicate' },
+    ])
+  })
+
+  test('CLI validates without writing and works outside git', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-check-plan-'))
+    tempDirectories.push(directory)
+    const planPath = join(directory, 'PLAN.md')
+    writeFileSync(planPath, `## Decision log\n${complete()}`)
+    const before = readdirSync(directory)
+    const result = spawnSync(process.execPath, [CONTEXT_SLICE_SCRIPT, '--check-plan', '--plan', planPath], {
+      cwd: directory, encoding: 'utf8',
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout.trim()).toBe('context-slice: plan: 1 decision block(s) ok')
+    expect(result.stderr).toBe('')
+    expect(readdirSync(directory)).toEqual(before)
+  })
+
+  test('CLI returns 1 with a problem line and 2 for a missing plan', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-check-plan-errors-'))
+    tempDirectories.push(directory)
+    const planPath = join(directory, 'PLAN.md')
+    writeFileSync(planPath, `## Decision log\n${complete().replace('- Anchor: abc123\n', '')}`)
+    const invalid = spawnSync(process.execPath, [CONTEXT_SLICE_SCRIPT, '--check-plan', '--plan', planPath], {
+      cwd: directory, encoding: 'utf8',
+    })
+    const missing = spawnSync(process.execPath, [CONTEXT_SLICE_SCRIPT, '--check-plan', '--plan', 'missing.md'], {
+      cwd: directory, encoding: 'utf8',
+    })
+    expect(invalid.status).toBe(1)
+    expect(invalid.stderr.trim()).toBe('context-slice: plan: T1/Complete: missing Anchor')
+    expect(invalid.stdout).toBe('')
+    expect(missing.status).toBe(2)
+    expect(missing.stderr).toMatch(/context-slice: plan: .*missing\.md/)
+  })
+
+  test('CLI reports the host probe blocks exactly', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-host-probe-'))
+    tempDirectories.push(directory)
+    const planPath = join(directory, 'PLAN.md')
+    writeFileSync(planPath, `## Decision log
+### T2: no dash
+- Decision: chosen
+### T3 — two missing
+- Decision: one
+- Decision: two
+`)
+    const result = spawnSync(process.execPath, [CONTEXT_SLICE_SCRIPT, '--check-plan', '--plan', planPath], {
+      cwd: directory, encoding: 'utf8',
+    })
+    expect(result.status).toBe(1)
+    expect(result.stderr.trim().split('\n')).toEqual([
+      'context-slice: plan: "T2: no dash": heading must be "<id> — <title>"',
+      'context-slice: plan: T3/two missing: missing Why',
+      'context-slice: plan: T3/two missing: missing Constraint for later tasks',
+      'context-slice: plan: T3/two missing: missing Contracts touched',
+      'context-slice: plan: T3/two missing: missing Anchor',
+      'context-slice: plan: T3/two missing: missing Applies to',
+      'context-slice: plan: T3/two missing: duplicate Decision',
+    ])
+  })
+
+  test('ignores headings and fields inside fenced decision content', () => {
+    const plan = `## Decision log
+### T1 — Fenced
+- Decision: chose it
+- Why: needed
+- Constraint for later tasks: keep it
+- Contracts touched: C1
+- Anchor: abc123
+- Applies to: all
+\`\`\`md
+### T9 — example
+- Decision: example only
+## Decision log
+\`\`\`
+`
+    expect(decisionLogProblemsFromModule(plan)).toEqual([])
+    expect(parsePlan(plan).decisionBlocks).toHaveLength(1)
+  })
+
+  test('reports duplicate Decision log sections', () => {
+    const plan = `## Decision log\n${complete()}\n## Decision log\n${complete('T2', 'Second')}`
+    expect(decisionLogProblemsFromModule(plan)).toContainEqual(expect.objectContaining({ kind: 'section' }))
+    expect(() => parsePlan(plan)).toThrow(/duplicate "## Decision log" section at line/)
+  })
+
+  test('ends Decision log at the next non-fenced level-two section', () => {
+    const plan = `## Decision log
+${complete()}
+## Appendix
+### Notes — ignored
+- Decision: example
+`
+    expect(decisionLogProblemsFromModule(plan)).toEqual([])
+    expect(decisionLogBlockCount(plan)).toBe(1)
+    expect(parsePlan(plan).decisionBlocks).toHaveLength(1)
+  })
+
+  test('keeps fenced level-two headings inside Decision log', () => {
+    const plan = `## Decision log
+${complete()}
+\`\`\`
+## Something
+### Notes — ignored
+\`\`\`
+`
+    expect(decisionLogProblemsFromModule(plan)).toEqual([])
+    expect(decisionLogBlockCount(plan)).toBe(1)
+  })
+
+  test('keeps offsets for a CRLF plan with a fenced example', () => {
+    // Arrange
+    const lf = `## Decision log
+${complete()}
+\`\`\`md
+### T9 — example
+\`\`\`
+${complete('T2', 'Second')}`
+    const crlf = lf.replace(/\n/g, '\r\n')
+
+    // Act
+    const blocks = parsePlan(crlf).decisionBlocks
+
+    // Assert
+    expect(blocks.map((block: { id: string, title: string }) => [block.id, block.title]))
+      .toEqual([['T1', 'Complete'], ['T2', 'Second']])
+    expect(decisionLogProblemsFromModule(crlf)).toEqual([])
+    expect(decisionLogBlockCount(crlf)).toBe(2)
+  })
+
+  test('does not treat a four-space-indented marker as a fence', () => {
+    // Arrange: the indented marker is an indented code line, so the heading after it is real.
+    const plan = `## Decision log\n${complete()}\n    \`\`\`\n### T2: no dash\n`
+
+    // Act
+    const problems = decisionLogProblemsFromModule(plan)
+
+    // Assert
+    expect(problems).toEqual([{ id: 'T2: no dash', title: '', kind: 'heading' }])
+  })
+
+  test('does not close a fence on a marker followed by text', () => {
+    // Arrange
+    const plan = `## Decision log\n${complete()}\n\`\`\`\n\`\`\`js still fenced\n### T2: no dash\n\`\`\`\n`
+
+    // Act
+    const problems = decisionLogProblemsFromModule(plan)
+
+    // Assert
+    expect(problems).toEqual([])
+  })
+
+  test('CLI names the line of a duplicate Decision log section', () => {
+    // Arrange
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-duplicate-section-'))
+    tempDirectories.push(directory)
+    const planPath = join(directory, 'PLAN.md')
+    writeFileSync(planPath, `## Decision log\n${complete()}\n## Decision log\n${complete('T2', 'Second')}`)
+
+    // Act
+    const result = spawnSync(process.execPath, [CONTEXT_SLICE_SCRIPT, '--check-plan', '--plan', planPath], {
+      cwd: directory, encoding: 'utf8',
+    })
+
+    // Assert
+    expect(result.status).toBe(1)
+    expect(result.stderr.trim()).toBe('context-slice: plan: duplicate "## Decision log" section at line 10')
+  })
+
+  test.each([
+    ['duplicate + missing', '## Decision log\n### T1 — X\n- Decision: a\n- Decision: b\n', 'decision block T1 has duplicate Decision field'],
+    ['missing + empty Anchor', '## Decision log\n### T1 — X\n- Anchor: \n', 'decision block T1 is missing Decision'],
+    ['duplicate + empty Anchor', '## Decision log\n### T1 — X\n- Decision: a\n- Decision: b\n- Why: b\n- Constraint for later tasks: c\n- Contracts touched: d\n- Anchor: \n', 'decision block T1 has duplicate Decision field'],
+    ['only empty Anchor', '## Decision log\n### T1 — X\n- Decision: a\n- Why: b\n- Constraint for later tasks: c\n- Contracts touched: d\n- Anchor: \n', 'decision block T1 has an empty Anchor'],
+  ])('keeps parser precedence for %s', (_, plan, message) => {
+    expect(() => parsePlan(plan)).toThrow(message)
   })
 })
 
@@ -1519,6 +1776,42 @@ describe('defaultGit', () => {
     expect(git.isAncestor('abc123')).toBeNull()
     expect(git.changedFilesSince('abc123')).toBeNull()
     expect(git.dirtyFiles()).toBeNull()
+  })
+
+  test('distinguishes a not-repository probe from operational failures', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-probe-errors-'))
+    tempDirectories.push(directory)
+    const notRepository = () => {
+      const error = new Error('git failed')
+      Object.assign(error, {
+        status: 128,
+        stderr: Buffer.from('fatal: not a git repository (or any parent up to mount point)'),
+      })
+      throw error
+    }
+    const missingGit = () => {
+      const error = new Error('spawn git ENOENT')
+      Object.assign(error, { code: 'ENOENT' })
+      throw error
+    }
+    const timedOutGit = () => {
+      const error = new Error('timed out')
+      Object.assign(error, { code: 'ETIMEDOUT', killed: true })
+      throw error
+    }
+    const dubiousOwnership = () => {
+      const error = new Error('git failed')
+      Object.assign(error, {
+        status: 128,
+        stderr: Buffer.from('fatal: detected dubious ownership'),
+      })
+      throw error
+    }
+
+    expect(defaultGit(directory, { exec: notRepository }).headSha()).toBeNull()
+    expect(() => defaultGit(directory, { exec: missingGit })).toThrow(GitProbeError)
+    expect(() => defaultGit(directory, { exec: timedOutGit })).toThrow(GitProbeError)
+    expect(() => defaultGit(directory, { exec: dubiousOwnership })).toThrow(GitProbeError)
   })
 
   test('rejects an option-like revision without creating its output target', () => {

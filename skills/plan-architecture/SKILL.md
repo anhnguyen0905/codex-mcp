@@ -5,6 +5,8 @@ description: Architecture design for the Planning phase — codebase convention 
 
 # Architecture Planning
 
+**Helpers**: required — context-slice.mjs (helper rule).
+
 ## Step 1 — Discover conventions before designing
 
 Read `.codex-flow/PROJECT.md` first when it exists — it is the durable project context. Then read the codebase until you can answer: How are modules organized (by feature or by layer)? How do errors propagate? Where does validation live? How is the existing code tested? What naming style rules? Your design must read like the codebase's current author wrote it — deviations are review findings waiting to happen.
@@ -81,6 +83,8 @@ are not a handoff.
 The ONLY per-task writer is the post-review step: Phase 4 step 6 in sequential mode, or the
 coordinator after the wave merge in parallel mode. Review steps and worktree subagents provide
 their outcomes to that writer and never append a second task block.
+After appending, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs"
+--check-plan`; fix failures before the next task.
 
 When appending either schema, have that single writer run `git rev-parse HEAD` and record the
 result in `Anchor`. Reference code only as `path:line` plus the enclosing symbol; never paste code

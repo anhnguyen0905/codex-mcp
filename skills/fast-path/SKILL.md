@@ -5,7 +5,7 @@ description: Route small or read-only codex-flow work through a lite lane instea
 
 # Fast-path gate — small and analysis-only tasks
 
-**Helpers**: required — none; optional — jev-client.mjs (off/missing key is a silent no-op).
+**Helpers**: required — none; optional — none.
 
 The full six-phase flow exists for multi-task feature work. Its fixed overhead (interview docs,
 PLAN/TASKS/STATE, per-task slices, dual review, reports) is the wrong cost for a small or
@@ -27,25 +27,7 @@ migrations, input handling), changes spanning components or contracts, ambiguous
 that need real elicitation, anything the user explicitly asked to run as the full flow. When
 unsure, ask the user one question: fast path or full flow.
 
-## Jev-assisted lane routing (optional)
-
-Determine the absolute exclusions from your own reading of the task first. Only when none apply,
-and only then, when `getJevMode()` (via `node scripts/jev-client.mjs ask ...`) is not `off`, call
-`askJev` with a Choice question `lane` whose criteria are `analysis`, `small-change`, and
-`full-flow`, plus Noul questions `is_security_sensitive` and `is_ambiguous`; set `state` to the
-task description. Jev is consulted only as a tie-breaker for genuinely non-excluded,
-non-obviously-security-sensitive tasks. Apply these rules in order:
-
-- Absolute exclusions — security-sensitive, spans components/contracts, ambiguous,
-  user-requested full-flow — always win regardless of Jev's answer.
-- `lane.confidence < 0.6` → ignore Jev's suggestion, Claude reasons as today (unchanged
-  fallback).
-- In `shadow` mode, after Claude reaches its own gate decision, call
-  `node scripts/jev-client.mjs log --point fast-path-lane --jev '<jevAnswer>' --claude
-  '<claudeDecision>'` and continue with Claude's decision unchanged — Jev never alters
-  behavior in shadow mode.
-- `enforce` mode is defined here for completeness but ships inert (every point defaults to
-  `shadow`/`off` per PLAN.md "Out of scope" — no task in this backlog turns it on).
+Optional Jev assist (off by default): load `codex-flow:jev-assist`.
 
 **Analysis lane workflow**: Claude works directly — read code, run read-only commands, query
 data — and delivers the findings with a short "what I verified" note. No Codex session is

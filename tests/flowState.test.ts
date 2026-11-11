@@ -834,6 +834,7 @@ describe('flow-state CLI', () => {
     expect(await main([
       'init', '--baseline', 'abc123', '--known-red', 'none', '--dirty-baseline', 'clean',
     ], { cwd: directory })).toBe(0)
+    expect(await main(['check'], { cwd: directory })).toBe(0)
     const state = readFileSync(statePath, 'utf8')
     const secondInit = await main([
       'init', '--baseline', 'other', '--known-red', 'other',
@@ -1066,6 +1067,7 @@ describe('flow-state CLI', () => {
     expect(parseState(readFileSync(statePath, 'utf8')).phase).toBe('review')
     const archivedState = readFileSync(statePath, 'utf8')
     renameSync(statePath, join(controlDirectory, 'STATE.archive.md'))
+    renameSync(join(controlDirectory, 'EVENTS.jsonl'), join(controlDirectory, 'EVENTS.archive.jsonl'))
     await runOk(['init', '--baseline', 'newbase', '--known-red', 'none'])
 
     // Assert
@@ -1211,5 +1213,32 @@ describe('flow-state CLI', () => {
     expect(readFileSync(tasksPath, 'utf8')).toContain(
       `- Status: in-progress\n  - ${AT} pending -> in-progress\n`,
     )
+  })
+
+  test('injects a failing state writer and leaves an abort event', async () => {
+    const directory = makeTempDirectory('flow-state-journal-crash-')
+    const controlDirectory = join(directory, '.codex-flow')
+    mkdirSync(controlDirectory)
+    await main(['init', '--baseline', 'base', '--known-red', 'none'], { cwd: directory })
+    writeFileSync(join(controlDirectory, 'REQUIREMENTS.md'), '# requirements\n')
+    const statePath = join(controlDirectory, 'STATE.md')
+    await expect(main(['approve', 'requirements'], {
+      cwd: directory,
+      writeState: async () => { throw new Error('injected writer failure') },
+    })).rejects.toThrow('injected writer failure')
+    const journal = readFileSync(join(controlDirectory, 'EVENTS.jsonl'), 'utf8')
+    expect(journal).toContain('"status":"abort"')
+    expect(readFileSync(statePath, 'utf8')).toContain('- phase: interview')
+  })
+
+  test('legacy state transitions without creating a journal', async () => {
+    const directory = makeTempDirectory('flow-state-legacy-journal-')
+    const controlDirectory = join(directory, '.codex-flow')
+    mkdirSync(controlDirectory)
+    const statePath = join(controlDirectory, 'STATE.md')
+    writeFileSync(statePath, stateAtPhase('execution'))
+    expect(await main(['resume', '--head', 'legacy'], { cwd: directory })).toBe(0)
+    expect(readdirSync(controlDirectory)).toEqual(['STATE.md'])
+    expect(await main(['check', '--state', statePath], { cwd: directory })).toBe(0)
   })
 })

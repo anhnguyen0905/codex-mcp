@@ -389,9 +389,9 @@ export function parseArgs(argv) {
   return { mode, timeoutMs }
 }
 
-async function runNpm(args, cwd) {
+export async function runNpm(args, cwd, { exec = execFileAsync } = {}) {
   try {
-    const { stdout } = await execFileAsync(npmBin(), shellArgs(args), {
+    const { stdout } = await exec(npmBin(), shellArgs(args), {
       cwd,
       maxBuffer: MAX_BUFFER_BYTES,
       timeout: NPM_INSTALL_TIMEOUT_MS,

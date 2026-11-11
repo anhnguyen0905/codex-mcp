@@ -1,4 +1,6 @@
-import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, readFile, stat, utimes, unlink, symlink, readdir, chmod } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -12,7 +14,14 @@ import {
   compareVersionDirs,
   pluginSkillRoots,
   defaultRoots,
+  indexStaleness,
+  parseCatalog,
 } from '../scripts/build-skills-index.mjs'
+// @ts-expect-error — plain .mjs script, not part of the tsc build
+import { selectSkills } from '../scripts/skill-match.mjs'
+
+const execFileAsync = promisify(execFile)
+const SCRIPT = path.resolve('scripts/build-skills-index.mjs')
 
 const SKILL = (name: string, description: string) =>
   `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\nBody.\n`
@@ -31,6 +40,16 @@ async function addSkill(rel: string, content: string): Promise<void> {
   const dir = path.join(root, rel)
   await mkdir(dir, { recursive: true })
   await writeFile(path.join(dir, 'SKILL.md'), content, 'utf8')
+}
+
+async function snapshotIndex(out: string, library: string) {
+  return { bytes: await readFile(out), mtime: (await stat(out)).mtimeMs, listing: await readdir(library) }
+}
+
+async function expectUntouched(snapshot: { bytes: Buffer; mtime: number; listing: string[] }, out: string, library: string) {
+  expect(await readFile(out)).toEqual(snapshot.bytes)
+  expect((await stat(out)).mtimeMs).toBe(snapshot.mtime)
+  expect(await readdir(library)).toEqual(snapshot.listing)
 }
 
 describe('parseSkillMeta', () => {
@@ -125,6 +144,79 @@ describe('renderIndex', () => {
     const last = lines[lines.length - 1]
     expect(last).toBe('a-skill | Line one with / pipe. | /tmp/a/SKILL.md')
     expect(output).toContain('# Format: <name> | <description> | <SKILL.md path>')
+  })
+
+  test('adds only the roots header beyond the rebuilt timestamp', () => {
+    const entries = [{ name: 'a', description: 'A', file: '/tmp/a/SKILL.md' }]
+    const normalize = (text: string) => text.replace(/^# Rebuilt: .*$/m, '# Rebuilt: normalized')
+    const withoutRoots = normalize(renderIndex(entries)).replace(/^<!-- roots: .*\n/m, '')
+    const withRoots = normalize(renderIndex(entries, ['/tmp/root']))
+      .replace('<!-- roots: ["/tmp/root"] -->', '<!-- roots: [] -->')
+    expect(withRoots).toBe(normalize(renderIndex(entries)))
+    expect(withoutRoots).not.toContain('<!-- roots:')
+  })
+})
+
+describe('indexStaleness', () => {
+  const scanned = [{ file: '/tmp/skills/a/SKILL.md', mtimeMs: 9 }]
+  const indexed = [{ name: 'a', description: 'A', file: scanned[0].file }]
+
+  test('reports current with no reason', () => {
+    // Act
+    const result = indexStaleness({ indexEntries: indexed, indexMtimeMs: 10, scanned })
+
+    // Assert
+    expect(result).toEqual({ stale: false, reason: null })
+  })
+
+  test('reports an indexed skill gone from disk', () => {
+    const result = indexStaleness({ indexEntries: indexed, indexMtimeMs: 10, scanned: [] })
+
+    expect(result).toEqual({
+      stale: true,
+      reason: '1 indexed skill(s) no longer on disk (e.g. /tmp/skills/a/SKILL.md)',
+    })
+  })
+
+  test('reports a newer skill file', () => {
+    const result = indexStaleness({ indexEntries: indexed, indexMtimeMs: 8, scanned })
+
+    expect(result).toEqual({
+      stale: true,
+      reason: '1 skill file(s) modified at or after the index (e.g. /tmp/skills/a/SKILL.md)',
+    })
+  })
+
+  test('treats an equal mtime as possibly newer', () => {
+    const result = indexStaleness({ indexEntries: indexed, indexMtimeMs: 9, scanned })
+    expect(result.reason).toContain('modified at or after the index')
+  })
+
+  test('reports a skill on disk that is not indexed', () => {
+    const result = indexStaleness({ indexEntries: [], indexMtimeMs: 10, scanned })
+
+    expect(result).toEqual({
+      stale: true,
+      reason: '1 skill(s) on disk not in the index (e.g. /tmp/skills/a/SKILL.md)',
+    })
+  })
+
+  test('ignores URL catalog entries', () => {
+    const result = indexStaleness({
+      indexEntries: [...indexed, { file: 'https://example.com/remote' }],
+      indexMtimeMs: 10,
+      scanned,
+    })
+
+    expect(result).toEqual({ stale: false, reason: null })
+  })
+
+  test('uses newer-file precedence over set differences', () => {
+    const result = indexStaleness({ indexEntries: [], indexMtimeMs: 1, scanned })
+    expect(result).toEqual({
+      stale: true,
+      reason: '1 skill file(s) modified at or after the index (e.g. /tmp/skills/a/SKILL.md)',
+    })
   })
 })
 
@@ -262,5 +354,328 @@ describe('runCli', () => {
     await expect(runCli([missing, '--out', path.join(root, 'INDEX.md')])).rejects.toThrow(
       /no skills found/i,
     )
+  })
+
+  test('checks without writing and reports each stale condition', async () => {
+    await addSkill('check-skill', SKILL('check-skill', 'Check.'))
+    const out = path.join(root, 'check', 'INDEX.md')
+    await runCli([root, '--out', out])
+    const before = await readFile(out, 'utf8')
+    const beforeMtime = (await stat(out)).mtimeMs
+
+    await expect(runCli([root, '--out', out, '--check'])).resolves.toMatchObject({ stale: false })
+    const skillFile = path.join(root, 'check-skill', 'SKILL.md')
+    const future = new Date(Date.now() + 10_000)
+    await utimes(skillFile, future, future)
+    await expect(runCli([root, '--out', out, '--check'])).resolves.toMatchObject({
+      stale: true,
+      reason: expect.stringContaining('modified at or after the index'),
+    })
+    await expect(runCli([root, '--out', out, '--check', '--vet', skillFile])).rejects.toThrow(/cannot be combined/)
+    expect(await readFile(out, 'utf8')).toBe(before)
+    expect((await stat(out)).mtimeMs).toBe(beforeMtime)
+    await unlink(out)
+    await expect(runCli([root, '--out', out, '--check'])).resolves.toMatchObject({
+      stale: true,
+      reason: expect.stringContaining('index missing'),
+    })
+  })
+
+  test.skipIf(process.platform === 'win32')('canonicalizes symlinked roots during check', async () => {
+    await addSkill('linked', SKILL('linked', 'Linked.'))
+    const link = path.join(root, 'root-link')
+    await symlink(root, link)
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+    await expect(runCli([link, '--out', out, '--check'])).resolves.toMatchObject({ stale: false })
+  })
+
+  test('records roots, detects root changes, and preserves the catalog parser contract', async () => {
+    await addSkill('rooted', SKILL('rooted', 'Rooted.'))
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+    const content = await readFile(out, 'utf8')
+    expect(parseCatalog(content)).toEqual(parseCatalog(content.replace(/^<!-- roots:.*\n/m, '')))
+    const before = await readFile(out, 'utf8')
+    const listing = await readdir(root)
+    const result = await runCli([path.join(root, 'rooted'), '--out', out, '--check'])
+    expect(result.reason).toContain('scanned roots differ from the index')
+    expect(await readFile(out, 'utf8')).toBe(before)
+    expect(await readdir(root)).toEqual(listing)
+  })
+
+  test('reports unreadable and missing indexes without throwing', async () => {
+    const out = path.join(root, 'missing', 'INDEX.md')
+    await expect(runCli([root, '--out', out, '--check'])).resolves.toMatchObject({
+      stale: true,
+      reason: `index missing: ${out}`,
+    })
+    await addSkill('unreadable', SKILL('unreadable', 'Unreadable.'))
+    await runCli([root, '--out', out])
+    await unlink(path.join(root, 'unreadable', 'SKILL.md'))
+    const result = await runCli([root, '--out', out, '--check'])
+    expect(result.stale).toBe(true)
+  })
+
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports an unreadable scanned skill', async () => {
+    await addSkill('locked', SKILL('locked', 'Locked.'))
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+    const snapshot = await snapshotIndex(out, root)
+    const skill = path.join(root, 'locked', 'SKILL.md')
+    await chmod(skill, 0o000)
+    try {
+      const result = await runCli([root, '--out', out, '--check'])
+      expect(result.reason).toBe(`unreadable: ${skill} (EACCES)`)
+      await expectUntouched(snapshot, out, root)
+    } finally { await chmod(skill, 0o644) }
+  })
+
+  test('reports an index directory as unreadable', async () => {
+    await addSkill('index-dir', SKILL('index-dir', 'Index.'))
+    const out = path.join(root, 'INDEX')
+    await mkdir(out)
+    const result = await runCli([root, '--out', out, '--check'])
+    expect(result.reason).toBe(`unreadable: ${out} (EISDIR)`)
+  })
+
+  test('reports an unreadable REMOTE directory', async () => {
+    await addSkill('remote-dir', SKILL('remote-dir', 'Remote.'))
+    const remote = path.join(root, 'REMOTE.md')
+    const source = path.join(root, 'remote-source.md')
+    await writeFile(source, '', 'utf8')
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out, '--remote', source])
+    await unlink(source)
+    await mkdir(remote)
+    const snapshot = await snapshotIndex(out, root)
+    const result = await runCli([root, '--out', out, '--check', '--remote', remote])
+    expect(result.reason).toBe(`unreadable: ${remote} (EISDIR)`)
+    await expectUntouched(snapshot, out, root)
+  })
+
+  test('does not diagnose roots when the older index has no roots header', async () => {
+    await addSkill('legacy', SKILL('legacy', 'Legacy.'))
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+    const content = (await readFile(out, 'utf8')).replace(/^<!-- roots: .*\n/m, '')
+    await writeFile(out, content, 'utf8')
+    const result = await runCli([path.join(root, 'legacy'), '--out', out, '--check'])
+    expect(result.reason ?? '').not.toContain('scanned roots differ')
+  })
+
+  test.each([
+    ['a non-array roots header', '<!-- roots: {"a":1} -->'],
+    ['an unparsable roots header', '<!-- roots: [oops -->'],
+  ])('ignores %s instead of crashing', async (_label, header) => {
+    // Arrange
+    await addSkill('legacy', SKILL('legacy', 'Legacy.'))
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+    await utimes(path.join(root, 'legacy', 'SKILL.md'), new Date(1), new Date(1))
+    await writeFile(out, (await readFile(out, 'utf8')).replace(/^<!-- roots: .*$/m, header), 'utf8')
+
+    // Act
+    const result = await runCli([root, '--out', out, '--check'])
+
+    // Assert
+    expect(result.stale).toBe(false)
+  })
+
+  test('reads the roots header from an index with CRLF line endings', async () => {
+    // Arrange
+    await addSkill('crlf', SKILL('crlf', 'Crlf.'))
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+    await writeFile(out, (await readFile(out, 'utf8')).replace(/\n/g, '\r\n'), 'utf8')
+
+    // Act
+    const result = await runCli([path.join(root, 'crlf'), '--out', out, '--check'])
+
+    // Assert
+    expect(result.reason).toContain('scanned roots differ from the index')
+  })
+
+  test('compares roots as an order-insensitive set', async () => {
+    const first = path.join(root, 'first-root')
+    const second = path.join(root, 'second-root')
+    await mkdir(path.join(first, 'first-skill'), { recursive: true })
+    await writeFile(path.join(first, 'first-skill', 'SKILL.md'), SKILL('first-skill', 'First.'), 'utf8')
+    await mkdir(path.join(second, 'second-skill'), { recursive: true })
+    await writeFile(path.join(second, 'second-skill', 'SKILL.md'), SKILL('second-skill', 'Second.'), 'utf8')
+    const out = path.join(root, 'INDEX.md')
+    await runCli([first, second, '--out', out])
+    const result = await runCli([second, first, '--out', out, '--check'])
+    expect(result.stale).toBe(false)
+  })
+
+  test('detects remote catalog changes and reports merged counts', async () => {
+    await addSkill('local', SKILL('local', 'Local.'))
+    const remote = path.join(root, 'REMOTE.md')
+    await writeFile(remote, 'remote-a | Remote A | https://example.com/a\n', 'utf8')
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out, '--remote', remote])
+    await utimes(path.join(root, 'local', 'SKILL.md'), new Date(1), new Date(1))
+    await writeFile(remote, 'remote-b | Remote B | https://example.com/b\n', 'utf8')
+    const result = await runCli([root, '--out', out, '--check', '--remote', remote])
+    expect(result.reason).toBe('remote catalog changed: +1 −1')
+  })
+
+  test('reports remote additions, removals, and unchanged counts', async () => {
+    await addSkill('local', SKILL('local', 'Local.'))
+    const remote = path.join(root, 'REMOTE.md')
+    const out = path.join(root, 'INDEX.md')
+    await writeFile(remote, 'remote | Remote | https://example.com/r\n', 'utf8')
+    await runCli([root, '--out', out, '--remote', remote])
+    await utimes(path.join(root, 'local', 'SKILL.md'), new Date(1), new Date(1))
+    const current = await runCli([root, '--out', out, '--check', '--remote', remote])
+    expect(current).toMatchObject({ stale: false, count: 2, remote: 1 })
+    await writeFile(remote, 'remote | Remote | https://example.com/r\nnew | New | https://example.com/n\n', 'utf8')
+    expect((await runCli([root, '--out', out, '--check', '--remote', remote])).reason).toBe('remote catalog changed: +1 −0')
+    await runCli([root, '--out', out, '--remote', remote])
+    await writeFile(remote, 'new | New | https://example.com/n\n', 'utf8')
+    expect((await runCli([root, '--out', out, '--check', '--remote', remote])).reason).toBe('remote catalog changed: +0 −1')
+  })
+
+  test('detects a description-only change in the remote catalog', async () => {
+    // Arrange
+    await addSkill('local', SKILL('local', 'Local.'))
+    const remote = path.join(root, 'REMOTE.md')
+    const out = path.join(root, 'INDEX.md')
+    await writeFile(remote, 'remote | Remote | https://example.com/r\n', 'utf8')
+    await runCli([root, '--out', out, '--remote', remote])
+    await utimes(path.join(root, 'local', 'SKILL.md'), new Date(1), new Date(1))
+    await writeFile(remote, 'remote | Remote, reworded | https://example.com/r\n', 'utf8')
+
+    // Act
+    const result = await runCli([root, '--out', out, '--check', '--remote', remote])
+
+    // Assert
+    expect(result.reason).toBe('remote catalog changed: +1 −1')
+  })
+
+  test('a build still treats an unreadable remote catalog as empty', async () => {
+    // Arrange
+    await addSkill('local', SKILL('local', 'Local.'))
+    const remote = path.join(root, 'REMOTE.md')
+    await mkdir(remote)
+    const out = path.join(root, 'INDEX.md')
+
+    // Act
+    const result = await runCli([root, '--out', out, '--remote', remote])
+
+    // Assert
+    expect(result).toMatchObject({ count: 1, local: 1 })
+  })
+
+  test('does not count a local skill shadowing a remote pointer as a remote change', async () => {
+    await addSkill('shared', SKILL('shared', 'Shared local.'))
+    const remote = path.join(root, 'REMOTE.md')
+    const out = path.join(root, 'INDEX.md')
+    await writeFile(remote, 'shared | Shared remote | https://example.com/shared\n', 'utf8')
+    await runCli([root, '--out', out, '--remote', remote])
+    await utimes(path.join(root, 'shared', 'SKILL.md'), new Date(1), new Date(1))
+    const result = await runCli([root, '--out', out, '--check', '--remote', remote])
+    expect(result).toMatchObject({ stale: false, count: 1, remote: 0 })
+  })
+
+  test.skipIf(process.platform === 'win32')('checks through symlinked index locations in both directions', async () => {
+    await addSkill('linked-index', SKILL('linked-index', 'Linked index.'))
+    const realDir = path.join(root, 'real')
+    const linkDir = path.join(root, 'link')
+    await mkdir(realDir)
+    await symlink(realDir, linkDir)
+    const realOut = path.join(realDir, 'INDEX.md')
+    const linkOut = path.join(linkDir, 'INDEX.md')
+    await runCli([root, '--out', realOut])
+    expect((await runCli([root, '--out', linkOut, '--check'])).stale).toBe(false)
+    await unlink(realOut)
+    await runCli([root, '--out', linkOut])
+    expect((await runCli([root, '--out', realOut, '--check'])).stale).toBe(false)
+  })
+
+  test('parses and matches a header-bearing index exactly like a headerless index', async () => {
+    await addSkill('matchable', SKILL('matchable', 'Useful matching terms.'))
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+    const header = await readFile(out, 'utf8')
+    const plain = header.replace(/^<!-- roots: .*\n/m, '')
+    expect(parseCatalog(header)).toEqual(parseCatalog(plain))
+    const entries = parseCatalog(header)
+    expect(selectSkills(entries, ['matching']).map((entry: { name: string }) => entry.name))
+      .toEqual(selectSkills(parseCatalog(plain), ['matching']).map((entry: { name: string }) => entry.name))
+  })
+
+  test('reports a new older skill and a deleted skill without writing', async () => {
+    await addSkill('original', SKILL('original', 'Original.'))
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+    const indexStat = await stat(out)
+    const old = new Date(indexStat.mtimeMs - 10_000)
+
+    await addSkill('added', SKILL('added', 'Added.'))
+    await utimes(path.join(root, 'added', 'SKILL.md'), old, old)
+    const added = await runCli([root, '--out', out, '--check'])
+    expect(added.reason).toBe(
+      `1 skill(s) on disk not in the index (e.g. ${path.join(root, 'added', 'SKILL.md')})`,
+    )
+
+    await runCli([root, '--out', out])
+    await rm(path.join(root, 'original'), { recursive: true })
+    const deleted = await runCli([root, '--out', out, '--check'])
+    expect(deleted.reason).toBe(
+      `1 indexed skill(s) no longer on disk (e.g. ${path.join(root, 'original', 'SKILL.md')})`,
+    )
+  })
+
+  test('ignores quarantined skills and URL catalog entries', async () => {
+    await addSkill('original', SKILL('original', 'Original.'))
+    const out = path.join(root, 'INDEX.md')
+    const remote = path.join(root, 'REMOTE.md')
+    await writeFile(remote, 'remote | Remote | https://example.com/remote\n', 'utf8')
+    await runCli([root, '--out', out, '--remote', remote])
+    await addSkill('quarantine/quarantined', SKILL('quarantined', 'Quarantined.'))
+
+    const result = await runCli([root, '--out', out, '--check'])
+    expect(result).toMatchObject({ stale: false })
+  })
+
+  test('child process reports current and stale with exact exit behavior', async () => {
+    await addSkill('process-skill', SKILL('process-skill', 'Process.'))
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+    const before = await readFile(out, 'utf8')
+    const beforeMtime = (await stat(out)).mtimeMs
+    const current = await execFileAsync(process.execPath, [SCRIPT, '--check', root, '--out', out])
+    expect(current.stdout.trim()).toMatch(/^skills-index: current \(\d+ entries, \d+ remote, built .+\)$/)
+    expect((await stat(out)).mtimeMs).toBe(beforeMtime)
+    expect(await readFile(out, 'utf8')).toBe(before)
+
+    const future = new Date(Date.now() + 10_000)
+    await utimes(path.join(root, 'process-skill', 'SKILL.md'), future, future)
+    await expect(execFileAsync(process.execPath, [SCRIPT, '--check', root, '--out', out])).rejects.toMatchObject({
+      code: 1,
+      stdout: expect.stringMatching(/^skills-index: stale — /),
+    })
+    expect((await stat(out)).mtimeMs).toBe(beforeMtime)
+    expect(await readFile(out, 'utf8')).toBe(before)
+  })
+
+  test('child process reports --check vet usage errors', async () => {
+    await addSkill('vet-skill', SKILL('vet-skill', 'Vet.'))
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+
+    await expect(
+      execFileAsync(process.execPath, [
+        SCRIPT,
+        '--check',
+        root,
+        '--out',
+        out,
+        '--vet',
+        path.join(root, 'vet-skill', 'SKILL.md'),
+      ]),
+    ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('--check') })
   })
 })

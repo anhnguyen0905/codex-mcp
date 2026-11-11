@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'vitest'
 
+// @ts-expect-error — plain .mjs script
+import { runScenarios } from '../scripts/skill-eval.mjs'
+
 // @ts-expect-error — plain .mjs script, not part of the tsc build
 import {
+  deriveTerms,
   matchDetail,
   scoreEntry,
   rankCandidates,
@@ -12,7 +16,57 @@ import {
   idfWeight,
   buildDocFrequency,
   DEFAULT_TOKEN_BUDGET,
+  RELATIVE_SCORE_FLOOR,
 } from '../scripts/skill-match.mjs'
+
+describe('deriveTerms', () => {
+  test('extracts an English request exactly', () => {
+    expect(deriveTerms('Please build a revenue cohort analysis report for Q4 2026 at $10.')).toEqual([
+      'revenue cohort', 'cohort analysis', 'analysis report', 'revenue', 'cohort', 'analysis', 'report',
+    ])
+  })
+
+  test('extracts Vietnamese without diacritics exactly', () => {
+    expect(deriveTerms('Tao bao cao doanh thu cho cac nhom khach hang')).toEqual([
+      'bao cao', 'cao doanh', 'doanh thu', 'nhom khach', 'khach hang',
+      'bao', 'cao', 'doanh', 'thu', 'nhom', 'khach', 'hang',
+    ])
+  })
+
+  test('accented Vietnamese has the same terms and expected words', () => {
+    const accented = deriveTerms('Tạo báo cáo doanh thu cho các nhóm khách hàng')
+    expect(accented).toEqual(deriveTerms('Tao bao cao doanh thu cho cac nhom khach hang'))
+    expect(accented).toEqual(expect.arrayContaining(['doanh thu', 'khach hang']))
+  })
+
+  test('removes stop words and request verbs without removing domain vocabulary', () => {
+    const terms = deriveTerms('please build create design system with data analysis')
+    expect(terms).toEqual(['design system', 'data analysis', 'design', 'system', 'data', 'analysis'])
+  })
+
+  test('drops file names, paths, numbers, dates, and money exactly', () => {
+    expect(deriveTerms('write /tmp/report.csv on 2026-11-11 for $20 revenue analysis')).toEqual([
+      'revenue analysis', 'revenue', 'analysis',
+    ])
+  })
+
+  test('keeps phrases adjacent in the original request and de-duplicates terms', () => {
+    expect(deriveTerms('revenue cohorts and prepare an executive report revenue')).toEqual([
+      'revenue cohorts', 'executive report', 'report revenue', 'revenue', 'cohorts', 'executive', 'report',
+    ])
+  })
+
+  test('honors maxTerms including zero and rejects invalid caps', () => {
+    expect(deriveTerms('revenue cohort report', { maxTerms: 2 })).toEqual(['revenue cohort', 'cohort report'])
+    expect(deriveTerms('revenue cohort report', { maxTerms: 0 })).toEqual([])
+    expect(() => deriveTerms('revenue', { maxTerms: 1.5 })).toThrow(RangeError)
+  })
+
+  test('validates non-string and whitespace input', () => {
+    expect(() => deriveTerms(null as unknown as string)).toThrow(TypeError)
+    expect(deriveTerms('   ')).toEqual([])
+  })
+})
 
 const INDEX = [
   { name: 'exec-typescript', description: 'TypeScript/JavaScript execution idioms — type safety, async correctness, Node conventions.', file: '/a/exec-typescript/SKILL.md' },
@@ -165,6 +219,163 @@ describe('fitToBudget', () => {
 })
 
 describe('selectSkills', () => {
+  test('deduplicates same-name roots at the floor with deterministic ranking', () => {
+    // Arrange
+    const entries = [
+      { name: 'shared-alpha', description: 'alpha support', file: '/z/root/SKILL.md' },
+      { name: 'shared-alpha', description: 'alpha support', file: '/a/root/SKILL.md' },
+      { name: 'other-alpha', description: 'alpha support', file: '/b/root/SKILL.md' },
+    ]
+    // Act
+    const selected = selectSkills(entries, ['alpha'], { tuning: { relativeScoreFloor: 0.2 } })
+
+    // Assert
+    // Equal scores are ordered by name, so other-alpha ranks before shared-alpha.
+    expect(selected.filter((entry: { name: string }) => entry.name === 'shared-alpha')).toHaveLength(1)
+    expect(selected.map((entry: { name: string }) => entry.name)).toEqual(['other-alpha', 'shared-alpha'])
+    expect(selected.find((entry: { name: string }) => entry.name === 'shared-alpha').file).toBe('/z/root/SKILL.md')
+  })
+
+  test('returns no candidates when a facet top score is zero', () => {
+    // Arrange
+    const selected = selectSkills([{ name: 'skill', description: 'alpha', file: '/skill' }], [
+      { name: 'empty', terms: ['missing'] },
+    ])
+    // Act
+    // Assert
+    expect(selected).toEqual([])
+  })
+
+  test('skips an oversized first pick and takes the next fitting candidate', () => {
+    // Arrange
+    const entries = [
+      { name: 'huge-alpha', description: 'alpha', file: '/huge' },
+      { name: 'small-alpha', description: 'alpha', file: '/small' },
+    ]
+    // Act
+    const selected = selectSkills(entries, [{ name: 'facet', terms: ['alpha'] }], {
+      tokenBudget: 6000,
+      tokensOf: (entry: { name: string }) => entry.name === 'huge-alpha' ? 7000 : 100,
+    })
+    // Assert
+    expect(selected.map((entry: { name: string }) => entry.name)).toEqual(['small-alpha'])
+  })
+
+  test('counts one shared best pick as coverage for both facets', () => {
+    // Arrange
+    const scenarios = [{ id: 'F1', terms: [
+      { name: 'a', terms: ['alpha'], expectAny: ['shared-alpha-beta'] },
+      { name: 'b', terms: ['beta'], expectAny: ['shared-alpha-beta'] },
+    ] }]
+    const entries = [{ name: 'shared-alpha-beta', description: 'alpha beta', file: '/shared' }]
+
+    // Act
+    const result = runScenarios(scenarios, entries, { tokenBudget: 1000, tokensOf: () => 600 }).results[0]
+
+    // Assert
+    expect(result.selected).toEqual(['shared-alpha-beta'])
+    expect(result.usedTokens).toBe(600)
+    expect(result.facetCoverage.map((facet: { facet: string, covered: boolean }) => [facet.facet, facet.covered]))
+      .toEqual([['a', true], ['b', true]])
+  })
+
+  test('drops a tail below the relative score floor while keeping the top candidate', () => {
+    const entries = [
+      { name: 'strong', description: 'Python data analysis and reporting.', file: '/a/strong' },
+      { name: 'weak', description: 'Python utility.', file: '/a/weak' },
+    ]
+
+    const selected = selectSkills(entries, ['python', 'data', 'analysis'], {
+      tuning: { relativeScoreFloor: 0.8 },
+    })
+
+    expect(selected.map((entry: { name: string }) => entry.name)).toEqual(['strong'])
+  })
+
+  test('keeps a threshold tie and drops a candidate just below it', () => {
+    // Arrange
+    const entries = [
+      { name: 'alpha-beta', description: 'Primary match.', file: '/a/top' },
+      { name: 'alpha', description: 'Threshold match.', file: '/a/tie' },
+      { name: 'below', description: 'alpha only.', file: '/a/below' },
+    ]
+    const terms = ['alpha', 'beta']
+    const topScore = scoreEntry(entries[0], terms)
+    const tieScore = scoreEntry(entries[1], terms)
+    const floor = tieScore / topScore
+
+    // Act
+    const selected = selectSkills(entries, terms, { tuning: { relativeScoreFloor: floor } })
+
+    // Assert
+    expect(tieScore).toBe(topScore * floor)
+    expect(selected.map((entry: { name: string }) => entry.name)).toEqual(['alpha-beta', 'alpha'])
+  })
+
+  test('applies the relative floor independently within each facet', () => {
+    // Arrange
+    const entries = [
+      { name: 'alpha-beta-gamma', description: 'Strong facet A match.', file: '/a/top' },
+      { name: 'alpha', description: 'Weak facet A match.', file: '/a/weak' },
+      { name: 'delta', description: 'Best facet B match.', file: '/b/best' },
+    ]
+
+    // Act
+    const selected = selectSkills(entries, [
+      { name: 'a', terms: ['alpha', 'beta', 'gamma'] },
+      { name: 'b', terms: ['delta'] },
+    ], { tuning: { relativeScoreFloor: 0.8 }, tokensOf: () => 100 })
+
+    // Assert
+    expect(selected.map((entry: { name: string }) => entry.name).sort()).toEqual(
+      ['alpha-beta-gamma', 'delta'],
+    )
+  })
+
+  test('relativeScoreFloor zero preserves old behavior and rejects invalid values', () => {
+    // Arrange
+    const entries = [
+      { name: 'top', description: 'Python data analysis.', file: '/a/top' },
+      { name: 'tail-python', description: 'Python utility.', file: '/a/tail' },
+    ]
+
+    // Act
+    expect(selectSkills(entries, ['python', 'data', 'analysis'], { tuning: { relativeScoreFloor: 0 } })).toHaveLength(2)
+
+    // Assert
+    expect(RELATIVE_SCORE_FLOOR).toBeGreaterThan(0)
+    expect(() => selectSkills(entries, ['python'], { tuning: { relativeScoreFloor: 1 } })).toThrow(RangeError)
+    expect(() => selectSkills(entries, ['python'], { tuning: { relativeScoreFloor: Number.NaN } })).toThrow(RangeError)
+  })
+
+  test('applies the relative cutoff during leftover pass and keeps budget invariant', () => {
+    // Arrange
+    const entries = [
+      { name: 'alpha-beta-gamma', description: 'Facet A top.', file: '/a/top' },
+      { name: 'alpha-beta', description: 'Facet A leftover.', file: '/a/above' },
+      { name: 'alpha', description: 'Facet A tail.', file: '/a/below' },
+      { name: 'delta', description: 'Facet B top.', file: '/b/top' },
+    ]
+
+    // Act
+    const selected = selectSkills(entries, [
+      { name: 'a', terms: ['alpha', 'beta', 'gamma'] },
+      { name: 'b', terms: ['delta'] },
+    ], {
+      tokenBudget: 1_200,
+      tokensOf: () => 400,
+      tuning: { relativeScoreFloor: 0.6 },
+    })
+
+    // Assert
+    expect(selected.map((entry: { name: string }) => entry.name).sort()).toEqual(
+      ['alpha-beta', 'alpha-beta-gamma', 'delta'].sort(),
+    )
+    expect(selected.length).toBeLessThanOrEqual(4)
+    expect(selected.reduce(
+      (sum: number, entry: { tokens?: number }) => sum + (entry.tokens ?? 0), 0,
+    )).toBeLessThanOrEqual(1_200)
+  })
   test('is bounded by context budget, not a fixed count — loads all that fit', () => {
     // 6 relevant skills at 200 tokens each; a 1000-token budget fits 5, not a hard 3.
     const many = Array.from({ length: 6 }, (_, i) => ({
@@ -531,6 +742,60 @@ describe('selectSkills per facet', () => {
 
     expect(selected[0].name).toBe('dashboard-builder')
     expect(selected[0]).not.toHaveProperty('facet')
+  })
+
+  test('guarantees a large top candidate when the total budget permits it', () => {
+    const entries = [
+      { name: 'alpha-skill', description: 'Alpha planning skill.', tokens: 700 },
+      { name: 'beta-skill', description: 'Beta planning skill.', tokens: 200 },
+    ]
+    const selected = selectSkills(entries, [
+      { name: 'a', terms: ['alpha'] }, { name: 'b', terms: ['beta'] },
+    ], { tokenBudget: 900 })
+    expect(selected.map((entry) => entry.name)).toEqual(['alpha-skill', 'beta-skill'])
+  })
+
+  test('does not let an uncovered facet block a qualifying facet', () => {
+    const selected = selectSkills(FACETED, [
+      { name: 'missing', terms: ['cobol'] }, { name: 'viz', terms: viz },
+    ], { tokenBudget: 1200 })
+    expect(selected.map((entry) => entry.name)).toContain('dashboard-builder')
+    expect(selected.filter((entry) => entry.facet === 'missing')).toEqual([])
+  })
+
+  test('gives a shared top skill to the first facet and the next candidate to the second', () => {
+    const entries = [
+      { name: 'shared', description: 'Alpha beta skill.', tokens: 200 },
+      { name: 'beta-next', description: 'Beta-only skill.', tokens: 200 },
+    ]
+    const selected = selectSkills(entries, [
+      { name: 'first', terms: ['alpha', 'skill'] }, { name: 'second', terms: ['beta'] },
+    ], { tokenBudget: 400 })
+    expect(selected.find((entry) => entry.name === 'shared')?.facet).toBe('first')
+    expect(selected.find((entry) => entry.name === 'beta-next')?.facet).toBe('second')
+  })
+
+  test('preserves the budget when one pick per facet cannot fit', () => {
+    const entries = [
+      { name: 'alpha-skill', description: 'Alpha planning skill.', tokens: 700 },
+      { name: 'beta-skill', description: 'Beta planning skill.', tokens: 700 },
+    ]
+    const selected = selectSkills(entries, [
+      { name: 'a', terms: ['alpha'] }, { name: 'b', terms: ['beta'] },
+    ], { tokenBudget: 1000 })
+    expect(selected.map((entry) => entry.name)).toEqual(['alpha-skill'])
+    expect(selected.reduce((sum, entry) => sum + entry.tokens, 0)).toBeLessThanOrEqual(1000)
+  })
+
+  test('attributes every multi-facet selection and keeps flat selection tokens stable', () => {
+    const faceted = selectSkills(FACETED, [
+      { name: 'viz', terms: viz }, { name: 'marketing', terms: marketing },
+    ], { tokenBudget: 1200 })
+    expect(faceted.every((entry) => typeof entry.facet === 'string')).toBe(true)
+    const withoutSizer = selectSkills(INDEX, ['python', 'data', 'analysis'])
+    const withSizer = selectSkills(INDEX, ['python', 'data', 'analysis'], { tokensOf: () => 600 })
+    expect(withoutSizer.map((entry) => entry.name)).toEqual(withSizer.map((entry) => entry.name))
+    expect(withSizer.every((entry) => entry.tokens === 600)).toBe(true)
   })
 })
 

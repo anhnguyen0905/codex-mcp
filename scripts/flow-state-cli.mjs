@@ -48,6 +48,7 @@ export function parseCliArgs(argv) {
   if (command === 'init') {
     const parsed = parseOptions(args, 0, new Set([
       '--state', '--baseline', '--known-red', '--dirty-baseline', '--executor',
+      '--events',
     ]))
     return {
       command,
@@ -56,13 +57,14 @@ export function parseCliArgs(argv) {
       knownRed: requiredOption(parsed.options, '--known-red'),
       dirtyBaseline: parsed.options['--dirty-baseline'],
       executor: parsed.options['--executor'],
+      events: parsed.options['--events'],
     }
   }
   if (command === 'approve') {
     const parsed = parseOptions(
       args,
       1,
-      new Set(['--state', '--at', '--delta', '--checkpoint-commits', '--execution-mode', '--dir']),
+      new Set(['--state', '--at', '--delta', '--checkpoint-commits', '--execution-mode', '--dir', '--events']),
       new Set(['--delta']),
     )
     const gate = parsed.positionals[0]
@@ -76,29 +78,41 @@ export function parseCliArgs(argv) {
       checkpointCommits: parsed.options['--checkpoint-commits'],
       executionMode: parsed.options['--execution-mode'],
       dir: parsed.options['--dir'] ?? '.codex-flow',
+      events: parsed.options['--events'],
     }
   }
   if (command === 'advance') {
-    const parsed = parseOptions(args, 0, new Set(['--state', '--tasks']))
-    return { command, state: state(parsed.options), tasks: parsed.options['--tasks'] ?? '.codex-flow/TASKS.md' }
+    const parsed = parseOptions(args, 0, new Set(['--state', '--tasks', '--events']))
+    return {
+      command, state: state(parsed.options), tasks: parsed.options['--tasks'] ?? '.codex-flow/TASKS.md',
+      events: parsed.options['--events'],
+    }
   }
   if (NON_LINEAR_COMMAND_SET.has(command)) {
-    const parsed = parseOptions(args, 0, new Set(['--state', '--at']))
-    return { command, state: state(parsed.options), at: parsed.options['--at'] }
+    const parsed = parseOptions(args, 0, new Set(['--state', '--at', '--events']))
+    return {
+      command, state: state(parsed.options), at: parsed.options['--at'], events: parsed.options['--events'],
+    }
   }
   if (command === 'resume') {
-    const parsed = parseOptions(args, 0, new Set(['--state', '--head', '--phase']))
+    const parsed = parseOptions(args, 0, new Set(['--state', '--head', '--phase', '--events']))
     const phase = parsed.options['--phase']
     if (phase !== undefined && !PHASE_SET.has(phase)) throw new Error(`invalid phase ${JSON.stringify(phase)}`)
-    return { command, state: state(parsed.options), head: requiredOption(parsed.options, '--head'), phase }
+    return {
+      command, state: state(parsed.options), head: requiredOption(parsed.options, '--head'), phase,
+      events: parsed.options['--events'],
+    }
   }
   if (command === 'set') {
     const parsed = parseOptions(args, 2, new Set(['--state']))
     return { command, key: parsed.positionals[0], value: parsed.positionals[1], state: state(parsed.options) }
   }
   if (command === 'check') {
-    const parsed = parseOptions(args, 0, new Set(['--state', '--tasks']))
-    return { command, state: state(parsed.options), tasks: parsed.options['--tasks'] ?? null }
+    const parsed = parseOptions(args, 0, new Set(['--state', '--tasks', '--events']))
+    return {
+      command, state: state(parsed.options), tasks: parsed.options['--tasks'] ?? null,
+      events: parsed.options['--events'],
+    }
   }
   if (command === 'task') {
     const parsed = parseOptions(args, 2, new Set(['--tasks', '--at']))
@@ -110,5 +124,7 @@ export function parseCliArgs(argv) {
       at: parsed.options['--at'],
     }
   }
-  throw new Error('usage: flow-state <init|approve|advance|requirement-delta|plan-drift|improvement-gate|resume|set|check|task> ...')
+  throw new Error(
+    'usage: flow-state <init|approve|advance|requirement-delta|plan-drift|improvement-gate|resume|set|check|task> ...',
+  )
 }

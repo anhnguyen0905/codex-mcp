@@ -7,6 +7,10 @@ import { pathToFileURL } from 'node:url'
 import { DEFAULT_PROJECT_FILE, FORBIDDEN_SUBSTRINGS } from './project-context.mjs'
 import { parseRequirements } from './requirements-coverage.mjs'
 import { parseTasks } from './task-waves.mjs'
+import {
+  TASK_BLOCK_ID, decisionBlocksOf, decisionLogBlockCount, decisionLogProblems, decisionLogSectionForSlice,
+  formatDecisionLogProblem,
+} from './decision-log.mjs'
 
 export const TASK_SLICE_TOKEN_BUDGET = 4000
 export const RESUME_TOKEN_BUDGET = 8000
@@ -21,16 +25,7 @@ export const PROJECT_CONTEXT_TRUNCATION_MARKER = '… (truncated)'
 
 export { parseTasks }
 
-const DECISION_FIELDS = [
-  'Decision',
-  'Why',
-  'Constraint for later tasks',
-  'Contracts touched',
-]
-const APPLIES_TO_FIELD = 'Applies to'
 const APPLIES_TO_ALL_TOKEN = 'all'
-const PARSED_DECISION_FIELDS = [...DECISION_FIELDS, APPLIES_TO_FIELD, 'Anchor']
-const TASK_BLOCK_ID = /^T\d+$/
 const CONTRACT_LABEL = /\b[A-Z]+\d+\b/g
 const FILE_REFERENCE = /(?:\.{0,2}\/)?[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]+(?::\d+(?:-\d+)?)?/g
 const GIT_OBJECT_NAME = /^[0-9a-fA-F]{4,64}$/
@@ -63,6 +58,7 @@ const RESUME_CANDIDATE_SECTIONS = new Set([
 const TEST_FILE_REFERENCE = /(?:^|[\s`'"(])(?:\.{0,2}\/)?[A-Za-z0-9_. -]+(?:\/[A-Za-z0-9_. -]+)*\.(?:test|spec)\.[cm]?[jt]sx?(?=$|[:\s`'")])/i
 const KNOWN_RED_NOISE = /^(?:at\s|error\b|caused by\b|expected\b|received\b|stdout\b|stderr\b|console\b|\^+\s*$)/i
 const KNOWN_RED_MARKER = /^(?:[-*]\s*)?(?:fail(?:ed)?\b|[×✗✕●❯])|\btest\b.*\b(?:fail|error|broken)\b/i
+const GIT_PROBE_TIMEOUT_MS = 10_000
 
 /** Identify a failed git probe inside a repository. */
 export class GitProbeError extends Error {
@@ -90,53 +86,11 @@ function sectionsOf(planText) {
   )
 }
 
-function fieldsOf(raw, blockId) {
-  const fields = new Map()
-  const fieldNames = PARSED_DECISION_FIELDS.map(escapedPattern).join('|')
-  const fieldPattern = new RegExp(`^[ \\t]*-[ \\t]*(${fieldNames}):[ \\t]*(.*)$`, 'gm')
-
-  for (const match of raw.matchAll(fieldPattern)) {
-    if (fields.has(match[1])) throw new Error(`decision block ${blockId} has duplicate ${match[1]} field`)
-    fields.set(match[1], match[2].trim())
-  }
-  for (const field of DECISION_FIELDS) {
-    if (!fields.get(field)) throw new Error(`decision block ${blockId} is missing ${field}`)
-  }
-  if (fields.has('Anchor') && !fields.get('Anchor')) {
-    throw new Error(`decision block ${blockId} has an empty Anchor`)
-  }
-  return fields
-}
-
-function decisionBlocksOf(decisionSection) {
-  const headingPattern = /^###[ \t]+(.+?)[ \t]+—[ \t]+([^\r\n]+?)[ \t]*\r?$/gm
-  const headings = [...decisionSection.matchAll(headingPattern)]
-
-  return headings.map((heading, index) => {
-    const nextHeading = headings[index + 1]
-    const blockEnd = nextHeading?.index ?? decisionSection.length
-    const raw = decisionSection.slice(heading.index, blockEnd).trimEnd()
-    const id = heading[1].trim()
-    const fields = fieldsOf(raw, id)
-    return {
-      id,
-      title: heading[2].trim(),
-      decision: fields.get('Decision'),
-      why: fields.get('Why'),
-      constraint: fields.get('Constraint for later tasks'),
-      contracts: fields.get('Contracts touched'),
-      anchor: fields.get('Anchor') ?? null,
-      appliesTo: fields.get(APPLIES_TO_FIELD) ?? null,
-      raw,
-    }
-  })
-}
-
 /** Parse PLAN.md sections and the structured blocks under its Decision log. */
 export function parsePlan(planText) {
   if (typeof planText !== 'string') throw new TypeError('planText must be a string')
   const sections = sectionsOf(planText)
-  const decisionBlocks = decisionBlocksOf(sections.get('Decision log') ?? '')
+  const decisionBlocks = decisionBlocksOf(decisionLogSectionForSlice(planText))
   return { sections, decisionBlocks }
 }
 
@@ -309,19 +263,25 @@ export function stalenessOf(block, { headSha, changedFiles, dirtyFiles }) {
 }
 
 /** Create a git seam rooted at cwd with repository-aware failures. */
-export function defaultGit(cwd = process.cwd()) {
+export function defaultGit(cwd = process.cwd(), { exec = execFileSync } = {}) {
   if (typeof cwd !== 'string' || !cwd.trim()) throw new TypeError('cwd must be a non-empty string')
 
   let insideWorkTree = false
+  const probeArgs = ['rev-parse', '--is-inside-work-tree']
   try {
-    const output = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+    const output = exec('git', probeArgs, {
       cwd,
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, LC_ALL: 'C' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: GIT_PROBE_TIMEOUT_MS,
     })
     insideWorkTree = output.trim() === 'true'
-  } catch {
-    insideWorkTree = false
+  } catch (error) {
+    const stderr = error instanceof Error && 'stderr' in error
+      ? String(error.stderr ?? '')
+      : ''
+    if (!/not a git repository/i.test(stderr)) throw new GitProbeError(probeArgs)
   }
 
   const probeError = (args) => {
@@ -1123,6 +1083,7 @@ function parseCliArgs(args) {
     throw new TypeError('CLI args must be an array of strings')
   }
   const config = {
+    checkPlan: false,
     taskId: null,
     resume: false,
     plan: '.codex-flow/PLAN.md',
@@ -1141,6 +1102,10 @@ function parseCliArgs(args) {
       config.resume = true
       continue
     }
+    if (flag === '--check-plan') {
+      config.checkPlan = true
+      continue
+    }
     if (!valuedFlags.has(flag)) throw new Error(`unknown flag ${flag}`)
     const value = args[index + 1]
     if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`)
@@ -1151,6 +1116,7 @@ function parseCliArgs(args) {
     if (flag === '--out') config.out = value
     index += 1
   }
+  if (config.checkPlan) return config
   if (config.resume === Boolean(config.taskId)) throw new Error('provide exactly one of --task T<n> or --resume')
   if (config.taskId && !/^T\d+$/i.test(config.taskId)) throw new Error(`invalid task id ${config.taskId}`)
   return config
@@ -1178,11 +1144,30 @@ async function readProjectContext(projectContextPath) {
   }
 }
 
+/** Validate the plan's Decision-log blocks; return the CLI exit code (0 ok, 1 problems). */
+async function runCheckPlan(planPath) {
+  let planText
+  try {
+    planText = await fs.readFile(planPath, 'utf8')
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    const failure = new Error(`plan: could not read ${planPath}: ${detail}`)
+    failure.exitCode = 2
+    throw failure
+  }
+  const problems = decisionLogProblems(planText)
+  for (const problem of problems) console.error(`context-slice: plan: ${formatDecisionLogProblem(problem)}`)
+  if (problems.length) return 1
+  console.log(`context-slice: plan: ${decisionLogBlockCount(planText)} decision block(s) ok`)
+  return 0
+}
+
 /** Execute the context-slice CLI and return the written absolute path. */
 export async function main(args = process.argv.slice(2), { cwd = process.cwd(), git } = {}) {
   if (typeof cwd !== 'string' || !cwd.trim()) throw new TypeError('cwd must be a non-empty string')
   const config = parseCliArgs(args)
   const planPath = path.resolve(cwd, config.plan)
+  if (config.checkPlan) return runCheckPlan(planPath)
   const tasksPath = path.resolve(cwd, config.tasks)
   const requirementsPath = path.resolve(cwd, config.requirements)
   const outputDirectory = path.resolve(cwd, config.out)
@@ -1214,11 +1199,14 @@ const isDirectRun =
 
 if (isDirectRun) {
   main()
-    .then((outputPath) => console.log(outputPath))
+    .then((result) => {
+      if (typeof result === 'number') process.exitCode = result
+      else if (result) console.log(result)
+    })
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error)
       const prefix = error instanceof GitProbeError ? 'context-slice: git probe failed' : 'context-slice'
       console.error(`${prefix}: ${message.replace(/\s+/g, ' ')}`)
-      process.exitCode = 1
+      process.exitCode = error?.exitCode ?? 1
     })
 }

@@ -49,7 +49,7 @@ behavior is defined in **markdown instruction files**, not runtime code.
   to disk or logged) and `CODEX_FLOW_JEV_MODE` (`off|shadow|enforce`, default `shadow` when a key
   is set, else `off`). `off`/missing key is always a silent no-op — never a hard error. Shadow-mode
   comparisons land in `.codex-flow/notes/jev-shadow.log` (already covered by the `**/.codex-flow/`
-  gitignore rule).
+  gitignore rule). The procedures live in the opt-in skill `skills/jev-assist`.
 
 ## Style
 

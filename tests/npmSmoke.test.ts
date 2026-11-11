@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +25,7 @@ import {
   shellArgs,
   DEFAULT_BIN_NAME,
   binNameFromManifest,
+  runNpm,
 } from '../scripts/npm-smoke.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -226,6 +227,19 @@ describe('runSmoke', () => {
     expect(() => runSmoke({ command: '', args: [] })).toThrow(TypeError)
     expect(() => runSmoke({ command: process.execPath, args: [1 as unknown as string] })).toThrow(TypeError)
     expect(() => runSmoke({ command: process.execPath, timeoutMs: 0 })).toThrow(TypeError)
+  })
+})
+
+describe('runNpm', () => {
+  test('reports npm failures with the stable NPM_FAILED code', async () => {
+    const error = await captureRejection(runNpm(['pack'], fixtureDir, {
+      exec: async () => { throw new Error('stub npm failure') },
+    }))
+    expect(error).toBeInstanceOf(SmokeError)
+    if (error instanceof SmokeError) {
+      expect(error.code).toBe(SMOKE_ERROR_CODES.NPM_FAILED)
+      expect(error.message).toContain('npm pack failed in')
+    }
   })
 })
 
@@ -444,5 +458,25 @@ describe('package identity', () => {
 
     // Assert
     expect(PACKAGE_NAME).toBe(manifest.name)
+  })
+
+  test('includes every runtime script and relative dependency in package files', () => {
+    const packageJson = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')) as { files: string[] }
+    const documents = [...readdirSync(path.join(REPO_ROOT, 'commands')),
+      ...readdirSync(path.join(REPO_ROOT, 'skills')).flatMap((name) => [path.join(name, 'SKILL.md')])]
+      .map((file) => file.includes(path.sep) ? path.join(REPO_ROOT, 'skills', file) : path.join(REPO_ROOT, 'commands', file))
+      .map((file) => readFileSync(file, 'utf8')).join('\n')
+    const queue = [...documents.matchAll(/\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/([\w-]+\.mjs)/g)]
+      .map((match) => `scripts/${match[1]}`)
+    const required = new Set(queue)
+    while (queue.length) {
+      const current = queue.pop()!
+      const source = readFileSync(path.join(REPO_ROOT, current), 'utf8')
+      for (const match of source.matchAll(/from ['"](\.\/[^'"]+\.mjs)['"]/g)) {
+        const dependency = path.posix.normalize(path.posix.join(path.posix.dirname(current), match[1]))
+        if (!required.has(dependency)) { required.add(dependency); queue.push(dependency) }
+      }
+    }
+    expect([...required].filter((file) => !packageJson.files.includes(file))).toEqual([])
   })
 })
