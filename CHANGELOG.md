@@ -3,6 +3,22 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.31.1] - 2026-11-11
+
+First published build of the 0.31 line. `v0.31.0` was tagged but never reached npm: its publish
+workflow stopped at a timing-sensitive test before the publish step. Everything listed under
+0.31.0 below ships in this version.
+
+### Fixed
+
+- `scripts/npm-smoke.mjs` retries the removal of its scratch directory and only warns when it stays locked, so a passed smoke no longer fails on Windows with `EBUSY` during cleanup.
+- `build-skills-index --check` reports a skill that is gone from disk with the path as the index spelled it, not its resolved form.
+- Tests: path expectations are portable to Windows, and index staleness tests no longer depend on a skill file and the index being written in different milliseconds.
+
+### Changed
+
+- The publish workflow waits up to 10 minutes for a fresh version to become visible on the registry (v0.30.0 needed more than the previous 150 s).
+
 ## [0.31.0] - 2026-11-11
 
 ### Changed
@@ -32,7 +48,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - `build-skills-index` compares canonical real paths, so a library behind a symlink no longer looks entirely added and removed.
 - `flow-state check` no longer crashes on a journaled run when the journal cannot be resolved; it reports a journal violation.
 - Decision-log parsing no longer treats headings inside fenced code as blocks, and no longer lets a later `##` section be read as decision blocks.
-- `scripts/npm-smoke.mjs` retries the removal of its scratch directory and only warns when it stays locked, so a passed smoke no longer fails on Windows with `EBUSY` during cleanup.
 
 ### Known limitations
 
