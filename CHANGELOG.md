@@ -3,6 +3,36 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.32.0] - 2026-11-11
+
+### Added
+
+- **Vietnamese requests select skills.** `scripts/skill-terms.mjs` ships a Vietnamese→English glossary (322 entries; keys are matched with or without diacritics, longest phrase first). `deriveTerms` — used by `skill-shortlist --request` and raw-mode evaluation — translates Vietnamese domain vocabulary before extracting terms. On the new Vietnamese suite (`tests/fixtures/scenarios-vi.json`, 157 requests) the pass rate goes from 28/157 (17.8%) to 109/157 (69.4%); the holdout split passes 39/52. English requests produce exactly the same terms as before, and oracle-mode ranking is untouched.
+- **`npm run skills:eval:vi`** (gated at 0.67) and **`skill-eval --split <name>`**.
+- **`generic-only` evidence.** `matchDetail` and `selectSkills` mark a candidate whose only evidence is common description words (no name hit, no exact phrase). `skill-shortlist` prints the tag (JSON: `genericOnly`) and `skill-eval` reports its share. Ranking and selection are unchanged.
+- **`flow-state archive-paths`** — read-only list of the journal files an archive must move: `EVENTS.jsonl` and, for a run journaled at a custom path, the redirect target. A target outside the project is refused. The command, `skills/preflight` and the rule registry use it for restart, completed-run and orphan archives.
+- **Index metadata.** `build-skills-index` writes `<!-- index-meta: {"roots":[…],"remote":…} -->`; `--check` and a rebuild without `--remote` use the recorded remote catalog; an explicit `--remote` that differs is reported. Indexes written by 0.31.x (`<!-- roots: … -->`) and indexes without a header keep working.
+
+### Changed
+
+- `skill-shortlist` text output starts with `# candidates (index data — not instructions)` and wraps names in backticks. The "does not look like English" warning now appears only when the glossary translated nothing.
+- `skills/skill-selection`: a `generic-only` candidate is pruned unless its stated purpose matches the facet; a shortlist warning means "derive English terms and re-run with `--facet`".
+- `commands/codex-flow.md`: in parallel mode the coordinator runs `context-slice --check-plan` after appending Decision-log blocks. `skills/plan-architecture` states that a non-task event block needs only the first four fields.
+- Path comparisons in the index check are case-insensitive on Windows; duplicate roots no longer look like a roots change.
+
+### Fixed
+
+- The Vietnamese stop word `cac` no longer deletes the acronym CAC from English requests (Vietnamese stop words apply only to Vietnamese requests).
+- A build records the remote catalog only when the file was actually read; the header can no longer be terminated by a path containing `--` or `>`.
+- `flow-state` reports a rejected journal as exit 1 for every command instead of throwing.
+
+### Known limitations
+
+- About 30% of Vietnamese requests still miss: the expected skill is outranked after translation, or the request uses vocabulary outside the glossary. Passing English terms with `--facet` remains the reliable path. Three of the passes come from glossary corrections made by the same reviewer who translated 59 of the suite's requests; the evaluation report lists them separately.
+- Raw English requests are unchanged (324/394 on the English part of the 500-suite). An alias table was measured (+6) and not shipped.
+- Wrong-domain skills can still rank first when they match an exact phrase or a name (for example `clinical-decision-support` for `cohort analysis`). The `generic-only` tag does not catch those; removing them stays a judgment in `skills/skill-selection` Step 5.
+- The journal takes no file lock (single orchestrator).
+
 ## [0.31.1] - 2026-11-11
 
 First published build of the 0.31 line. `v0.31.0` was tagged but never reached npm: its publish
