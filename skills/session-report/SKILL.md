@@ -26,7 +26,7 @@ Start every report file with exactly this block:
 - Write `planning.md` after Phase 2 plan approval. Capture interview outcomes, architecture decisions, and research findings. Set PIC to `claude`.
 - Write `allocation.md` after Phase 3 backlog approval. Include a task → PIC table with execution PIC and review PIC, execution mode, and checkpoint choice. Set PIC to `claude`.
 - Append to `tasks.md` after each task passes review or when a task is dropped or abandoned. At the moment of that decision, record it with `Result: dropped`. Add one section per task and never replace earlier task sections.
-- Append to `reviews.md` immediately after each task's dual review resolves, at the same moment as the `tasks.md` append, and add a final-review section after the whole-feature dual review resolves. Set PIC to `both (claude: conformance/quality/security findings + verification verdicts, codex: codex_review findings)`.
+- Append to `reviews.md` immediately after each task's dual review resolves, at the same moment as the `tasks.md` append, and add a final-review section with its own `Codex review session:` line after the whole-feature dual review resolves. Set PIC to `both (claude: conformance/quality/security findings + verification verdicts, codex: codex_review findings)`.
 - Write `cost.md` at the end of the flow. Include measured Codex data and qualitative Claude data.
 - Write `SUMMARY.md` at the end of the flow. Include the delivered outcome, a PIC overview table covering every task and phase, and links to `planning.md`, `allocation.md`, `tasks.md`, `reviews.md`, and `cost.md`.
 

@@ -149,7 +149,7 @@ files and offer to archive them before beginning a fresh run.
 
    The orchestrator is the only writer. `runBaselineRef`, `knownRed`, and `dirtyBaseline` are
    written once at run start and NEVER modified on resume. A resume writes only `resumeHead` and
-   updates `phase` as its resume operation (apart from the legacy-key backfill); later approval or execution transitions update only
+   `phase`, and outside `execution` resets the task selectors (apart from the legacy-key backfill); later approval or execution transitions update only
    their corresponding mutable fields.
 
 ## Why it's a gate

@@ -192,6 +192,39 @@ describe('STATE.md updates', () => {
     // Assert
     expect(violations).toEqual([])
   })
+
+  test.each(['interview', 'plan', 'backlog', 'review', 'complete'])(
+    'reports a non-idle task stage outside execution in %s',
+    (phase) => {
+      // Arrange
+      const state = stateWithSelectors({ phase, currentTask: 'T1', taskStage: 'executing', wave: '1' })
+
+      // Act
+      const violations = checkState(state)
+
+      // Assert
+      expect(violations).toContainEqual({
+        key: 'taskStage',
+        reason: 'non-idle taskStage requires phase execution',
+      })
+    },
+  )
+
+  test('does not report a phase selector violation during execution', () => {
+    // Arrange
+    const state = stateWithSelectors({
+      phase: 'execution', currentTask: 'T1', taskStage: 'executing', wave: '1',
+    })
+
+    // Act
+    const violations = checkState(state)
+
+    // Assert
+    expect(violations).not.toContainEqual({
+      key: 'taskStage',
+      reason: 'non-idle taskStage requires phase execution',
+    })
+  })
 })
 
 function completeState(): string {
@@ -307,6 +340,54 @@ describe('typed flow transitions', () => {
     }
   })
 
+  test.each([
+    ['requirement-delta', requirementDeltaState, 'plan'],
+    ['plan-drift', planDriftState, 'execution'],
+    ['improvement-gate', improvementGateState, 'execution'],
+  ])('resets selectors for %s', (_, transition, phase) => {
+    // Arrange
+    const state = stateWithSelectors({
+      phase, currentTask: 'T2', taskStage: 'reviewing', wave: '1',
+    })
+
+    // Act
+    const updated = transition(state, { at: AT })
+
+    // Assert
+    expect(parseState(updated)).toMatchObject({ currentTask: '-', taskStage: 'idle', wave: '-' })
+  })
+
+  test('pure transition functions reject an illegal phase without changing selectors', () => {
+    // Arrange
+    const state = stateWithSelectors({
+      phase: 'interview', currentTask: 'T2', taskStage: 'reviewing', wave: '1',
+    })
+
+    // Act / Assert
+    expect(() => requirementDeltaState(state, { at: AT })).toThrow(TransitionRejectedError)
+    expect(state).toContain('- currentTask: T2\n- taskStage: reviewing\n- wave: 1\n')
+  })
+
+  test.each(['requirement-delta', 'plan-drift', 'improvement-gate'])(
+    'CLI rejects %s from an illegal phase without writing STATE.md',
+    async (command) => {
+      // Arrange
+      const directory = makeTempDirectory('flow-state-cli-transition-')
+      const statePath = join(directory, 'STATE.md')
+      const state = stateWithSelectors({
+        phase: 'interview', currentTask: 'T2', taskStage: 'reviewing', wave: '1',
+      })
+      writeFileSync(statePath, state)
+
+      // Act
+      const update = main([command, '--at', AT, '--state', statePath], { cwd: directory })
+
+      // Assert
+      await expect(update).resolves.toBe(1)
+      expect(readFileSync(statePath, 'utf8')).toBe(state)
+    },
+  )
+
   test('resume writes a head and never moves forward', () => {
     // Arrange
     const state = stateAtPhase('backlog')
@@ -318,6 +399,25 @@ describe('typed flow transitions', () => {
     expect(parseState(updated)).toMatchObject({ phase: 'plan', resumeHead: 'deadbeef' })
     expect(() => resumeState(state, 'deadbeef', { phase: 'execution' }))
       .toThrow(TransitionRejectedError)
+  })
+
+  test('resume preserves selectors in execution and resets them for an earlier phase', () => {
+    // Arrange
+    const state = stateWithSelectors({
+      phase: 'execution', currentTask: 'T2', taskStage: 'reviewing', wave: '1',
+    })
+
+    // Act
+    const staying = resumeState(state, 'stay')
+    const earlier = resumeState(state, 'rewind', { phase: 'backlog' })
+
+    // Assert
+    expect(parseState(staying)).toMatchObject({
+      resumeHead: 'stay', currentTask: 'T2', taskStage: 'reviewing', wave: '1',
+    })
+    expect(parseState(earlier)).toMatchObject({
+      resumeHead: 'rewind', phase: 'backlog', currentTask: '-', taskStage: 'idle', wave: '-',
+    })
   })
 
   test('uses calendar dates for delta and gate markers', () => {
@@ -925,10 +1025,16 @@ describe('flow-state CLI', () => {
     await runOk(['approve', 'backlog', '--at', AT])
     await runOk(['advance'])
     expect(parseState(readFileSync(statePath, 'utf8')).phase).toBe('execution')
+    await runOk(['set', 'currentTask', 'T2'])
+    await runOk(['set', 'taskStage', 'reviewing'])
+    await runOk(['set', 'wave', '1'])
     await runOk(['plan-drift', '--at', AT])
     expect(parseState(readFileSync(statePath, 'utf8'))).toMatchObject({
       phase: 'backlog',
       backlogApproved: `no (plan drift ${AT.slice(0, 10)})`,
+      currentTask: '-',
+      taskStage: 'idle',
+      wave: '-',
     })
     await runOk(['approve', 'backlog', '--at', AT])
     await runOk(['advance'])
@@ -947,21 +1053,34 @@ describe('flow-state CLI', () => {
     expect(parseState(readFileSync(statePath, 'utf8'))).toMatchObject({
       phase: 'backlog',
       resumeHead: 'deadbeef',
+      requirementsApproved: `yes (delta ${AT.slice(0, 10)})`,
+      planApproved: `yes (${AT})`,
+      backlogApproved: `yes (${AT})`,
+      currentTask: '-',
+      taskStage: 'idle',
+      wave: '-',
     })
     await runOk(['approve', 'backlog', '--at', AT])
     await runOk(['advance'])
     await runOk(['advance'])
     expect(parseState(readFileSync(statePath, 'utf8')).phase).toBe('review')
+    const archivedState = readFileSync(statePath, 'utf8')
     renameSync(statePath, join(controlDirectory, 'STATE.archive.md'))
     await runOk(['init', '--baseline', 'newbase', '--known-red', 'none'])
 
     // Assert
-    expect(parseState(readFileSync(statePath, 'utf8'))).toMatchObject({
+    const freshState = readFileSync(statePath, 'utf8')
+    expect(parseState(freshState)).toMatchObject({
       phase: 'interview',
       requirementsApproved: 'no',
       planApproved: 'no',
       backlogApproved: 'no',
+      currentTask: '-',
+      taskStage: 'idle',
+      wave: '-',
     })
+    expect(Object.keys(parseState(freshState))).toEqual(STATE_KEYS)
+    expect(readFileSync(join(controlDirectory, 'STATE.archive.md'), 'utf8')).toBe(archivedState)
   })
 
   test('rejects an unknown key without writing the state file', async () => {

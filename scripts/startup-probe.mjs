@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { npxBin, npmBin, npmSpawnOptions, runSmoke, shellArgs } from './npm-smoke.mjs'
+import { npxBin, npmBin, npmSpawnOptions, runSmoke, shellArgs, SMOKE_ERROR_CODES } from './npm-smoke.mjs'
 
 export const STARTUP_BUDGET_MS = 30_000
 export const STARTUP_PROBE_MARGIN_MS = 5_000
@@ -25,10 +25,9 @@ export function resolveLauncher({ command, args = [], env } = {}, { platform = p
 }
 
 function reasonOf(error) {
-  const message = error instanceof Error ? error.message : String(error)
-  if (message.includes('did not answer tools/list')) return STARTUP_REASON_TIMEOUT
-  if (message.includes('server exited')) return STARTUP_REASON_EXITED
-  if (message.includes('failed to spawn')) return STARTUP_REASON_SPAWN
+  if (error?.code === SMOKE_ERROR_CODES.TIMEOUT) return STARTUP_REASON_TIMEOUT
+  if (error?.code === SMOKE_ERROR_CODES.EXITED) return STARTUP_REASON_EXITED
+  if (error?.code === SMOKE_ERROR_CODES.SPAWN) return STARTUP_REASON_SPAWN
   return STARTUP_REASON_ERROR
 }
 

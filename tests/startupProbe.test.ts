@@ -8,6 +8,8 @@ import { describe, expect, test } from 'vitest'
 // @ts-expect-error — plain .mjs script
 import { STARTUP_BUDGET_MS, STARTUP_PROBE_MARGIN_MS, STARTUP_PROBE_TIMEOUT_MS,
   classifyStartup, countDatalessFiles, probeStartup, resolveLauncher } from '../scripts/startup-probe.mjs'
+// @ts-expect-error — plain .mjs script
+import { SMOKE_ERROR_CODES, SmokeError } from '../scripts/npm-smoke.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const fake = `
@@ -113,6 +115,30 @@ describe('startup probe contracts', () => {
       })
     // Assert
     expect(result).toEqual({ ok: false, elapsedMs: 0, error: 'handshake failed', reason: 'error' })
+  })
+
+  test.each([
+    [SMOKE_ERROR_CODES.TIMEOUT, 'timeout'],
+    [SMOKE_ERROR_CODES.EXITED, 'exited'],
+    [SMOKE_ERROR_CODES.SPAWN, 'spawn'],
+    [SMOKE_ERROR_CODES.RPC_ERROR, 'error'],
+  ])('classifies injected smoke code %s independently of its message', async (code, reason) => {
+    // Arrange / Act
+    const result = await probeStartup({
+      smoke: async () => { throw new SmokeError('totally reworded', undefined, code) }, now: () => 10,
+    })
+    // Assert
+    expect(result.reason).toBe(reason)
+  })
+
+  test.each([
+    new Error('server exited before answering'),
+    'server exited before answering',
+  ])('maps unrecognized thrown values to error', async (thrown) => {
+    // Arrange / Act
+    const result = await probeStartup({ smoke: async () => { throw thrown }, now: () => 10 })
+    // Assert
+    expect(result.reason).toBe('error')
   })
 
   test.each([

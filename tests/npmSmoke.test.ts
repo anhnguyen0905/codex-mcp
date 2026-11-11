@@ -20,6 +20,8 @@ import {
   quoteShellArg,
   resolveBinName,
   runSmoke,
+  SMOKE_ERROR_CODES,
+  SmokeError,
   shellArgs,
   DEFAULT_BIN_NAME,
   binNameFromManifest,
@@ -33,6 +35,7 @@ const SMOKE_SCRIPT = path.join(REPO_ROOT, 'scripts', 'npm-smoke.mjs')
  *   ok      — answers initialize, then tools/list with the names in argv[3],
  *             but only after `notifications/initialized` arrived (handshake order).
  *   silent  — reads stdin and never answers (timeout case).
+ *   close-stdin — destroys stdin and exits immediately, avoiding a timeout race.
  * No network, no npm.
  */
 const FAKE_SERVER = `
@@ -45,6 +48,10 @@ const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n')
 
 process.stdin.resume()
 process.stdin.setEncoding('utf8')
+if (mode === 'close-stdin') {
+  process.stdin.destroy()
+  process.exit(0)
+}
 process.stdin.on('data', (chunk) => {
   if (mode === 'silent') return
   buffered += chunk
@@ -54,6 +61,7 @@ process.stdin.on('data', (chunk) => {
     if (!line.trim()) continue
     const message = JSON.parse(line)
     if (message.method === 'initialize') {
+      if (mode === 'exit') process.exit(0)
       send({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'fake', version: '0.0.0' } } })
       continue
     }
@@ -64,6 +72,14 @@ process.stdin.on('data', (chunk) => {
     if (message.method === 'tools/list') {
       if (!sawInitialized) {
         send({ jsonrpc: '2.0', id: message.id, error: { code: -32002, message: 'tools/list before notifications/initialized' } })
+        continue
+      }
+      if (mode === 'rpc-error') {
+        send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'fixture failure' } })
+        continue
+      }
+      if (mode === 'bad-response') {
+        send({ jsonrpc: '2.0', id: message.id, result: {} })
         continue
       }
       send({ jsonrpc: '2.0', id: message.id, result: { tools: toolNames.map((name) => ({ name })) } })
@@ -92,7 +108,26 @@ const smokeFake = (mode: string, toolNames: readonly string[], timeoutMs = 5000)
     timeoutMs,
   })
 
+const captureRejection = async (promise: Promise<unknown>) => {
+  try {
+    await promise
+  } catch (error: unknown) {
+    return error
+  }
+  throw new Error('Expected promise to reject')
+}
+
 describe('runSmoke', () => {
+  test('exports frozen unique smoke error codes and preserves two-argument errors', () => {
+    // Arrange / Act
+    const error = new SmokeError('m', 'd')
+
+    // Assert
+    expect(Object.isFrozen(SMOKE_ERROR_CODES)).toBe(true)
+    expect(new Set(Object.values(SMOKE_ERROR_CODES)).size).toBe(Object.values(SMOKE_ERROR_CODES).length)
+    expect(error.code).toBeUndefined()
+  })
+
   test('resolves with the advertised tool names when the server lists all seven tools', async () => {
     // Arrange / Act
     const result = await smokeFake('ok', EXPECTED_TOOLS)
@@ -105,36 +140,85 @@ describe('runSmoke', () => {
     // Arrange
     const incomplete = EXPECTED_TOOLS.filter((name: string) => name !== 'codex_health')
 
-    // Act / Assert
-    await expect(smokeFake('ok', incomplete)).rejects.toThrow(/missing: codex_health/)
+    // Act
+    const error = await captureRejection(smokeFake('ok', incomplete))
+
+    // Assert
+    expect(error).toBeInstanceOf(SmokeError)
+    if (error instanceof SmokeError) {
+      expect(error.message).toMatch(/missing: codex_health/)
+      expect(error.code).toBe(SMOKE_ERROR_CODES.TOOLS_MISMATCH)
+    }
   })
 
   test('rejects when tools/list advertises an unexpected tool', async () => {
     // Arrange
     const extra = [...EXPECTED_TOOLS, 'codex_surprise']
 
-    // Act / Assert
-    await expect(smokeFake('ok', extra)).rejects.toThrow(/unexpected: codex_surprise/)
+    // Act
+    const error = await captureRejection(smokeFake('ok', extra))
+
+    // Assert
+    expect(error).toBeInstanceOf(SmokeError)
+    if (error instanceof SmokeError) {
+      expect(error.message).toMatch(/unexpected: codex_surprise/)
+      expect(error.code).toBe(SMOKE_ERROR_CODES.TOOLS_MISMATCH)
+    }
   })
 
   test('rejects when a tool name is advertised twice', async () => {
     // Arrange
     const duplicated = [...EXPECTED_TOOLS, 'codex_health']
 
-    // Act / Assert
-    await expect(smokeFake('ok', duplicated)).rejects.toThrow(/duplicated: codex_health/)
+    // Act
+    const error = await captureRejection(smokeFake('ok', duplicated))
+
+    // Assert
+    expect(error).toBeInstanceOf(SmokeError)
+    if (error instanceof SmokeError) {
+      expect(error.message).toMatch(/duplicated: codex_health/)
+      expect(error.code).toBe(SMOKE_ERROR_CODES.TOOLS_MISMATCH)
+    }
   })
 
   test('rejects with a timeout when the server never answers', async () => {
-    // Arrange / Act / Assert
-    await expect(smokeFake('silent', EXPECTED_TOOLS, 300)).rejects.toThrow(/did not answer tools\/list within 300ms/)
+    // Arrange / Act
+    const error = await captureRejection(smokeFake('silent', EXPECTED_TOOLS, 300))
+
+    // Assert
+    expect(error).toBeInstanceOf(SmokeError)
+    if (error instanceof SmokeError) {
+      expect(error.message).toMatch(/did not answer tools\/list within 300ms/)
+      expect(error.code).toBe(SMOKE_ERROR_CODES.TIMEOUT)
+    }
   })
 
   test('rejects when the command cannot be spawned', async () => {
-    // Arrange / Act / Assert
-    await expect(
+    // Arrange / Act
+    const error = await captureRejection(
       runSmoke({ command: path.join(fixtureDir, 'definitely-not-a-binary'), args: [], timeoutMs: 5000 })
-    ).rejects.toThrow(/failed to spawn/)
+    )
+
+    // Assert
+    expect(error).toBeInstanceOf(SmokeError)
+    if (error instanceof SmokeError) {
+      expect(error.message).toMatch(/failed to spawn/)
+      expect(error.code).toBe(SMOKE_ERROR_CODES.SPAWN)
+    }
+
+  })
+
+  test.each([
+    ['exit', SMOKE_ERROR_CODES.EXITED],
+    ['rpc-error', SMOKE_ERROR_CODES.RPC_ERROR],
+    ['bad-response', SMOKE_ERROR_CODES.BAD_RESPONSE],
+  ])('classifies %s failure with a stable code', async (mode, code) => {
+    // Arrange / Act
+    const error = await captureRejection(smokeFake(mode, EXPECTED_TOOLS))
+
+    // Assert
+    expect(error).toBeInstanceOf(SmokeError)
+    if (error instanceof SmokeError) expect(error.code).toBe(code)
   })
 
   test('rejects invalid arguments as programmer errors', () => {
@@ -279,7 +363,34 @@ describe('npm/npx spawn options', () => {
   test('refuses an argument cmd.exe quoting cannot neutralise', () => {
     // Arrange / Act / Assert
     expect(() => quoteShellArg('a"b', 'win32')).toThrow(/cannot be safely passed through cmd.exe/)
-    expect(() => quoteShellArg('a&b', 'win32')).toThrow(/cannot be safely passed through cmd.exe/)
+    let thrown: unknown
+    try {
+      quoteShellArg('a&b', 'win32')
+    } catch (error: unknown) {
+      thrown = error
+    }
+    if (thrown === undefined) throw new Error('expected a throw')
+    expect(thrown).toBeInstanceOf(SmokeError)
+    if (thrown instanceof SmokeError) {
+      expect(thrown.message).toMatch(/cannot be safely passed through cmd.exe/)
+      expect(thrown.code).toBe(SMOKE_ERROR_CODES.UNSAFE_ARGUMENT)
+    }
+  })
+
+  test('classifies a failed stdin write with the STDIN or EXITED code and matching message', async () => {
+    // Arrange / Act
+    const error = await captureRejection(smokeFake('close-stdin', EXPECTED_TOOLS, 2000))
+
+    // Assert — the child can report exit before the write callback wins the race.
+    expect(error).toBeInstanceOf(SmokeError)
+    if (error instanceof SmokeError) {
+      expect(error.code).not.toBe(SMOKE_ERROR_CODES.TIMEOUT)
+      const isStdin = error.code === SMOKE_ERROR_CODES.STDIN
+        && /failed to write to server stdin/.test(error.message)
+      const isExited = error.code === SMOKE_ERROR_CODES.EXITED
+        && /server exited/.test(error.message)
+      expect(isStdin || isExited).toBe(true)
+    }
   })
 
   test('runSmoke forwards spawnOptions to the child spawn', async () => {

@@ -2,6 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import {
+  APPROVAL_GATES,
+  NON_LINEAR_COMMANDS,
+  PHASES,
+  parseCliArgs,
+} from './flow-state-cli.mjs'
 
 export const STATE_KEYS = Object.freeze([
   'phase',
@@ -19,14 +25,7 @@ export const STATE_KEYS = Object.freeze([
   'taskStage',
   'wave',
 ])
-export const PHASES = Object.freeze([
-  'interview',
-  'plan',
-  'backlog',
-  'execution',
-  'review',
-  'complete',
-])
+export { PHASES }
 export const TASK_STAGES = Object.freeze([
   'idle',
   'launching',
@@ -55,7 +54,12 @@ const TASK_HEADING = /^##[ \t]+(T\d+):[^\r\n]*(?:\r\n|\n|$)/gm
 const STATUS_LINE = /^- Status:[ \t]*([^\r\n]*)(\r\n|\n|$)/gm
 const ISO_8601 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):?(\d{2}))$/
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
-const APPROVAL_KEYS = Object.freeze(['requirementsApproved', 'planApproved', 'backlogApproved'])
+const APPROVAL_KEYS = Object.freeze(APPROVAL_GATES.map((gate) => `${gate}Approved`))
+const SELECTOR_RESET_CHANGES = Object.freeze([
+  ['currentTask', NO_SELECTOR],
+  ['taskStage', 'idle'],
+  ['wave', NO_SELECTOR],
+])
 const TYPED_APPROVAL_COMMANDS = Object.freeze({
   phase: 'advance or a typed transition command',
   requirementsApproved: 'approve requirements or requirement-delta',
@@ -69,16 +73,24 @@ const ADVANCE_RULES = Object.freeze({
   execution: Object.freeze({ next: 'review', guard: 'terminalTasks' }),
   review: Object.freeze({ next: 'complete', guard: 'allApprovalsAndTerminalTasks' }),
 })
-const APPROVE_RULES = Object.freeze({
+export const APPROVE_RULES = Object.freeze({
   requirements: Object.freeze({ phase: 'interview', key: 'requirementsApproved', artifact: 'REQUIREMENTS.md' }),
   plan: Object.freeze({ phase: 'plan', key: 'planApproved', artifact: 'PLAN.md' }),
   backlog: Object.freeze({ phase: 'backlog', key: 'backlogApproved', artifact: 'TASKS.md' }),
 })
-const NON_LINEAR_RULES = Object.freeze({
+export const NON_LINEAR_RULES = Object.freeze({
   'requirement-delta': Object.freeze({ phases: Object.freeze(['plan', 'backlog', 'execution', 'review']) }),
   'plan-drift': Object.freeze({ phases: Object.freeze(['execution', 'review']) }),
   'improvement-gate': Object.freeze({ phases: Object.freeze(['execution', 'review']) }),
 })
+if (!APPROVAL_GATES.every((gate) => Object.hasOwn(APPROVE_RULES, gate))
+  || Object.keys(APPROVE_RULES).length !== APPROVAL_GATES.length) {
+  throw new Error('approval gate list does not match approval rules')
+}
+if (!NON_LINEAR_COMMANDS.every((command) => Object.hasOwn(NON_LINEAR_RULES, command))
+  || Object.keys(NON_LINEAR_RULES).length !== NON_LINEAR_COMMANDS.length) {
+  throw new Error('non-linear command list does not match transition rules')
+}
 
 /** Error raised when a typed flow transition guard rejects a command. */
 export class TransitionRejectedError extends Error {
@@ -309,6 +321,7 @@ export function requirementDeltaState(text, { at } = {}) {
     ['requirementsApproved', `yes (delta ${timestamp})`],
     ['planApproved', `no (delta ${timestamp})`],
     ['backlogApproved', `no (delta ${timestamp})`],
+    ...SELECTOR_RESET_CHANGES,
   ])
 }
 function applyBacklogGate(text, command, marker, at) {
@@ -318,6 +331,7 @@ function applyBacklogGate(text, command, marker, at) {
   return applyStateChanges(text, [
     ['phase', 'backlog'],
     ['backlogApproved', `no (${marker} ${timestamp})`],
+    ...SELECTOR_RESET_CHANGES,
   ])
 }
 /** Return a new state text after recording plan drift. */
@@ -339,6 +353,7 @@ export function resumeState(text, head, { phase } = {}) {
   requireApprovals(text, phaseApprovalKeys(targetPhase), `resume to ${targetPhase}`)
   const changes = [['resumeHead', head]]
   if (phase !== undefined) changes.push(['phase', targetPhase])
+  if (targetPhase !== 'execution') changes.push(...SELECTOR_RESET_CHANGES)
   return applyStateChanges(text, changes)
 }
 function singleValueOf(lines, key) {
@@ -358,6 +373,20 @@ function selectorViolations(lines) {
   }
   if (currentTask === NO_SELECTOR && wave === NO_SELECTOR) {
     return [{ key: 'taskStage', reason: 'non-idle taskStage requires currentTask or wave' }]
+  }
+  return []
+}
+function phaseSelectorViolations(lines) {
+  const phase = singleValueOf(lines, 'phase')
+  const taskStage = singleValueOf(lines, 'taskStage')
+  if (!PHASE_SET.has(phase)
+    || taskStage === null
+    || !TASK_STAGE_SET.has(taskStage)
+    || taskStage === 'idle') {
+    return []
+  }
+  if (phase !== 'execution') {
+    return [{ key: 'taskStage', reason: 'non-idle taskStage requires phase execution' }]
   }
   return []
 }
@@ -405,7 +434,13 @@ export function checkState(text, { tasksText = null } = {}) {
   const taskViolations = isComplete && tasksText !== null
     ? terminalStatusViolations(tasksText)
     : []
-  return [...keyViolations, ...approvalViolations(lines), ...selectorViolations(lines), ...taskViolations]
+  return [
+    ...keyViolations,
+    ...approvalViolations(lines),
+    ...selectorViolations(lines),
+    ...phaseSelectorViolations(lines),
+    ...taskViolations,
+  ]
 }
 function taskSectionsOf(text) {
   const headings = [...text.matchAll(TASK_HEADING)]
@@ -549,34 +584,6 @@ async function createFileExclusively(targetPath, contents, label) {
     }
   }
 }
-function parseOptions(args, positionalCount, allowedOptions, flagOptions = new Set()) {
-  const positionals = []
-  const options = {}
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index]
-    if (!argument.startsWith('--')) {
-      positionals.push(argument)
-      continue
-    }
-    if (!allowedOptions.has(argument)) throw new Error(`unknown option ${argument}`)
-    if (Object.hasOwn(options, argument)) throw new Error(`duplicate option ${argument}`)
-    if (flagOptions.has(argument)) {
-      options[argument] = true
-      continue
-    }
-    const value = args[index + 1]
-    if (!value || value.startsWith('--')) throw new Error(`${argument} requires a value`)
-    options[argument] = value
-    index += 1
-  }
-  if (positionals.length !== positionalCount) throw new Error('invalid arguments')
-  return { positionals, options }
-}
-function requiredOption(options, name) {
-  const value = options[name]
-  if (!value) throw new Error(`${name} requires a value`)
-  return value
-}
 function createInitialState({ baseline, knownRed, dirtyBaseline = 'none', executor = 'codex' }) {
   const values = {
     phase: 'interview',
@@ -614,7 +621,8 @@ async function assertArtifactExists(directory, filename) {
     }
     throw error
   }
-} async function tasksForAdvance(stateText, tasksPath) {
+}
+async function tasksForAdvance(stateText, tasksPath) {
   const phase = stateValueOf(stateText, 'phase')
   if (phase !== 'execution' && phase !== 'review') return null
   try {
@@ -634,79 +642,6 @@ function setStateWithGuards(text, key, value) {
     rejectTransition('non-idle taskStage is only allowed in phase execution')
   }
   return setStateKey(text, key, value)
-}
-function parseCliArgs(argv) {
-  if (!Array.isArray(argv) || argv.some((argument) => typeof argument !== 'string')) {
-    throw new TypeError('CLI args must be an array of strings')
-  }
-  const [command, ...args] = argv
-  const state = (options) => options['--state'] ?? '.codex-flow/STATE.md'
-  if (command === 'init') {
-    const parsed = parseOptions(args, 0, new Set([
-      '--state', '--baseline', '--known-red', '--dirty-baseline', '--executor',
-    ]))
-    return {
-      command,
-      state: state(parsed.options),
-      baseline: requiredOption(parsed.options, '--baseline'),
-      knownRed: requiredOption(parsed.options, '--known-red'),
-      dirtyBaseline: parsed.options['--dirty-baseline'],
-      executor: parsed.options['--executor'],
-    }
-  }
-  if (command === 'approve') {
-    const parsed = parseOptions(
-      args,
-      1,
-      new Set(['--state', '--at', '--delta', '--checkpoint-commits', '--execution-mode', '--dir']),
-      new Set(['--delta']),
-    )
-    const gate = parsed.positionals[0]
-    if (!Object.hasOwn(APPROVE_RULES, gate)) throw new Error(`unknown approval ${gate}`)
-    return {
-      command,
-      gate,
-      state: state(parsed.options),
-      at: parsed.options['--at'],
-      delta: parsed.options['--delta'] === true,
-      checkpointCommits: parsed.options['--checkpoint-commits'],
-      executionMode: parsed.options['--execution-mode'],
-      dir: parsed.options['--dir'] ?? '.codex-flow',
-    }
-  }
-  if (command === 'advance') {
-    const parsed = parseOptions(args, 0, new Set(['--state', '--tasks']))
-    return { command, state: state(parsed.options), tasks: parsed.options['--tasks'] ?? '.codex-flow/TASKS.md' }
-  }
-  if (NON_LINEAR_RULES[command]) {
-    const parsed = parseOptions(args, 0, new Set(['--state', '--at']))
-    return { command, state: state(parsed.options), at: parsed.options['--at'] }
-  }
-  if (command === 'resume') {
-    const parsed = parseOptions(args, 0, new Set(['--state', '--head', '--phase']))
-    const phase = parsed.options['--phase']
-    if (phase !== undefined && !PHASE_SET.has(phase)) throw new Error(`invalid phase ${JSON.stringify(phase)}`)
-    return { command, state: state(parsed.options), head: requiredOption(parsed.options, '--head'), phase }
-  }
-  if (command === 'set') {
-    const parsed = parseOptions(args, 2, new Set(['--state']))
-    return { command, key: parsed.positionals[0], value: parsed.positionals[1], state: state(parsed.options) }
-  }
-  if (command === 'check') {
-    const parsed = parseOptions(args, 0, new Set(['--state', '--tasks']))
-    return { command, state: state(parsed.options), tasks: parsed.options['--tasks'] ?? null }
-  }
-  if (command === 'task') {
-    const parsed = parseOptions(args, 2, new Set(['--tasks', '--at']))
-    return {
-      command,
-      id: parsed.positionals[0],
-      status: parsed.positionals[1],
-      tasks: parsed.options['--tasks'] ?? '.codex-flow/TASKS.md',
-      at: parsed.options['--at'],
-    }
-  }
-  throw new Error('usage: flow-state <init|approve|advance|requirement-delta|plan-drift|improvement-gate|resume|set|check|task> ...')
 }
 async function updateFile(filePath, update, label) {
   const text = await fs.readFile(filePath, 'utf8')

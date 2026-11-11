@@ -430,13 +430,20 @@ describe('renderMarkdown', () => {
   })
 })
 
-describe('--session filter (R5.2)', () => {
+describe('--session filter (R5.1)', () => {
   const writeSessionFixture = (logPath: string): void => {
     const entries = [
       makeEntry({ sessionId: 'E1', tool: 'codex_execute' }),
       makeEntry({ sessionId: 'C1', tool: 'codex_continue', cwd: '/workspace/worktree' }),
       makeEntry({ sessionId: 'R1', tool: 'codex_review', cwd: '/workspace/worktree' }),
       makeEntry({ sessionId: 'R2', tool: 'codex_review' }),
+      makeEntry({
+        sessionId: 'X9',
+        tool: 'codex_execute',
+        cwd: '/workspace/other',
+        durationMs: 999,
+        usage: { inputTokens: 77, cachedInputTokens: 33, outputTokens: 22, reasoningOutputTokens: 11 },
+      }),
     ]
     writeFileSync(logPath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''))
   }
@@ -559,13 +566,20 @@ describe('--session filter (R5.2)', () => {
       makeEntry({ ts: '2026-07-23T10:00:00Z', sessionId: 'keep-2', cwd: '/worktree/b' }),
     ]
 
-    const filtered = filterEntries(entries, { since: '2026-07-23T00:00:00Z', cwd: '/workspace/project', sessions: ['keep-1', 'keep-2'] })
+    const filtered = filterEntries(entries, {
+      since: '2026-07-23T00:00:00Z',
+      cwd: '/workspace/project',
+      sessions: ['keep-1', 'keep-2'],
+    })
 
     expect(filtered.map((entry) => entry.sessionId)).toEqual(['keep-1', 'keep-2'])
   })
 
   test('filterEntries with an empty sessions list behaves exactly like the cwd filter', () => {
-    const entries = [makeEntry({ ts: '2026-07-23T09:00:00Z', cwd: '/workspace/project' }), makeEntry({ ts: '2026-07-23T09:00:00Z', cwd: '/other' })]
+    const entries = [
+      makeEntry({ ts: '2026-07-23T09:00:00Z', cwd: '/workspace/project' }),
+      makeEntry({ ts: '2026-07-23T09:00:00Z', cwd: '/other' }),
+    ]
 
     const filtered = filterEntries(entries, { since: '2026-07-23T00:00:00Z', cwd: '/workspace/project', sessions: [] })
 

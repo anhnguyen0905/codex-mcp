@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
+// @ts-expect-error — plain .mjs script
+import { parseCliArgs } from '../scripts/flow-state-cli.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CONTEXT_DISCIPLINE_PATH = path.join(REPO_ROOT, 'skills', 'context-discipline', 'SKILL.md')
@@ -138,17 +140,44 @@ const PHASE_SKILL_MAP: ReadonlyArray<{ phase: string, skills: readonly string[] 
     ],
   },
 ]
+const FLOW_STATE_SUBCOMMANDS = [
+  'init', 'approve', 'advance', 'requirement-delta', 'plan-drift', 'improvement-gate',
+  'resume', 'set', 'check', 'task',
+] as const
+function flowStateCliSubcommands(): string[] {
+  try {
+    parseCliArgs(['__unknown__'])
+  } catch (error: unknown) {
+    if (!(error instanceof Error)) throw new Error('Expected the CLI usage error to be an Error')
+    const match = error.message.match(/usage: flow-state <([^>]+)>/)
+    if (!match) throw new Error(`Expected a flow-state usage message, received: ${error.message}`)
+    return match[1].split('|')
+  }
+  throw new Error('Expected the CLI to reject an unknown subcommand')
+}
+
+const FLOW_STATE_CLI_SUBCOMMANDS = flowStateCliSubcommands()
+const FLOW_STATE_CLI_SUBCOMMAND_PATTERN = FLOW_STATE_CLI_SUBCOMMANDS.join('|')
+const FLOW_STATE_PLACEHOLDERS: ReadonlyArray<[RegExp, string]> = [
+  [/^T\d+$|^<T-id>$/i, 'T1'],
+  [/^<status>$/i, 'done'],
+  [/^<n>$/i, '1'],
+  [/^<(?:sha|ref|head)[^>]*>$/i, 'abc1234'],
+  [/^<(?:ISO[^>]*|timestamp)[^>]*>$/i, '2026-11-11T00:00:00Z'],
+]
 // R8.3: distinctive sentences T8 moved out of the command. Each must survive verbatim in exactly
 // one document, so the move neither lost a rule nor left a duplicate behind.
 const MOVED_PARAGRAPH_SENTENCES = [
   // skills/fast-path
   'the deliverable is an answer, report, or data readout; no tracked project\n  file is created or modified.',
   'No Codex session is\nrequired (this lane is exempt from the Codex health gate)',
-  'ANY extra changed\nfile — excluding generated lockfiles — triggers the escalation rule automatically; do not review\nthe oversized diff in-lane and do not re-argue eligibility after the fact.',
+  'ANY extra changed\nfile — excluding generated lockfiles — triggers the escalation rule automatically; '
+  + 'do not review\nthe oversized diff in-lane and do not re-argue eligibility after the fact.',
   'A wrong up-front size estimate is not a failure;\nstretching the lane to avoid the restart is.',
   // skills/executor-fallback
   '**Phase 5 under fallback** — Claude must not grade its own homework alone:',
-  'apply\n  the loaded `exec-coding-standards`, `exec-self-testing`, language, deliverable, and distilled\n  domain-skill blocks to your own work — they bind Claude the same way they bind Codex.',
+  'apply\n  the loaded `exec-coding-standards`, `exec-self-testing`, language, deliverable, and '
+  + 'distilled\n  domain-skill blocks to your own work — they bind Claude the same way they bind Codex.',
   'Tasks completed under fallback keep their\n`claude-fallback` Session line and are never re-executed.',
 ] as const
 const EXACT_FRONTMATTER_SKILLS = [
@@ -167,6 +196,177 @@ function readText(filePath: string): string {
   // Windows checkouts may materialize CRLF via git autocrlf; guards assert LF-relative offsets.
   return readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n')
 }
+
+function tokenizeFlowState(text: string): string[] {
+  return [...text.matchAll(/'([^']*)'|"([^"]*)"|(<[^>]+>)|(\S+)/g)]
+    .map((match) => match[1] ?? match[2] ?? match[3] ?? match[4])
+}
+
+function substituteFlowStateToken(token: string): string {
+  const placeholder = FLOW_STATE_PLACEHOLDERS.find(([pattern]) => pattern.test(token))
+  return placeholder?.[1] ?? (token.startsWith('<') && token.endsWith('>') ? 'sample' : token)
+}
+
+function expandFlowStateText(text: string): string[][] {
+  const optional = text.match(/^\[([^\]]+)\]$/)
+  if (optional) return [[], ...expandFlowStateText(optional[1])]
+  const alternatives = text.match(/^<?([^<>|]+(?:\|[^<>|]+)+)>?$/)
+  if (alternatives) return alternatives[1].split('|').map((value) => [substituteFlowStateToken(value)])
+  return [[substituteFlowStateToken(text)]]
+}
+
+const ALLOWED_FLOW_STATE_PROSE = new Set(['flow-state <subcommand>'])
+
+function flowStateDocuments(): string[] {
+  const skillNames = [...new Set(PHASE_SKILL_MAP.flatMap(({ skills }) => skills))]
+  return [COMMAND_PATH, ...skillNames.map((name) => path.join(SKILLS_DIR, name, 'SKILL.md'))]
+}
+
+function extractFlowStateInvocations(markdown: string): {
+  invocations: Array<{ text: string, tokens: string[] }>
+  sourceCount: number
+  offenders: string[]
+} {
+  const invocations: Array<{ text: string, tokens: string[] }> = []
+  const offenders: string[] = []
+  let sourceCount = 0
+  const helperPattern = /node\s+"\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/flow-state\.mjs"|(?<![\w-])flow-state(?!\.mjs)/g
+  const starts = [...markdown.matchAll(helperPattern)]
+  for (const start of starts) {
+    const lineEnd = markdown.indexOf('\n', start.index)
+    const tickEnd = markdown.indexOf('`', start.index)
+    const end = [lineEnd, tickEnd].filter((offset) => offset >= 0).sort((a, b) => a - b)[0] ?? markdown.length
+    const tail = markdown.slice(start.index + start[0].length, end)
+    if (!/^\s+\S/.test(tail)) continue
+    const candidate = `${start[0]}${tail}`.trim()
+    const tokens = tokenizeFlowState(tail).map((token, index) =>
+      index === 0 ? token.replace(/[`,.;:)]+$/, '') : token)
+      .filter((token) => !/^(?:…|\.\.\.)$/.test(token))
+    if (tokens[0] === '<subcommand>') continue
+    if (!FLOW_STATE_SUBCOMMANDS.includes(tokens[0] as typeof FLOW_STATE_SUBCOMMANDS[number])) {
+      if (!ALLOWED_FLOW_STATE_PROSE.has(candidate)) offenders.push(candidate)
+      continue
+    }
+    sourceCount += 1
+    const variants = tokens.reduce<string[][]>((all, token) =>
+      all.flatMap((prefix) => expandFlowStateText(token).map((suffix) => [...prefix, ...suffix])), [[]])
+    for (const variant of variants) invocations.push({ text: candidate, tokens: variant })
+  }
+  return { invocations, sourceCount, offenders }
+}
+
+describe('documented flow-state invocations parse with the real CLI', () => {
+  test('all documented invocations are accepted by parseCliArgs', () => {
+    // Arrange
+    const documents = flowStateDocuments()
+    const failures: string[] = []
+    const offenders: string[] = []
+    const counts = new Map<string, number>()
+    const extractedCounts: Record<string, number> = {}
+    const independentCounts: Record<string, number> = {}
+    // Act
+    expect([...FLOW_STATE_CLI_SUBCOMMANDS].sort()).toEqual([...FLOW_STATE_SUBCOMMANDS].sort())
+    for (const filePath of documents) {
+      const text = readText(filePath)
+      const extracted = extractFlowStateInvocations(text)
+      const invocations = extracted.invocations
+      const relativePath = path.relative(REPO_ROOT, filePath)
+      extractedCounts[relativePath] = extracted.sourceCount
+      offenders.push(...extracted.offenders.map((item) => `${relativePath}: ${item}`))
+      const knownInvocationPattern = new RegExp(
+        `(?:flow-state(?:\\.mjs")?)\\s+(?:${FLOW_STATE_CLI_SUBCOMMAND_PATTERN})\\b`,
+        'g',
+      )
+      independentCounts[relativePath] = [...text.matchAll(knownInvocationPattern)].length
+      for (const invocation of invocations) {
+        const command = invocation.tokens[0]
+        counts.set(command, (counts.get(command) ?? 0) + 1)
+        try {
+          parseCliArgs(invocation.tokens)
+        } catch (error) {
+          failures.push(`${path.relative(REPO_ROOT, filePath)}: ${invocation.text}: ${String(error)}`)
+        }
+      }
+    }
+
+    // Assert
+    const missingSubcommands = FLOW_STATE_SUBCOMMANDS.filter((command) => !counts.has(command))
+    const mismatches = Object.keys(extractedCounts)
+      .filter((relativePath) => extractedCounts[relativePath] !== independentCounts[relativePath])
+      .map((relativePath) => (
+        `${relativePath}: extracted ${extractedCounts[relativePath]}, `
+        + `independent ${independentCounts[relativePath]}`
+      ))
+    expect(missingSubcommands).toEqual([])
+    expect(mismatches).toEqual([])
+    expect(offenders).toEqual([])
+    expect(failures).toEqual([])
+  })
+
+  test('the extractor and parser report invalid inline invocations', () => {
+    const fixture = '`flow-state set phase` `flow-state frobnicate`'
+    const extracted = extractFlowStateInvocations(fixture)
+    const failures = extracted.invocations.flatMap(({ text, tokens }) => {
+      try {
+        parseCliArgs(tokens)
+        return []
+      } catch (error) {
+        return [`${text}: ${String(error)}`]
+      }
+    })
+
+    expect([...failures, ...extracted.offenders]).toHaveLength(2)
+    expect(extractFlowStateInvocations('`flow-state approve plan` → `flow-state advance`').sourceCount).toBe(2)
+    expect(tokenizeFlowState('--known-red "<compact list>" <run-start HEAD>')).toEqual([
+      '--known-red', '<compact list>', '<run-start HEAD>',
+    ])
+
+    const fullForm = extractFlowStateInvocations(
+      '`node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set executionMode '
+      + '"sequential (worktrees unavailable: <error>)"`',
+    )
+    expect(fullForm.invocations).toHaveLength(1)
+    expect(fullForm.invocations[0]?.tokens).toEqual([
+      'set', 'executionMode', 'sequential (worktrees unavailable: <error>)',
+    ])
+
+    const initForm = extractFlowStateInvocations(
+      '`node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" init --baseline '
+      + '<run-start HEAD> --known-red "<compact list>"`',
+    )
+    expect(initForm.invocations).toHaveLength(1)
+    expect(() => parseCliArgs(initForm.invocations[0]?.tokens ?? [])).not.toThrow()
+
+    const unknownForm = extractFlowStateInvocations(
+      '`node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" frobnicate`',
+    )
+    expect(unknownForm.offenders).toHaveLength(1)
+  })
+})
+
+describe('retired documented flow-state forms stay absent', () => {
+  const RETIRED_FLOW_STATE_PATTERNS = [
+    /flow-state(?:[^`\n]*)\s+set\s+(?:phase|\w+Approved)/i,
+    /hand-?write[^.\n]*STATE\.md/i,
+    /write[^.\n]*STATE\.md[^.\n]*by hand/i,
+  ] as const
+
+  test('AGENTS.md and README.md contain no retired forms', () => {
+    const documents = [readText(path.join(REPO_ROOT, 'AGENTS.md')), readText(README_PATH)]
+    expect(documents.flatMap((text) => RETIRED_FLOW_STATE_PATTERNS.filter((pattern) => pattern.test(text)))).toEqual([])
+    expect(RETIRED_FLOW_STATE_PATTERNS.some((pattern) => pattern.test('flow-state set phase'))).toBe(true)
+    expect(RETIRED_FLOW_STATE_PATTERNS.some((pattern) => pattern.test('flow-state set qualityApproved yes'))).toBe(true)
+    expect(RETIRED_FLOW_STATE_PATTERNS.some((pattern) => pattern.test('write STATE.md by hand'))).toBe(true)
+  })
+})
+
+describe('final-review session line contract', () => {
+  test('reviews.md final-review section carries its own Codex review session line', () => {
+    const report = readText(SESSION_REPORT_PATH)
+    const gate = report.split('\n').find((line) => line.startsWith('- Append to `reviews.md`'))
+    expect(gate).toMatch(/final-review section[^.\n]*own `Codex review session:` line/i)
+  })
+})
 
 function extractFrontmatter(markdown: string): string {
   const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
@@ -672,6 +872,17 @@ describe('plan-architecture Decision log schema', () => {
 })
 
 describe('preflight resume protocol', () => {
+  test('documents that resume resets task selectors outside execution', () => {
+    // Arrange
+    const normalizedSkill = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
+
+    // Act / Assert
+    expect(normalizedSkill).toContain(
+      'A resume writes only `resumeHead` and `phase`, and outside `execution` resets the task selectors',
+    )
+    expect(normalizedSkill).not.toContain('updates `phase` as its resume operation')
+  })
+
   test('uses the budgeted resume slice with fail-closed and trust-but-verify guidance', () => {
     const skill = readText(PREFLIGHT_PATH)
     const normalizedSkill = skill.replace(/\s+/g, ' ')

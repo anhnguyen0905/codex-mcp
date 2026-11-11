@@ -74,6 +74,7 @@
     "scripts/jev-client.mjs",
     "scripts/scope-check.mjs",
     "scripts/flow-state.mjs",
+    "scripts/flow-state-cli.mjs",
     "scripts/context-slice.mjs",
     "scripts/worktree-setup.mjs",
     "scripts/project-context.mjs",

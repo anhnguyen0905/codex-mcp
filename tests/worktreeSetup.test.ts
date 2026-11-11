@@ -10,6 +10,23 @@ import { setupWorktreeControlFiles } from '../scripts/worktree-setup.mjs'
 const run = promisify(execFile)
 const files = ['PLAN.md', 'TASKS.md', 'CONTEXT-T3.md']
 
+const runExpectingFailure = async (args: readonly string[]): Promise<{ code: number; stderr: string }> => {
+  try {
+    await run(process.execPath, args)
+    throw new Error('expected the CLI to fail')
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === 'expected the CLI to fail') throw error
+    if (
+      typeof error === 'object' && error !== null &&
+      'code' in error && typeof error.code === 'number' &&
+      'stderr' in error && typeof error.stderr === 'string'
+    ) {
+      return { code: error.code, stderr: error.stderr }
+    }
+    throw error
+  }
+}
+
 async function fixture(withSkills = true) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'worktree-setup-'))
   const source = path.join(root, 'source')
@@ -87,6 +104,7 @@ describe('worktree setup', () => {
     ['required symlink', 'PLAN.md', 'symlink'],
     ['required directory', 'PLAN.md', 'directory'],
     ['optional symlink', 'SKILLS-T3.md', 'symlink'],
+    ['optional directory', 'SKILLS-T3.md', 'directory'],
   ])('%s source rejects', async (_label, fileName, kind) => {
     const item = await fixture()
     try {
@@ -151,7 +169,7 @@ describe('worktree setup', () => {
     }
   })
 
-  test('CLI succeeds and fails with one-line stderr', async () => {
+  test('CLI happy path copies the control files into the worktree', async () => {
     const item = await fixture(false)
     try {
       const script = path.resolve('scripts/worktree-setup.mjs')
@@ -159,20 +177,72 @@ describe('worktree setup', () => {
         script, '--worktree', item.worktree, '--task', 'T3', '--source', item.source,
       ])
       expect(success.stdout).toContain('PLAN.md, TASKS.md, CONTEXT-T3.md')
-      const failure = await run(process.execPath, [script, '--worktree', item.worktree, '--task', 'T'])
-        .catch((error: unknown) => error as { code: number; stderr: string })
-      expect(failure.code).not.toBe(0)
-      expect(failure.stderr.trim().split('\n')).toHaveLength(1)
-      await rm(path.join(item.source, 'TASKS.md'))
-      const missing = await run(process.execPath, [
-        script, '--worktree', item.worktree, '--task', 'T3', '--source', item.source,
-      ])
-        .catch((error: unknown) => error as { code: number; stderr: string })
-      expect(missing.code).not.toBe(0)
-      expect(missing.stderr.trim()).toMatch(/^worktree-setup: .+TASKS\.md/)
+      await expect(lstat(path.join(item.worktree, '.codex-flow', 'PLAN.md'))).resolves.toBeDefined()
+      await expect(lstat(path.join(item.worktree, '.codex-flow', 'TASKS.md'))).resolves.toBeDefined()
+      await expect(lstat(path.join(item.worktree, '.codex-flow', 'CONTEXT-T3.md'))).resolves.toBeDefined()
     } finally {
       await rm(item.root, { recursive: true, force: true })
     }
+  })
+
+  test('CLI reports a missing required source file', async () => {
+    const item = await fixture(false)
+    const missingPath = path.join(item.source, 'TASKS.md')
+    try {
+      const script = path.resolve('scripts/worktree-setup.mjs')
+      await rm(missingPath)
+      const missing = await runExpectingFailure([
+        script, '--worktree', item.worktree, '--task', 'T3', '--source', item.source,
+      ])
+      expect(missing.code).toBeGreaterThan(0)
+      expect(missing.stderr.trim().split('\n')).toHaveLength(1)
+      expect(missing.stderr.trim()).toMatch(/^worktree-setup: /)
+      expect(missing.stderr).toMatch(/^worktree-setup: .+TASKS\.md/)
+    } finally {
+      await rm(item.root, { recursive: true, force: true })
+    }
+  })
+
+  test('CLI rejects an invalid task id with one-line stderr', async () => {
+    const item = await fixture(false)
+    try {
+      const script = path.resolve('scripts/worktree-setup.mjs')
+      const failure = await runExpectingFailure([
+        script, '--worktree', item.worktree, '--task', 'T', '--source', item.source,
+      ])
+      expect(failure.code).toBeGreaterThan(0)
+      expect(failure.stderr.trim().split('\n')).toHaveLength(1)
+      expect(failure.stderr.trim()).toMatch(/^worktree-setup: /)
+    } finally {
+      await rm(item.root, { recursive: true, force: true })
+    }
+  })
+
+  test('CLI reports a destination filesystem error', async () => {
+    const item = await fixture(false)
+    const destinationPath = path.join(item.worktree, '.codex-flow')
+    try {
+      const script = path.resolve('scripts/worktree-setup.mjs')
+      await writeFile(destinationPath, 'not a directory')
+      const failure = await runExpectingFailure([
+        script, '--worktree', item.worktree, '--task', 'T3', '--source', item.source,
+      ])
+      expect(failure.code).toBeGreaterThan(0)
+      expect(failure.stderr.trim().split('\n')).toHaveLength(1)
+      expect(failure.stderr.trim()).toMatch(/^worktree-setup: /)
+      expect(failure.stderr).toContain(destinationPath)
+    } finally {
+      await rm(item.root, { recursive: true, force: true })
+    }
+  })
+
+  test('CLI reports usage when required arguments are missing', async () => {
+    const script = path.resolve('scripts/worktree-setup.mjs')
+    const failure = await runExpectingFailure([script])
+    expect(failure.code).toBeGreaterThan(0)
+    expect(failure.stderr.trim().split('\n')).toHaveLength(1)
+    expect(failure.stderr.trim()).toMatch(/^worktree-setup: /)
+    expect(failure.stderr).toContain('usage: node scripts/worktree-setup.mjs')
   })
 
   test('package files lists the helper', async () => {

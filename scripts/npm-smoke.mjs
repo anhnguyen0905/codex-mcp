@@ -62,13 +62,19 @@ const MAX_BUFFER_BYTES = 16 * 1024 * 1024
 const VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.+-]*$/
 
 export const USAGE = 'usage: node scripts/npm-smoke.mjs (--version <v> | --tarball <path> | --tarball-from-pack) [--timeout-ms <n>]'
+export const SMOKE_ERROR_CODES = Object.freeze({
+  TIMEOUT: 'SMOKE_TIMEOUT', EXITED: 'SMOKE_EXITED', SPAWN: 'SMOKE_SPAWN', STDIN: 'SMOKE_STDIN',
+  RPC_ERROR: 'SMOKE_RPC_ERROR', TOOLS_MISMATCH: 'SMOKE_TOOLS_MISMATCH', BAD_RESPONSE: 'SMOKE_BAD_RESPONSE',
+  UNSAFE_ARGUMENT: 'SMOKE_UNSAFE_ARGUMENT', NPM_FAILED: 'SMOKE_NPM_FAILED',
+})
 
 /** Failure that is the smoke test's own verdict, as opposed to a programmer error. */
 export class SmokeError extends Error {
-  constructor(message, detail) {
+  constructor(message, detail, code) {
     super(message)
     this.name = 'SmokeError'
     this.detail = detail
+    this.code = code
   }
 }
 
@@ -108,7 +114,9 @@ export function quoteShellArg(arg, platform = process.platform) {
   if (platform !== 'win32') return arg
   if (WIN32_BARE_ARG_PATTERN.test(arg)) return arg
   if (WIN32_UNQUOTABLE_PATTERN.test(arg)) {
-    throw new SmokeError(`argument cannot be safely passed through cmd.exe: ${arg}`)
+    throw new SmokeError(
+      `argument cannot be safely passed through cmd.exe: ${arg}`, undefined, SMOKE_ERROR_CODES.UNSAFE_ARGUMENT,
+    )
   }
   return `"${arg}"`
 }
@@ -165,11 +173,15 @@ function jsonRpcNotification(method, params) {
 function toolNamesOf(response) {
   const tools = response?.result?.tools
   if (!Array.isArray(tools)) {
-    throw new SmokeError('tools/list response has no result.tools array', JSON.stringify(response))
+    throw new SmokeError(
+      'tools/list response has no result.tools array', JSON.stringify(response), SMOKE_ERROR_CODES.BAD_RESPONSE,
+    )
   }
   return tools.map((tool) => {
     if (typeof tool?.name !== 'string' || tool.name.length === 0) {
-      throw new SmokeError('tools/list returned a tool without a name', JSON.stringify(tool))
+      throw new SmokeError(
+        'tools/list returned a tool without a name', JSON.stringify(tool), SMOKE_ERROR_CODES.BAD_RESPONSE,
+      )
     }
     return tool.name
   })
@@ -226,26 +238,35 @@ export function runSmoke({ command, args = [], timeoutMs = DEFAULT_TIMEOUT_MS, c
     }
 
     const timer = setTimeout(() => {
-      finish(new SmokeError(`server did not answer tools/list within ${timeoutMs}ms`, { stderr }))
+      finish(new SmokeError(
+        `server did not answer tools/list within ${timeoutMs}ms`, { stderr }, SMOKE_ERROR_CODES.TIMEOUT,
+      ))
     }, timeoutMs)
 
     // A child that exits before we write closes the pipe; Node then emits EPIPE as an 'error'
     // event on stdin in addition to the write callback. Without a listener that event is an
     // unhandled error that crashes the whole test run, so route it into the verdict.
     child.stdin.on('error', (error) => {
-      finish(new SmokeError(`failed to write to server stdin: ${error.message}`, { stderr }))
+      finish(new SmokeError(
+        `failed to write to server stdin: ${error.message}`, { stderr }, SMOKE_ERROR_CODES.STDIN,
+      ))
     })
 
     const write = (payload) => {
       // The child can die between the readiness check and the write; surface it as a verdict.
       child.stdin.write(payload, (error) => {
-        if (error) finish(new SmokeError(`failed to write to server stdin: ${error.message}`, { stderr }))
+        if (error) finish(new SmokeError(
+          `failed to write to server stdin: ${error.message}`, { stderr }, SMOKE_ERROR_CODES.STDIN,
+        ))
       })
     }
 
     const handleResponse = (response) => {
       if (response.error) {
-        finish(new SmokeError(`server returned a JSON-RPC error: ${response.error?.message ?? 'unknown'}`, JSON.stringify(response.error)))
+        finish(new SmokeError(
+          `server returned a JSON-RPC error: ${response.error?.message ?? 'unknown'}`,
+          JSON.stringify(response.error), SMOKE_ERROR_CODES.RPC_ERROR,
+        ))
         return
       }
       if (response.id === INITIALIZE_ID && !initialized) {
@@ -259,18 +280,25 @@ export function runSmoke({ command, args = [], timeoutMs = DEFAULT_TIMEOUT_MS, c
         const tools = toolNamesOf(response)
         const mismatch = describeToolMismatch(tools)
         if (mismatch) {
-          finish(new SmokeError(mismatch, { tools }))
+          finish(new SmokeError(mismatch, { tools }, SMOKE_ERROR_CODES.TOOLS_MISMATCH))
           return
         }
         finish(null, { tools })
       } catch (error) {
-        finish(error instanceof SmokeError ? error : new SmokeError(`could not read tools/list response: ${error.message}`))
+        finish(error instanceof SmokeError ? error : new SmokeError(
+          `could not read tools/list response: ${error.message}`, undefined, SMOKE_ERROR_CODES.BAD_RESPONSE,
+        ))
       }
     }
 
-    child.on('error', (error) => finish(new SmokeError(`failed to spawn ${command}: ${error.message}`)))
+    child.on('error', (error) => finish(new SmokeError(
+      `failed to spawn ${command}: ${error.message}`, undefined, SMOKE_ERROR_CODES.SPAWN,
+    )))
     child.on('exit', (code, signal) => {
-      finish(new SmokeError(`server exited (code ${code}, signal ${signal ?? 'none'}) before answering tools/list`, { stderr }))
+      finish(new SmokeError(
+        `server exited (code ${code}, signal ${signal ?? 'none'}) before answering tools/list`,
+        { stderr }, SMOKE_ERROR_CODES.EXITED,
+      ))
     })
     child.stderr.on('data', (chunk) => {
       stderr += chunk
@@ -372,7 +400,9 @@ async function runNpm(args, cwd) {
     })
     return stdout
   } catch (error) {
-    throw new SmokeError(`npm ${args.join(' ')} failed in ${cwd}`, error?.stderr ?? error?.message)
+    throw new SmokeError(
+      `npm ${args.join(' ')} failed in ${cwd}`, error?.stderr ?? error?.message, SMOKE_ERROR_CODES.NPM_FAILED,
+    )
   }
 }
 
@@ -382,24 +412,30 @@ async function packRepo(repoRoot, packDir) {
   try {
     entries = JSON.parse(stdout)
   } catch {
-    throw new SmokeError('npm pack --json did not print JSON', stdout)
+    throw new SmokeError('npm pack --json did not print JSON', stdout, SMOKE_ERROR_CODES.BAD_RESPONSE)
   }
   if (!Array.isArray(entries) || entries.length !== 1 || typeof entries[0]?.filename !== 'string') {
-    throw new SmokeError('npm pack --json did not report exactly one tarball filename', stdout)
+    throw new SmokeError('npm pack --json did not report exactly one tarball filename', stdout, SMOKE_ERROR_CODES.BAD_RESPONSE)
   }
   const tarballPath = path.join(packDir, entries[0].filename)
-  if (!existsSync(tarballPath)) throw new SmokeError(`packed tarball not found at ${tarballPath}`)
+  if (!existsSync(tarballPath)) throw new SmokeError(
+    `packed tarball not found at ${tarballPath}`, undefined, SMOKE_ERROR_CODES.NPM_FAILED,
+  )
   return tarballPath
 }
 
 /** Install the tarball into a scratch project and return the entry point a consumer would run. */
 async function installTarball(tarballPath, scratchDir) {
-  if (!existsSync(tarballPath)) throw new SmokeError(`tarball not found: ${tarballPath}`)
+  if (!existsSync(tarballPath)) throw new SmokeError(
+    `tarball not found: ${tarballPath}`, undefined, SMOKE_ERROR_CODES.NPM_FAILED,
+  )
   const manifest = { name: 'npm-smoke-scratch', version: '0.0.0', private: true }
   writeFileSync(path.join(scratchDir, 'package.json'), JSON.stringify(manifest, null, 2))
   await runNpm(['install', '--no-save', '--no-audit', '--no-fund', '--ignore-scripts', tarballPath], scratchDir)
   const entryPath = path.join(scratchDir, 'node_modules', ...PACKAGE_NAME.split('/'), 'dist', 'index.js')
-  if (!existsSync(entryPath)) throw new SmokeError(`installed package has no entry point at ${entryPath}`)
+  if (!existsSync(entryPath)) throw new SmokeError(
+    `installed package has no entry point at ${entryPath}`, undefined, SMOKE_ERROR_CODES.NPM_FAILED,
+  )
   return entryPath
 }
 
