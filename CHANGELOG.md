@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.30.0] - 2026-11-11
+
+### Changed
+
+- **Non-linear transitions leave no stale task selectors.** `flow-state requirement-delta`, `plan-drift`, `improvement-gate`, and a `resume` that lands outside `execution` now reset `currentTask`, `taskStage` and `wave` in the same atomic write; `flow-state check` reports a non-idle `taskStage` outside `execution`. After such a transition, re-select the task with `set currentTask` once back in `execution`.
+- **Startup failures are classified by stable error codes.** `scripts/npm-smoke.mjs` exports `SMOKE_ERROR_CODES` and sets `SmokeError.code`; `scripts/startup-probe.mjs` derives the failure reason from the code instead of message text. Messages are unchanged.
+- `skills/session-report` states that the final-review section of `reviews.md` carries its own `Codex review session:` line; `skills/preflight` states the resume selector reset.
+
+### Added
+
+- **`scripts/flow-state-cli.mjs`** — the flow-state argument parser as its own stdlib-only module and the single source of the phase, approval-gate and non-linear command names; shipped in `package.json` `files[]`. `scripts/flow-state.mjs` re-exports `PHASES` unchanged.
+- **Documentation guard**: a test extracts every `flow-state` invocation documented in the command and the flow skills and parses each with the real CLI; another rejects retired forms (`set phase`, `set <gate>Approved`, hand-written STATE.md) in AGENTS.md and README.md.
+
+### Fixed
+
+- Test gaps: worktree-setup CLI failure paths and a directory in the optional skills slot, an unselected session in the combined session-cost fixture, intermediate states of the non-linear transactions.
+
+### Known limitations
+
+- `flow-state` takes no file lock: it assumes a single orchestrator writing STATE.md (parallel workers never write it).
+- Typed multi-file transactions, a cross-document rule registry and a fresh-run harness are still planned.
+
 ## [0.29.0] - 2026-11-11
 
 ### Changed
