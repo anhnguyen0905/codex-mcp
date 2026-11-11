@@ -36,10 +36,15 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true })
 })
 
+/** Skill files written by a test are backdated so they never tie with an index built in the same millisecond. */
+const BACKDATED = new Date(Date.now() - 60_000)
+
 async function addSkill(rel: string, content: string): Promise<void> {
   const dir = path.join(root, rel)
   await mkdir(dir, { recursive: true })
-  await writeFile(path.join(dir, 'SKILL.md'), content, 'utf8')
+  const file = path.join(dir, 'SKILL.md')
+  await writeFile(file, content, 'utf8')
+  await utimes(file, BACKDATED, BACKDATED)
 }
 
 async function snapshotIndex(out: string, library: string) {
@@ -499,10 +504,8 @@ describe('runCli', () => {
   test('compares roots as an order-insensitive set', async () => {
     const first = path.join(root, 'first-root')
     const second = path.join(root, 'second-root')
-    await mkdir(path.join(first, 'first-skill'), { recursive: true })
-    await writeFile(path.join(first, 'first-skill', 'SKILL.md'), SKILL('first-skill', 'First.'), 'utf8')
-    await mkdir(path.join(second, 'second-skill'), { recursive: true })
-    await writeFile(path.join(second, 'second-skill', 'SKILL.md'), SKILL('second-skill', 'Second.'), 'utf8')
+    await addSkill(path.join('first-root', 'first-skill'), SKILL('first-skill', 'First.'))
+    await addSkill(path.join('second-root', 'second-skill'), SKILL('second-skill', 'Second.'))
     const out = path.join(root, 'INDEX.md')
     await runCli([first, second, '--out', out])
     const result = await runCli([second, first, '--out', out, '--check'])
