@@ -31,7 +31,8 @@ const runExpectingFailure = async (
 }
 
 async function fixture(withSkills = true) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'worktree-setup-'))
+  // Canonical form up front: the helper reports real paths (Windows 8.3 names, macOS /private).
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'worktree-setup-')))
   const source = path.join(root, 'source')
   const worktree = path.join(root, 'worktree')
   await mkdir(source)

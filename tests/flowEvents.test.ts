@@ -29,7 +29,7 @@ const file = async () => join(await mkdtemp(join(tmpdir(), 'flow-events-')), 'EV
 
 test('gateSnapshot returns gates', () => expect(gateSnapshot(state).phase).toBe('plan'))
 test('eventsPathFor returns sibling journal path', () =>
-  expect(eventsPathFor('/x/STATE.md')).toBe('/x/EVENTS.jsonl'))
+  expect(eventsPathFor(join('x', 'STATE.md'))).toBe(join('x', 'EVENTS.jsonl')))
 
 test('resolveJournalPath follows a sole default redirect', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'flow-events-'))

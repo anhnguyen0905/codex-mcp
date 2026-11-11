@@ -566,10 +566,11 @@ export function parseCatalog(content) {
 /** Compare a rendered index with the scanned local skill files; --check never writes. */
 export function indexStaleness({ indexEntries, indexMtimeMs, scanned }) {
   const local = new Map(scanned.map((entry) => [entry.canonicalFile ?? path.resolve(entry.file), entry.file]))
-  const indexed = new Set(
+  // Compare canonical paths; report the path as the index or the scan spelled it.
+  const indexed = new Map(
     indexEntries
       .filter((entry) => entry.file && !/^https?:\/\//i.test(entry.file))
-      .map((entry) => entry.canonicalFile ?? path.resolve(entry.file)),
+      .map((entry) => [entry.canonicalFile ?? path.resolve(entry.file), entry.file]),
   )
   const newer = scanned.filter((entry) => entry.mtimeMs >= indexMtimeMs)
   if (newer.length > 0) {
@@ -582,9 +583,9 @@ export function indexStaleness({ indexEntries, indexMtimeMs, scanned }) {
   if (added.length > 0) {
     return { stale: true, reason: `${added.length} skill(s) on disk not in the index (e.g. ${added[0][1]})` }
   }
-  const gone = [...indexed].filter((file) => !local.has(file))
+  const gone = [...indexed].filter(([file]) => !local.has(file))
   if (gone.length > 0) {
-    return { stale: true, reason: `${gone.length} indexed skill(s) no longer on disk (e.g. ${gone[0]})` }
+    return { stale: true, reason: `${gone.length} indexed skill(s) no longer on disk (e.g. ${gone[0][1]})` }
   }
   return { stale: false, reason: null }
 }
