@@ -62,18 +62,45 @@ describe('split selection', () => {
     expect(report).toContain('Split: dev')
   })
 
-  test('runs exactly one split and rejects an unknown split', async () => {
+  test('evaluates exactly the scenarios of the requested split', async () => {
+    // Arrange: a temporary index, so the test does not depend on a skill library on this machine.
     const dir = mkdtempSync(path.join(os.tmpdir(), 'skill-split-'))
-    const file = path.join(dir, 'scenarios.json')
-    writeFileSync(file, JSON.stringify({ scenarios: [
-      { id: 'dev', split: 'dev', request: 'term', terms: ['term'] },
-      { id: 'holdout', split: 'holdout', request: 'other', terms: ['other'] },
-    ] }))
-    const result = await runCli(['--index', indexFile, '--scenarios', file, '--split', 'dev'])
-    expect(result.total).toBe(1)
-    await expect(runCli(['--index', indexFile, '--scenarios', file, '--split', 'missing']))
-      .rejects.toThrow('unknown split: missing')
-    rmSync(dir, { recursive: true, force: true })
+    try {
+      const index = path.join(dir, 'INDEX.md')
+      const file = path.join(dir, 'scenarios.json')
+      writeFileSync(index, 'term-skill | term helper | /x/SKILL.md\n')
+      writeFileSync(file, JSON.stringify({ scenarios: [
+        { id: 'dev', split: 'dev', request: 'term', terms: ['term'] },
+        { id: 'holdout', split: 'holdout', request: 'other', terms: ['other'] },
+      ] }))
+
+      // Act
+      const result = await runCli(['--index', index, '--scenarios', file, '--split', 'dev'])
+
+      // Assert
+      expect(result.total).toBe(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('rejects a split that no scenario carries', async () => {
+    // Arrange
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'skill-split-'))
+    try {
+      const index = path.join(dir, 'INDEX.md')
+      const file = path.join(dir, 'scenarios.json')
+      writeFileSync(index, 'term-skill | term helper | /x/SKILL.md\n')
+      writeFileSync(file, JSON.stringify({ scenarios: [{ id: 'dev', split: 'dev', request: 'term', terms: ['term'] }] }))
+
+      // Act
+      const run = runCli(['--index', index, '--scenarios', file, '--split', 'missing'])
+
+      // Assert
+      await expect(run).rejects.toThrow('unknown split: missing')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
