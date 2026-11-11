@@ -32,6 +32,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - `build-skills-index` compares canonical real paths, so a library behind a symlink no longer looks entirely added and removed.
 - `flow-state check` no longer crashes on a journaled run when the journal cannot be resolved; it reports a journal violation.
 - Decision-log parsing no longer treats headings inside fenced code as blocks, and no longer lets a later `##` section be read as decision blocks.
+- `scripts/npm-smoke.mjs` retries the removal of its scratch directory and only warns when it stays locked, so a passed smoke no longer fails on Windows with `EBUSY` during cleanup.
 
 ### Known limitations
 

@@ -26,6 +26,7 @@ import {
   DEFAULT_BIN_NAME,
   binNameFromManifest,
   runNpm,
+  removeScratchDir,
 } from '../scripts/npm-smoke.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -227,6 +228,41 @@ describe('runSmoke', () => {
     expect(() => runSmoke({ command: '', args: [] })).toThrow(TypeError)
     expect(() => runSmoke({ command: process.execPath, args: [1 as unknown as string] })).toThrow(TypeError)
     expect(() => runSmoke({ command: process.execPath, timeoutMs: 0 })).toThrow(TypeError)
+  })
+})
+
+describe('removeScratchDir', () => {
+  test('asks for retries so a briefly locked Windows directory is removed', () => {
+    // Arrange
+    const calls: Array<{ dir: string, options: { maxRetries: number, retryDelay: number, recursive: boolean } }> = []
+    const remove = (dir: string, options: { maxRetries: number, retryDelay: number, recursive: boolean }) => {
+      calls.push({ dir, options })
+    }
+
+    // Act
+    const removed = removeScratchDir('/tmp/scratch', { remove })
+
+    // Assert
+    expect(removed).toBe(true)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].options).toMatchObject({ recursive: true, force: true })
+    expect(calls[0].options.maxRetries).toBeGreaterThan(0)
+    expect(calls[0].options.retryDelay).toBeGreaterThan(0)
+  })
+
+  test('warns instead of throwing when the directory stays locked', () => {
+    // Arrange
+    const warnings: string[] = []
+    const remove = () => {
+      throw new Error('EBUSY: resource busy or locked')
+    }
+
+    // Act
+    const removed = removeScratchDir('/tmp/scratch', { remove, warn: (message: string) => warnings.push(message) })
+
+    // Assert
+    expect(removed).toBe(false)
+    expect(warnings).toEqual(['npm-smoke: warning: could not remove /tmp/scratch: EBUSY: resource busy or locked'])
   })
 })
 

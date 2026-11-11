@@ -389,6 +389,26 @@ export function parseArgs(argv) {
   return { mode, timeoutMs }
 }
 
+const SCRATCH_REMOVE_RETRIES = 10
+const SCRATCH_REMOVE_RETRY_DELAY_MS = 200
+
+/**
+ * Remove a scratch directory. On Windows the just-stopped server can still hold the directory
+ * (EBUSY), so retry, and never let a leftover temp dir turn a passed smoke into a failure.
+ */
+export function removeScratchDir(dir, { remove = rmSync, warn = console.warn } = {}) {
+  try {
+    remove(dir, {
+      recursive: true, force: true, maxRetries: SCRATCH_REMOVE_RETRIES, retryDelay: SCRATCH_REMOVE_RETRY_DELAY_MS,
+    })
+    return true
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    warn(`npm-smoke: warning: could not remove ${dir}: ${detail}`)
+    return false
+  }
+}
+
 export async function runNpm(args, cwd, { exec = execFileAsync } = {}) {
   try {
     const { stdout } = await exec(npmBin(), shellArgs(args), {
@@ -459,7 +479,7 @@ async function main(argv, repoRoot) {
       })
       console.log(`PASS: ${spec} advertises ${tools.length} tools (${tools.join(', ')})`)
     } finally {
-      rmSync(npxDir, { recursive: true, force: true })
+      removeScratchDir(npxDir)
     }
     return
   }
@@ -479,7 +499,7 @@ async function main(argv, repoRoot) {
     console.log(`PASS: installed tarball advertises ${tools.length} tools (${tools.join(', ')})`)
   } finally {
     for (const dir of [scratchDir, packDir]) {
-      if (dir) rmSync(dir, { recursive: true, force: true })
+      if (dir) removeScratchDir(dir)
     }
   }
 }
