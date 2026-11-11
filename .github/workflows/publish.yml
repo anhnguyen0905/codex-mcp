@@ -76,15 +76,16 @@ jobs:
       - name: verify the published version resolves
         # The registry needs a few seconds to propagate a fresh publish; an
         # immediate npm view 404s and paints a successful release red (v0.16.0
-        # published fine but this step failed at +2s). Retry with backoff.
+        # published fine but this step failed at +2s; v0.30.0 needed more than 150 s).
+        # Retry for up to 10 minutes.
         run: |
           version="${GITHUB_REF_NAME#v}"
-          for attempt in $(seq 1 10); do
+          for attempt in $(seq 1 40); do
             if published="$(npm view "@anhnguyen0905/codex-mcp@${version}" version 2>/dev/null)"; then
               echo "registry reports $published (attempt $attempt)"
               exit 0
             fi
-            echo "not visible yet (attempt $attempt/10), retrying in 15s"
+            echo "not visible yet (attempt $attempt/40), retrying in 15s"
             sleep 15
           done
           echo "::error::@anhnguyen0905/codex-mcp@${version} never became resolvable"
@@ -102,7 +103,7 @@ jobs:
         # smoke with the same backoff; a genuine boot failure fails every attempt.
         run: |
           version="${GITHUB_REF_NAME#v}"
-          for attempt in $(seq 1 10); do
+          for attempt in $(seq 1 40); do
             if node scripts/npm-smoke.mjs --version "$version"; then
               exit 0
             fi

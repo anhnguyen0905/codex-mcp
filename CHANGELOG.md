@@ -3,6 +3,43 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.31.0] - 2026-11-11
+
+### Changed
+
+- **Skill selection picks fewer, better candidates.** `scripts/skill-match.mjs` drops the low-score tail per facet (`RELATIVE_SCORE_FLOOR = 0.2`, overridable through `tuning.relativeScoreFloor`) and gives every facet of a multi-facet request its first pick before any facet gets a second. Measured on the live index: average selection size 8.20 → 6.31 (100-suite), 6.35 → 4.76 (500-suite), 8.20 → 3.39 (holdout) with pass rates unchanged (99/100, 499/500, 100/100); per-facet coverage on the multi-facet suite 41/42.
+- **Typed `flow-state` commands are journaled.** `init`, `approve`, `advance`, `requirement-delta`, `plan-drift`, `improvement-gate` and `resume` append begin/commit (or abort) records to `.codex-flow/EVENTS.jsonl`. `flow-state check` reports a corrupt journal, an unfinished transaction, and gate keys in STATE.md that differ from the last committed record (a hand edit); typed commands refuse to run on those states and recover an unfinished transaction first. Runs started by an older version (no journal) keep working unjournaled. Restart and completed-run archives must move `EVENTS.jsonl` with the other control files; `init` refuses while a journal remains.
+- **`scripts/context-slice.mjs` stops on a real git failure at the first probe** (non-zero exit, no slice) instead of treating it as "not a repository"; only git's own "not a git repository" answer keeps the non-git behaviour.
+- **`scripts/worktree-setup.mjs` resolves a symlinked worktree root** and requires the real path to be the top level of a git work tree before copying control files; inherited `GIT_*` variables no longer redirect that check, and a failed copy removes what it copied.
+- **Jev assist prose moved out of the core skills** into the opt-in skill `skills/jev-assist`; `fast-path`, `review-dual` and `skill-selection` keep a one-line pointer.
+- `skills/skill-selection` uses the new CLIs: `build-skills-index --check` in Step 1, `skill-shortlist` in Steps 4–5, and a fixed order for authored skills (brief → author → lint → independent review → one batched approval → rebuild index → load).
+- `commands/codex-flow.md` states that `resume` outside `execution` resets `currentTask`, `taskStage` and `wave`, that the sequential handoff runs `context-slice --check-plan` after appending the Decision-log block, and that an orphaned `EVENTS.jsonl` is archived when STATE.md is missing.
+
+### Added
+
+- **`scripts/skill-shortlist.mjs`** — deterministic shortlist CLI (`--request`, repeatable `--facet name=term,term`, `--budget`, `--json`). Raw requests get search terms through `deriveTerms`; a weak or non-English request prints a warning on stderr; control characters and ANSI sequences are stripped from index-derived output.
+- **`scripts/flow-events.mjs`** — the journal module (records validated on append and on read, symlinked journals refused, crash recovery). A run journaled at a custom `--events` path records a redirect in the default journal, so later commands cannot fall back to unjournaled writes; an `--events` value that differs from the recorded journal is rejected.
+- **`scripts/decision-log.mjs`** and **`context-slice.mjs --check-plan`** — read-only validation of every Decision-log block (missing and duplicate fields, malformed headings, duplicate sections), fence-aware and CRLF-safe; the single Decision-log writer runs it after each append.
+- **`build-skills-index.mjs --check`** — read-only staleness check: newer or unreadable skill files, skills missing from or gone from the index, a changed remote catalog, and scan roots that differ from the roots recorded in the index (new `<!-- roots: … -->` header line).
+- **`scripts/skill-tokens.mjs`** — `tokensOf` as a side-effect-free module.
+- **Skill-eval precision metrics and gates** — `rejectAny` soft labels, noise rate, top-3 hit rate, per-facet coverage, raw-request mode (`--raw`), and the gates `--min-pass`, `--max-avg-selection`, `--max-noise`, `--min-facet-coverage`; npm scripts `skills:eval:scope`, `skills:eval:scope100`, `skills:eval:raw` are gated.
+- **`skill-lint` content checks** for authored skills: per-bullet provenance, minimum rule counts, a concrete source, negation-aware risk patterns, `--max-unverified`.
+- **Cross-document rule registry** (`tests/fixtures/flow-rules.json`, `tests/flowRules.test.ts`): eight obligations, each proven by an exact-once pattern per clause and document, with a removal proof.
+- **Fresh-run harness** (`tests/freshRun.test.ts`): drives the real helper CLIs as child processes through a complete run in a temporary git project, plus rejected transitions that must leave control files unchanged.
+
+### Fixed
+
+- `build-skills-index` compares canonical real paths, so a library behind a symlink no longer looks entirely added and removed.
+- `flow-state check` no longer crashes on a journaled run when the journal cannot be resolved; it reports a journal violation.
+- Decision-log parsing no longer treats headings inside fenced code as blocks, and no longer lets a later `##` section be read as decision blocks.
+
+### Known limitations
+
+- The journal takes no file lock: it assumes a single orchestrator writes STATE.md and `EVENTS.jsonl` (parallel workers never do).
+- Wrong-domain skills can still rank first for generic analytic terms (for example `clinical-decision-support` for `cohort analysis`). Two matcher designs were measured and rejected because they lowered recall or broke rare-term selection; the prompt-level prune in `skills/skill-selection` Step 5 remains the control. Numbers are in `docs/skill-selection-eval-report.md`.
+- Raw-request mode passes 348/500 scenarios: requests without English domain vocabulary (including Vietnamese) need model-derived terms passed with `--facet`.
+- A custom-path journal's archive must include both the redirect file and its target.
+
 ## [0.30.0] - 2026-11-11
 
 ### Changed
