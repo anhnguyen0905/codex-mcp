@@ -56,6 +56,27 @@ describe('validateScenarios', () => {
   })
 })
 
+describe('split selection', () => {
+  test('prints the selected split in the report header', () => {
+    const report = renderReport(runScenarios([], [], {}), { index: 'memory', indexCount: 0, raw: true, split: 'dev' })
+    expect(report).toContain('Split: dev')
+  })
+
+  test('runs exactly one split and rejects an unknown split', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'skill-split-'))
+    const file = path.join(dir, 'scenarios.json')
+    writeFileSync(file, JSON.stringify({ scenarios: [
+      { id: 'dev', split: 'dev', request: 'term', terms: ['term'] },
+      { id: 'holdout', split: 'holdout', request: 'other', terms: ['other'] },
+    ] }))
+    const result = await runCli(['--index', indexFile, '--scenarios', file, '--split', 'dev'])
+    expect(result.total).toBe(1)
+    await expect(runCli(['--index', indexFile, '--scenarios', file, '--split', 'missing']))
+      .rejects.toThrow('unknown split: missing')
+    rmSync(dir, { recursive: true, force: true })
+  })
+})
+
 describe('renderReport', () => {
   test('prints every summary metric from the computed summary', () => {
     // Arrange
@@ -416,6 +437,23 @@ describe('runScenarios', () => {
     expect(summary.precisionAt1).toBe(0.5)
     expect(summary.avgSelected).toBeCloseTo(2 / 3)
     expect(summary.passed).toBe(2)
+  })
+
+  test('reports generic-only picks among expected and rejected labels', () => {
+    const index = [
+      { name: 'expected', description: 'Common workflow guidance.', file: '/e/SKILL.md' },
+      { name: 'noise', description: 'Common workflow notes.', file: '/n/SKILL.md' },
+      { name: 'other', description: 'Common workflow examples.', file: '/o/SKILL.md' },
+    ]
+    const summary = runScenarios([
+      { id: 'A', terms: ['common', 'workflow'], expectAny: ['expected'], rejectAny: ['noise'] },
+    ], index)
+    const report = renderReport(summary, { index: 'memory', indexCount: index.length, raw: false })
+    expect(summary.genericOnlyPicks).toBe(3)
+    expect(summary.genericOnlyExpectedPicks).toBe(1)
+    expect(summary.genericOnlyNoisePicks).toBe(1)
+    expect(report).toContain('Generic-only picks: 3/3 (100.0%)')
+    expect(report).toContain('Generic-only among expected picks: 1/1 (100.0%)')
   })
 
   test('reports MRR, per-scope recall, and expectNone false-positive rate', () => {

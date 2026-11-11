@@ -114,6 +114,10 @@ export function parseCliArgs(argv) {
       events: parsed.options['--events'],
     }
   }
+  if (command === 'archive-paths') {
+    const parsed = parseOptions(args, 0, new Set(['--state']))
+    return { command, state: state(parsed.options) }
+  }
   if (command === 'task') {
     const parsed = parseOptions(args, 2, new Set(['--tasks', '--at']))
     return {
@@ -125,6 +129,7 @@ export function parseCliArgs(argv) {
     }
   }
   throw new Error(
-    'usage: flow-state <init|approve|advance|requirement-delta|plan-drift|improvement-gate|resume|set|check|task> ...',
+    'usage: flow-state <init|approve|advance|requirement-delta|plan-drift|improvement-gate|resume|set|check'
+      + '|archive-paths|task> ...',
   )
 }

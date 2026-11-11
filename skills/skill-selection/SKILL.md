@@ -85,9 +85,11 @@ Before loading anything new, list the skills already present in the session (per
 - Treat deterministic retrieval as a **shortlist producer, never the final selection**: derive the
   facet terms yourself (Step 2), then run `node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-shortlist.mjs"
   --facet <facet>=<terms> …` (one `--facet` per facet; add `--request "<text>"` to see request-derived
-  terms you may have missed). Request-derived terms alone find the right skill far less often (69%
-  vs 99% on the 500-suite); the output is tail-cut, per-facet, and short terms use word boundaries.
+  terms you may have missed). Request-derived terms alone find the right skill far less often (80%
+  vs 100% on the 500-suite); the output is tail-cut, per-facet, and short terms use word boundaries.
 - Shortlist by **description** relevance, not name similarity.
+- A `generic-only` tag means remove the candidate as wrong-domain unless its stated purpose matches
+  the facet; read its SKILL.md before keeping it.
 - **A name match is not a domain match.** When a candidate's only strong signal is its name
   (e.g. `brand-guidelines` for "brand voice" — it is actually a color/typography guide), read the
   SKILL.md and confirm its stated purpose before loading. Discard on mismatch; that is a 0-match
@@ -97,6 +99,9 @@ Before loading anything new, list the skills already present in the session (per
   had their expected skill at score exactly 0.0: it was absent, not mis-ranked. If the right answer
   for a facet is not in the shortlist, treat that as a recall problem and continue to Step 7
   (acquire-or-author), not as a reranking problem.
+- If the shortlist warns `only weak matches` or `does not look like English`, derive English terms
+  for the facet yourself and re-run with `--facet name=term,term`; Vietnamese is translated by the
+  built-in glossary first, so the non-English warning means the glossary translated nothing.
 
 ## Step 5 — Prune, vet, and load within a context budget (no fixed count)
 

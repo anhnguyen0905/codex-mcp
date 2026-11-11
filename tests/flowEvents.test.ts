@@ -7,6 +7,7 @@ import { expect, test } from 'vitest'
 import {
   appendEvent,
   eventsPathFor,
+  journalFilesFor,
   resolveJournalPath,
   gateSnapshot,
   journalViolations,
@@ -14,6 +15,7 @@ import {
   readEvents,
   recoverOpenTransaction,
   runJournaled,
+  journalInit,
 } from '../scripts/flow-events.mjs'
 
 const state = '- phase: plan\n- requirementsApproved: yes\n- planApproved: no\n- backlogApproved: no\n'
@@ -30,6 +32,82 @@ const file = async () => join(await mkdtemp(join(tmpdir(), 'flow-events-')), 'EV
 test('gateSnapshot returns gates', () => expect(gateSnapshot(state).phase).toBe('plan'))
 test('eventsPathFor returns sibling journal path', () =>
   expect(eventsPathFor(join('x', 'STATE.md'))).toBe(join('x', 'EVENTS.jsonl')))
+
+test('journalFilesFor returns existing ordinary and redirect journal files', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'flow-events-'))
+  const statePath = join(dir, 'STATE.md')
+  const defaultPath = eventsPathFor(statePath)
+  const target = join(dir, 'custom.jsonl')
+  await expect(journalFilesFor({ statePath })).resolves.toEqual([])
+  await writeFile(defaultPath, '')
+  await expect(journalFilesFor({ statePath })).resolves.toEqual([defaultPath])
+  await writeFile(defaultPath, `${JSON.stringify({ redirect: target })}\n`)
+  await writeFile(target, '')
+  await expect(journalFilesFor({ statePath })).resolves.toEqual([defaultPath, target])
+})
+
+test('journalFilesFor keeps a dangling redirect target out and rejects corruption', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'flow-events-'))
+  const statePath = join(dir, 'STATE.md')
+  const defaultPath = eventsPathFor(statePath)
+  const target = join(dir, 'missing.jsonl')
+  await writeFile(defaultPath, `${JSON.stringify({ redirect: target })}\n`)
+  await expect(journalFilesFor({ statePath })).resolves.toEqual([defaultPath])
+  await writeFile(defaultPath, `${JSON.stringify({ redirect: 'relative.jsonl' })}\n`)
+  await expect(journalFilesFor({ statePath })).rejects.toBeInstanceOf(Error)
+})
+
+test('journalInit removes its pointer when append fails and preserves the append error', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'flow-events-'))
+  const eventsPath = join(dir, 'custom.jsonl')
+  const pointerPath = join(dir, 'EVENTS.jsonl')
+  const failure = new Error('append failed')
+  await expect(journalInit({
+    eventsPath, defaultEventsPath: pointerPath, statePath: join(dir, 'STATE.md'), stateText: state,
+    createState: async () => undefined, append: async () => { throw failure },
+  })).rejects.toBe(failure)
+  await expect(readFile(pointerPath, 'utf8')).rejects.toThrow()
+})
+
+test('journalInit preserves the append error when pointer removal fails', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'flow-events-'))
+  const eventsPath = join(dir, 'custom.jsonl')
+  const pointerPath = join(dir, 'EVENTS.jsonl')
+  const failure = new Error('append failed')
+  await expect(journalInit({
+    eventsPath, defaultEventsPath: pointerPath, statePath: join(dir, 'STATE.md'), stateText: state,
+    createState: async () => undefined, append: async () => { throw failure },
+    remove: async () => { throw new Error('remove failed') },
+  })).rejects.toBe(failure)
+})
+
+test('journalInit removes its pointer when the abort record cannot be appended', async () => {
+  // Arrange: the begin record is written for real, state creation fails, then the abort append fails.
+  const dir = await mkdtemp(join(tmpdir(), 'flow-events-'))
+  const eventsPath = join(dir, 'custom.jsonl')
+  const pointerPath = join(dir, 'EVENTS.jsonl')
+  const failure = new Error('state creation failed')
+  let appends = 0
+  const append = async (file: string, record: unknown) => {
+    appends += 1
+    if (appends > 1) throw new Error('abort append failed')
+    await appendEvent(file, record)
+  }
+
+  // Act
+  const run = journalInit({
+    eventsPath, defaultEventsPath: pointerPath, statePath: join(dir, 'STATE.md'), stateText: state,
+    createState: async () => {
+      throw failure
+    },
+    append,
+  })
+
+  // Assert
+  await expect(run).rejects.toBe(failure)
+  expect(appends).toBe(2)
+  await expect(readFile(pointerPath, 'utf8')).rejects.toThrow()
+})
 
 test('resolveJournalPath follows a sole default redirect', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'flow-events-'))

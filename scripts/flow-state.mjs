@@ -3,8 +3,8 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
-  JournalRejectedError, eventsPathFor, journalCheck, journalInit, journalPathFor, journalTransition,
-  journalViolations,
+  JournalRejectedError, eventsPathFor, journalCheck, journalFilesFor, journalInit, journalPathFor,
+  journalTransition, journalViolations,
   prepareJournal,
   readTasksForAdvance,
 } from './flow-events.mjs'
@@ -761,11 +761,16 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       return 0
     }
     if (config.command === 'check') return runCheck(config, cwd)
+    if (config.command === 'archive-paths') {
+      const files = await journalFilesFor({ statePath: path.resolve(cwd, config.state) })
+      for (const file of files) console.log(file)
+      return 0
+    }
     const statePath = path.resolve(cwd, config.state)
     const writer = writeState ?? ((text) => writeFileAtomically(statePath, text, 'state file'))
     return await runTypedCommand(config, cwd, statePath, writer)
   } catch (error) {
-    if (error instanceof TransitionRejectedError) {
+    if (error instanceof TransitionRejectedError || error instanceof JournalRejectedError) {
       console.error(`flow-state: rejected: ${error.message}`)
       return 1
     }

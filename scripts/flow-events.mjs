@@ -64,6 +64,27 @@ async function readDefaultJournal(defaultPath) {
   return { kind: 'ordinary' }
 }
 
+/** Return the existing default journal and, for redirects, its existing target. */
+export async function journalFilesFor({ statePath }) {
+  const defaultPath = path.resolve(eventsPathFor(path.resolve(statePath)))
+  const journal = await readDefaultJournal(defaultPath)
+  if (journal.kind === 'absent') return []
+  if (journal.kind !== 'redirect') return [defaultPath]
+  if (await pathExists(journal.target) && !(await isRegularFile(journal.target))) {
+    throw new JournalRejectedError(`corrupt journal: redirect target is not a regular file: ${journal.target}`)
+  }
+  if (!(await pathExists(journal.target))) return [defaultPath]
+  // Never hand an archiver a file outside the project that owns the control directory.
+  const projectRoot = path.dirname(path.dirname(defaultPath))
+  const relative = path.relative(projectRoot, journal.target)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new JournalRejectedError(
+      `redirect target ${journal.target} is outside ${projectRoot}; archive it by hand`,
+    )
+  }
+  return [defaultPath, journal.target]
+}
+
 /** True when the path itself is a regular file (a symlink, even to a file, or a directory is not). */
 async function isRegularFile(file) {
   try {
@@ -255,7 +276,10 @@ export async function prepareJournal({ eventsPath, stateText }) {
 }
 
 /** Initialize STATE.md and its journal after checking both exclusive preconditions. */
-export async function journalInit({ eventsPath, defaultEventsPath, statePath, stateText, createState }) {
+export async function journalInit({
+  eventsPath, defaultEventsPath, statePath, stateText, createState,
+  append = appendEvent, remove = (file) => fs.rm(file, { force: true }),
+}) {
   const exists = pathExists
   if (await exists(eventsPath)) throw new JournalRejectedError(`init refuses existing journal ${eventsPath}`)
   if (defaultEventsPath !== eventsPath && await exists(defaultEventsPath)) {
@@ -272,30 +296,30 @@ export async function journalInit({ eventsPath, defaultEventsPath, statePath, st
   }
   const id = randomUUID()
   try {
-    await appendEvent(eventsPath, {
+    await append(eventsPath, {
       id, ts: new Date().toISOString(), command: 'init', status: 'begin',
       before: null, after: gateSnapshot(stateText),
     })
     await createState()
   } catch (error) {
-    await abandonInit({ eventsPath, id, pointerPath: redirected ? defaultEventsPath : null })
+    await abandonInit({ eventsPath, id, pointerPath: redirected ? defaultEventsPath : null, append, remove })
     throw error
   }
-  await appendEvent(eventsPath, { id, ts: new Date().toISOString(), command: 'init', status: 'commit' })
+  await append(eventsPath, { id, ts: new Date().toISOString(), command: 'init', status: 'commit' })
 }
 
 /** Best-effort cleanup of a failed init: record the abort and remove the pointer this init wrote. */
-async function abandonInit({ eventsPath, id, pointerPath }) {
+async function abandonInit({ eventsPath, id, pointerPath, append = appendEvent, remove }) {
   try {
     if (await pathExists(eventsPath)) {
-      await appendEvent(eventsPath, { id, ts: new Date().toISOString(), command: 'init', status: 'abort' })
+      await append(eventsPath, { id, ts: new Date().toISOString(), command: 'init', status: 'abort' })
     }
   } catch {
     // Deliberately dropped: the original init error is the one to report.
   }
   if (!pointerPath) return
   try {
-    await fs.rm(pointerPath, { force: true })
+    await (remove ?? ((file) => fs.rm(file, { force: true })))(pointerPath)
   } catch {
     // Deliberately dropped: check reports the dangling redirect as a corrupt journal.
   }

@@ -88,6 +88,7 @@ export function evaluateScenario(scenario, entries, options = {}) {
     { tokenBudget, tokensOf: sizer },
   )
   const names = selected.map((s) => s.name)
+  const genericOnly = selected.map((s) => Boolean(s.genericOnly))
   const usedTokens = selected.reduce((sum, s) => sum + (s.tokens ?? 0), 0)
   const precisionAt1 = scenario.expectAny ? scenario.expectAny.includes(names[0]) : null
   const firstHit = scenario.expectAny
@@ -143,8 +144,10 @@ export function evaluateScenario(scenario, entries, options = {}) {
     scope: scenario.scope,
     facet: scenario.facet,
     request: scenario.request,
+    expectAny: scenario.expectAny ?? [],
     terms,
     selected: names,
+    genericOnly,
     scores: selected.map((s) => s.score),
     usedTokens,
     tokenBudget,
@@ -194,6 +197,17 @@ export function runScenarios(scenarios, entries, options = {}) {
   const noisyScenarios = noiseScenarios.filter((result) => result.noise.length > 0)
   const labelledSelections = noiseScenarios.reduce((sum, result) => sum + result.selected.length, 0)
   const noisySelections = noiseScenarios.reduce((sum, result) => sum + result.noise.length, 0)
+  const selectedCount = results.reduce((sum, result) => sum + result.selected.length, 0)
+  const genericOnlyPicks = results.reduce(
+    (sum, result) => sum + result.genericOnly.filter(Boolean).length, 0,
+  )
+  const expectedSelections = results.flatMap((result) => result.selected
+    .map((name, index) => ({ name, flagged: result.genericOnly[index], expected: result.expectAny.includes(name) })))
+  const expectedGenericOnly = expectedSelections.filter((entry) => entry.expected && entry.flagged).length
+  const expectedTotal = expectedSelections.filter((entry) => entry.expected).length
+  const genericNoise = results.reduce((sum, result) => sum + result.selected.filter(
+    (name, index) => result.noise?.includes(name) && result.genericOnly[index],
+  ).length, 0)
   const top3Measured = results.filter((result) => result.top3Hit !== null)
   const facetChecks = results
     .flatMap((result) => result.facetCoverage ?? [])
@@ -214,6 +228,13 @@ export function runScenarios(scenarios, entries, options = {}) {
     noiseDenominator: noiseScenarios.length,
     noisySelectionNumerator: noisySelections,
     noisySelectionDenominator: labelledSelections,
+    genericOnlyPicks,
+    genericOnlyPickDenominator: selectedCount,
+    genericOnlyShare: selectedCount ? genericOnlyPicks / selectedCount : null,
+    genericOnlyExpectedPicks: expectedGenericOnly,
+    genericOnlyExpectedDenominator: expectedTotal,
+    genericOnlyExpectedShare: expectedTotal ? expectedGenericOnly / expectedTotal : null,
+    genericOnlyNoisePicks: genericNoise,
     top3HitRate: top3Measured.length
       ? top3Measured.filter((result) => result.top3Hit).length / top3Measured.length
       : null,
@@ -249,6 +270,12 @@ function renderHeader(summary, meta) {
     ? 'n/a (no rejectAny labels)'
     : `${summary.noisySelectionNumerator}/${summary.noisySelectionDenominator}`
       + ` (${(summary.noisySkillShare * 100).toFixed(1)}%)`
+  const genericSummary = summary.genericOnlyShare === null
+    ? '0/0 (n/a)' : `${summary.genericOnlyPicks}/${summary.genericOnlyPickDenominator}`
+      + ` (${(summary.genericOnlyShare * 100).toFixed(1)}%)`
+  const expectedGenericSummary = summary.genericOnlyExpectedShare === null
+    ? '0/0 (n/a)' : `${summary.genericOnlyExpectedPicks}/${summary.genericOnlyExpectedDenominator}`
+      + ` (${(summary.genericOnlyExpectedShare * 100).toFixed(1)}%)`
 
   return [
     '# Skill Selection — Scope Scenario Eval Report',
@@ -257,6 +284,7 @@ function renderHeader(summary, meta) {
     `- Index: \`${meta.index}\` (${meta.indexCount} skills)`,
     ...(meta.indexSha256 ? [`- Index sha256: \`${meta.indexSha256}\``] : []),
     `- Scenarios: ${total}`,
+    ...(meta.split ? [`- Split: ${meta.split}`] : []),
     `- Terms: ${meta.raw ? 'raw (derived from request)' : 'oracle'}`,
     `- Context budget per scenario: ~${DEFAULT_TOKEN_BUDGET.toLocaleString()} tokens (≈3% of a 200k window)`,
     `- **Passed: ${passed}/${total} (${pct}%)**`,
@@ -268,6 +296,8 @@ function renderHeader(summary, meta) {
     `- **Per-facet coverage: ${formatFacetCoverage(summary)}**`,
     `- **Noise rate: ${noiseSummary}** (scenarios selecting a rejected skill)`,
     `- **Noisy selections: ${noisySummary}**`,
+    `- **Generic-only picks: ${genericSummary}**`,
+    `- **Generic-only among expected picks: ${expectedGenericSummary}**`,
     '',
   ]
 }
@@ -413,6 +443,7 @@ const CLI_FILE_FLAGS = new Map([
   ['--report', 'reportFile'],
   ['--negatives', 'negativesFile'],
 ])
+const CLI_TEXT_FLAGS = new Map([['--split', 'split']])
 const CLI_NUMBER_FLAGS = new Map([
   ['--max-avg-selection', 'maxAvgSelection'],
   ['--max-noise', 'maxNoise'],
@@ -481,6 +512,7 @@ function parseCliArgs(argv) {
     minPass: null,
     minFacetCoverage: null,
     raw: false,
+    split: null,
   }
   for (let index = 0; index < argv.length; index++) {
     const flag = argv[index]
@@ -488,7 +520,7 @@ function parseCliArgs(argv) {
       parsed = { ...parsed, raw: true }
       continue
     }
-    const key = CLI_FILE_FLAGS.get(flag) ?? CLI_NUMBER_FLAGS.get(flag)
+    const key = CLI_FILE_FLAGS.get(flag) ?? CLI_NUMBER_FLAGS.get(flag) ?? CLI_TEXT_FLAGS.get(flag)
     if (!key) throw new Error(`unknown argument: ${flag}`)
 
     const value = argv[index + 1]
@@ -521,6 +553,7 @@ export async function runCli(argv) {
     minPass,
     minFacetCoverage,
     raw,
+    split,
   } = parsed
   const idx = path.resolve(indexFile ?? defaultIndex())
   const scen = path.resolve(scenariosFile ?? defaultScenarios())
@@ -529,8 +562,14 @@ export async function runCli(argv) {
   // Pin the exact index the numbers were measured against (dual-review IMP-D):
   // the file is mutable, so a report without its hash is not reproducible.
   const indexSha256 = createHash('sha256').update(indexContent).digest('hex')
-  const { scenarios } = JSON.parse(await fs.readFile(scen, 'utf8'))
+  let { scenarios } = JSON.parse(await fs.readFile(scen, 'utf8'))
   validateScenarios(scenarios)
+  if (split !== null) {
+    if (!scenarios.some((scenario) => scenario.split === split)) {
+      throw new Error(`unknown split: ${split}`)
+    }
+    scenarios = scenarios.filter((scenario) => scenario.split === split)
+  }
 
   const summary = runScenarios(scenarios, entries, { raw })
   let negativeViolations = null
@@ -542,7 +581,7 @@ export async function runCli(argv) {
   }
   const report = renderReport(
     summary,
-    { index: idx, indexCount: entries.length, indexSha256, raw },
+    { index: idx, indexCount: entries.length, indexSha256, raw, split },
     negativeViolations,
   )
 

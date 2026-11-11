@@ -565,12 +565,12 @@ export function parseCatalog(content) {
 
 /** Compare a rendered index with the scanned local skill files; --check never writes. */
 export function indexStaleness({ indexEntries, indexMtimeMs, scanned }) {
-  const local = new Map(scanned.map((entry) => [entry.canonicalFile ?? path.resolve(entry.file), entry.file]))
+  const local = new Map(scanned.map((entry) => [pathKey(entry.canonicalFile ?? entry.file), entry.file]))
   // Compare canonical paths; report the path as the index or the scan spelled it.
   const indexed = new Map(
     indexEntries
       .filter((entry) => entry.file && !/^https?:\/\//i.test(entry.file))
-      .map((entry) => [entry.canonicalFile ?? path.resolve(entry.file), entry.file]),
+      .map((entry) => [pathKey(entry.canonicalFile ?? entry.file), entry.file]),
   )
   const newer = scanned.filter((entry) => entry.mtimeMs >= indexMtimeMs)
   if (newer.length > 0) {
@@ -590,35 +590,70 @@ export function indexStaleness({ indexEntries, indexMtimeMs, scanned }) {
   return { stale: false, reason: null }
 }
 
+/** Canonicalize roots while retaining resolved paths when a root is gone. */
 const canonicalRoots = async (roots) => Promise.all(roots.map(async (root) => {
-  try { return await fs.realpath(path.resolve(root)) } catch { return path.resolve(root) }
+  const resolved = path.resolve(root)
+  try {
+    return await fs.realpath(resolved)
+  } catch {
+    return resolved
+  }
 }))
 
-/** The roots recorded by the build, or null when the header is absent or not a list of paths. */
+/** Read validated index metadata, including the legacy roots-only header. */
 const rootsHeader = (content) => {
-  const match = content.match(/^<!-- roots: (.+) -->\r?$/m)
-  if (!match) return null
-  let roots
+  const metaMatch = content.match(/^<!-- index-meta: (.+) -->\r?$/m)
+  if (metaMatch) {
+    try {
+      const meta = JSON.parse(metaMatch[1])
+      if (Array.isArray(meta?.roots) && meta.roots.every((root) => typeof root === 'string') &&
+        (typeof meta.remote === 'string' || meta.remote === null)) return meta
+    } catch {
+      return null
+    }
+    return null
+  }
+  const legacyMatch = content.match(/^<!-- roots: (.+) -->\r?$/m)
+  if (!legacyMatch) return null
   try {
-    roots = JSON.parse(match[1])
+    const roots = JSON.parse(legacyMatch[1])
+    return Array.isArray(roots) && roots.every((root) => typeof root === 'string')
+      ? { roots, remote: null }
+      : null
   } catch {
     return null
   }
-  return Array.isArray(roots) && roots.every((root) => typeof root === 'string') ? roots : null
 }
 
+/** Canonicalize a file while retaining its resolved path when it is gone. */
 const canonicalFile = async (file) => {
-  try { return await fs.realpath(file) } catch { return path.resolve(file) }
+  try {
+    return await fs.realpath(file)
+  } catch {
+    return path.resolve(file)
+  }
 }
 
+/** Add canonical local paths to indexed entries without changing remote entries. */
 const canonicalizeIndexed = async (entries) => Promise.all(entries.map(async (entry) => ({
   ...entry,
   ...(entry.file && !/^https?:\/\//i.test(entry.file) ? { canonicalFile: await canonicalFile(entry.file) } : {}),
 })))
 
-const rootsMatch = (recorded, checked) =>
-  recorded && JSON.stringify([...recorded].sort()) === JSON.stringify([...checked].sort())
+/** Compare path sets using platform-appropriate keys. */
+const rootsMatch = (recorded, checked) => {
+  if (!recorded) return false
+  const keys = (roots) => JSON.stringify([...new Set(roots.map((root) => pathKey(root)))].sort())
+  return keys(recorded) === keys(checked)
+}
 
+/** Resolve a path and fold case only for Windows comparisons. */
+export const pathKey = (file, platform = process.platform) => {
+  const resolved = path.resolve(file)
+  return platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+/** Read an index for check without mutating it. */
 const readIndexForCheck = async (outFile) => {
   let indexStat
   try {
@@ -635,6 +670,7 @@ const readIndexForCheck = async (outFile) => {
   }
 }
 
+/** Scan local entries and capture deterministic check metadata. */
 const scanForCheck = async (localEntries) => Promise.all(localEntries.map(async (entry) => {
   try {
     await fs.readFile(entry.file)
@@ -645,6 +681,7 @@ const scanForCheck = async (localEntries) => Promise.all(localEntries.map(async 
   }
 }))
 
+/** Compare remote catalog entries while ignoring local shadow entries. */
 const remoteCatalogDelta = (indexed, current) => {
   const indexedRemote = indexed.filter((entry) => /^https?:\/\//i.test(entry.file))
   const currentRemote = current.filter((entry) => /^https?:\/\//i.test(entry.file))
@@ -656,9 +693,12 @@ const remoteCatalogDelta = (indexed, current) => {
   return { added, removed, remote: currentRemote.length }
 }
 
+/** Read and merge the optional remote catalog. */
 const mergedEntries = async (localEntries, remoteFile) => {
   let catalogContent = ''
-  try { catalogContent = await fs.readFile(path.resolve(remoteFile), 'utf8') } catch (error) {
+  try {
+    catalogContent = await fs.readFile(path.resolve(remoteFile), 'utf8')
+  } catch (error) {
     if (error.code !== 'ENOENT') throw Object.assign(error, { path: remoteFile })
   }
   return mergeRemoteEntries(localEntries, catalogContent)
@@ -676,19 +716,31 @@ async function runCheck({ outFile, scanRoots, remote }) {
   }
   const indexed = await canonicalizeIndexed(parseCatalog(index.content))
   const roots = await canonicalRoots(scanRoots)
-  const recordedRoots = rootsHeader(index.content)
-  if (recordedRoots && !rootsMatch(recordedRoots, roots)) {
+  const metadata = rootsHeader(index.content)
+  if (metadata?.roots && !rootsMatch(metadata.roots, roots)) {
     return {
       check: true,
       stale: true,
-      reason: `scanned roots differ from the index (index: ${JSON.stringify(recordedRoots)}; ` +
+      reason: `scanned roots differ from the index (index: ${JSON.stringify(metadata.roots)}; ` +
         `check: ${JSON.stringify(roots)})`,
     }
   }
-  const remoteFile = remote ?? path.join(path.dirname(outFile), 'REMOTE.md')
+  const recordedRemote = metadata?.remote
+  const defaultRemote = path.join(path.dirname(outFile), 'REMOTE.md')
+  if (remote && recordedRemote && pathKey(await canonicalFile(remote)) !== pathKey(recordedRemote)) {
+    return {
+      check: true,
+      stale: true,
+      reason: `remote catalog path differs from the index (index: ${recordedRemote}; check: ${remote})`,
+    }
+  }
+  const remoteFile = remote ?? recordedRemote ?? defaultRemote
   let merged
-  try { merged = await mergedEntries(localEntries, remoteFile) } catch (error) {
-    return { check: true, stale: true, reason: `unreadable: ${error.path ?? remoteFile} (${error.code ?? 'UNKNOWN'})` }
+  try {
+    merged = await mergedEntries(localEntries, remoteFile)
+  } catch (error) {
+    const code = error.code ?? 'UNKNOWN'
+    return { check: true, stale: true, reason: `unreadable: ${error.path ?? remoteFile} (${code})` }
   }
   const delta = remoteCatalogDelta(indexed, merged)
   if (delta.added || delta.removed) {
@@ -710,14 +762,22 @@ export function mergeRemoteEntries(localEntries, catalogContent) {
   return [...localEntries, ...remote].sort((a, b) => a.name.localeCompare(b.name))
 }
 
+/**
+ * JSON that can sit inside an HTML comment: `>` and every `-` that follows a `-` are written as
+ * unicode escapes, so the text never contains `--`, `-->` or `--!>`; JSON.parse restores them.
+ */
+export function commentSafeJson(value) {
+  return JSON.stringify(value).replaceAll('>', '\\u003e').replace(/-(?=-)/g, '\\u002d')
+}
+
 /** Render entries as the grep-friendly INDEX.md content. */
-export function renderIndex(entries, roots = []) {
+export function renderIndex(entries, roots = [], remote = null) {
   const header = [
     '# Skill Index — generated by codex-flow build-skills-index',
     `# Rebuilt: ${new Date().toISOString()}`,
     '# Format: <name> | <description> | <SKILL.md path> [| vetted:<true|false>]',
     '# Remote-origin entries carry a vetted flag; load ONLY vetted:true remote skills.',
-    `<!-- roots: ${JSON.stringify(roots)} -->`,
+    `<!-- index-meta: ${commentSafeJson({ roots, remote })} -->`,
     '',
   ]
   const lines = entries.map(
@@ -910,11 +970,18 @@ export async function runCli(argv) {
 
   // The remote catalog (synced from awesome-claude-skills) is the foundation layer;
   // locally vetted skills shadow it by name.
-  const remoteFile = remote ?? path.join(path.dirname(outFile), 'REMOTE.md')
+  // A rebuild without --remote keeps the remote catalog the existing index was built with.
+  const previous = await fs.readFile(outFile, 'utf8').catch(() => '')
+  const remoteFile = remote ?? rootsHeader(previous)?.remote ?? path.join(path.dirname(outFile), 'REMOTE.md')
   // A build treats an unreadable remote catalog as empty, as it always has; --check reports it.
+  // Record the remote path only when the catalog file was really read.
   let entries
+  let recordedRemote = null
   try {
     entries = await mergedEntries(localEntries, remoteFile)
+    if ((await fs.stat(path.resolve(remoteFile)).catch(() => null))?.isFile()) {
+      recordedRemote = await canonicalFile(remoteFile)
+    }
   } catch {
     entries = mergeRemoteEntries(localEntries, '')
   }
@@ -926,7 +993,7 @@ export async function runCli(argv) {
   }
 
   await fs.mkdir(path.dirname(outFile), { recursive: true })
-  await fs.writeFile(outFile, renderIndex(entries, await canonicalRoots(scanRoots)), 'utf8')
+  await fs.writeFile(outFile, renderIndex(entries, await canonicalRoots(scanRoots), recordedRemote), 'utf8')
   return { count: entries.length, local: localEntries.length, out: outFile, warnings }
 }
 

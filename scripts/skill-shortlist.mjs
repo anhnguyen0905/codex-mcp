@@ -11,6 +11,7 @@ import {
   DEFAULT_TOKEN_BUDGET,
 } from './skill-match.mjs'
 import { tokensOf } from './skill-tokens.mjs'
+import { foldVietnamese, translateVietnamese } from './skill-terms.mjs'
 
 const USAGE = 'Usage: node scripts/skill-shortlist.mjs [--index <file>] '
   + '[--request "<text>"] [--facet <name>=<term,term,…>]… [--budget <tokens>] [--json] '
@@ -98,7 +99,9 @@ function looksEnglish(request) {
 function shortlistWarnings(request, selected) {
   if (request === null) return []
   const warnings = []
-  if (!looksEnglish(request)) warnings.push(NON_ENGLISH_WARNING)
+  // A Vietnamese request the glossary translated is fine; warn only when nothing was translated.
+  const translated = translateVietnamese(foldVietnamese(request)).terms.length > 0
+  if (!looksEnglish(request) && !translated) warnings.push(NON_ENGLISH_WARNING)
   if (!selected.length || selected[0].score < WARNING_SCORE_THRESHOLD) warnings.push(WEAK_MATCH_WARNING)
   return warnings
 }
@@ -136,12 +139,13 @@ export function runCli(argv, { stdout = console.log, stderr = console.error } = 
       stdout(JSON.stringify({
         facets: facets.map(({ name, terms }) => ({ name, terms })),
         warnings,
-        selected: safeSelected.map(({ name, facet, score, tokens, file }) => ({
+        selected: safeSelected.map(({ name, facet, score, tokens, file, genericOnly }) => ({
           name,
           facet: facet ?? (options.facets.length ? facets[0].name : undefined),
           score,
           tokens,
           file,
+          genericOnly: genericOnly ?? false,
         })),
       }))
     } else {

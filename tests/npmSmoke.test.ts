@@ -29,6 +29,12 @@ import {
   removeScratchDir,
 } from '../scripts/npm-smoke.mjs'
 
+function extractRelativeImports(source: string): string[] {
+  // `from '…'`, side-effect `import '…'`, and dynamic `import('…')` with a relative .mjs specifier.
+  const pattern = /(?:from\s+|import\s+|import\()(['"])(\.\.?\/[^'"]+\.mjs)\1/g
+  return [...source.matchAll(pattern)].map((match) => match[2])
+}
+
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const SMOKE_SCRIPT = path.join(REPO_ROOT, 'scripts', 'npm-smoke.mjs')
 
@@ -488,6 +494,10 @@ describe('CLI', () => {
 })
 
 describe('package identity', () => {
+  test('extracts child, parent, and dynamic relative imports', () => {
+    expect(extractRelativeImports("from './a.mjs'\nfrom '../b.mjs'\nimport('./c.mjs')\nimport './d.mjs'"))
+      .toEqual(['./a.mjs', '../b.mjs', './c.mjs', './d.mjs'])
+  })
   test('smokes the published package name from package.json', () => {
     // Arrange
     const manifest = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')) as { name: string }
@@ -508,8 +518,8 @@ describe('package identity', () => {
     while (queue.length) {
       const current = queue.pop()!
       const source = readFileSync(path.join(REPO_ROOT, current), 'utf8')
-      for (const match of source.matchAll(/from ['"](\.\/[^'"]+\.mjs)['"]/g)) {
-        const dependency = path.posix.normalize(path.posix.join(path.posix.dirname(current), match[1]))
+      for (const specifier of extractRelativeImports(source)) {
+        const dependency = path.posix.normalize(path.posix.join(path.posix.dirname(current), specifier))
         if (!required.has(dependency)) { required.add(dependency); queue.push(dependency) }
       }
     }

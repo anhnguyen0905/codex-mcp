@@ -94,9 +94,11 @@ not been created yet:
 - **Restart** → archive the old control files that exist to `.codex-flow/archive/<timestamp>/`,
   including `EVENTS.jsonl`,
   then begin fresh with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" init --baseline <run-start HEAD> --known-red "<compact list>"`.
+  Archive the journal files printed by `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" archive-paths`.
 
-If STATE.md does not exist, do not offer resume. Treat any PLAN.md, TASKS.md or EVENTS.jsonl as orphaned control
-files and offer to archive them before beginning a fresh run.
+If STATE.md does not exist, do not offer resume. Treat any PLAN.md, TASKS.md or journal files named
+by the archive-paths helper as orphaned control files and offer to archive them before beginning a
+fresh run.
 
 ## Step 3 — Baseline the workspace
 

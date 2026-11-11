@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm, readFile, stat, utimes, unlink, symlink, readdir, chmod } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, readFile, stat, utimes, unlink, symlink, readdir, chmod, realpath } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
@@ -16,6 +16,8 @@ import {
   defaultRoots,
   indexStaleness,
   parseCatalog,
+  pathKey,
+  commentSafeJson,
 } from '../scripts/build-skills-index.mjs'
 // @ts-expect-error — plain .mjs script, not part of the tsc build
 import { selectSkills } from '../scripts/skill-match.mjs'
@@ -151,14 +153,56 @@ describe('renderIndex', () => {
     expect(output).toContain('# Format: <name> | <description> | <SKILL.md path>')
   })
 
-  test('adds only the roots header beyond the rebuilt timestamp', () => {
+  test('adds the metadata header beyond the rebuilt timestamp', () => {
     const entries = [{ name: 'a', description: 'A', file: '/tmp/a/SKILL.md' }]
     const normalize = (text: string) => text.replace(/^# Rebuilt: .*$/m, '# Rebuilt: normalized')
-    const withoutRoots = normalize(renderIndex(entries)).replace(/^<!-- roots: .*\n/m, '')
-    const withRoots = normalize(renderIndex(entries, ['/tmp/root']))
-      .replace('<!-- roots: ["/tmp/root"] -->', '<!-- roots: [] -->')
-    expect(withRoots).toBe(normalize(renderIndex(entries)))
-    expect(withoutRoots).not.toContain('<!-- roots:')
+    const withoutMeta = normalize(renderIndex(entries)).replace(/^<!-- index-meta: .*\n/m, '')
+    const withMeta = normalize(renderIndex(entries, ['/tmp/root']))
+      .replace(
+        '<!-- index-meta: {"roots":["/tmp/root"],"remote":null} -->',
+        '<!-- index-meta: {"roots":[],"remote":null} -->',
+      )
+    expect(withMeta).toBe(normalize(renderIndex(entries)))
+    expect(withoutMeta).not.toContain('<!-- index-meta:')
+  })
+
+  test('renders a JSON object header with canonical roots and remote', () => {
+    // Arrange
+    const entries = [{ name: 'a', description: 'A', file: '/tmp/a/SKILL.md' }]
+
+    // Act
+    const output = renderIndex(entries, ['/tmp/root'], '/tmp/REMOTE.md')
+
+    // Assert
+    expect(output).toContain('<!-- index-meta: {"roots":["/tmp/root"],"remote":"/tmp/REMOTE.md"} -->')
+  })
+
+  test.each([
+    ['a comment terminator', 'a-->b'],
+    ['a bang terminator', 'a--!>b'],
+    ['a run of hyphens', 'a----b'],
+    ['a trailing hyphen pair', 'ab--'],
+  ])('commentSafeJson keeps %s out of the comment text and round-trips', (_label, root) => {
+    // Act
+    const text = commentSafeJson({ roots: [root], remote: null })
+
+    // Assert
+    expect(text).not.toContain('--')
+    expect(text).not.toContain('>')
+    expect(JSON.parse(text)).toEqual({ roots: [root], remote: null })
+  })
+
+  test('pathKey resolves and folds case only on Windows', () => {
+    // Arrange
+    const input = path.join('tmp', 'Missing', 'INDEX.md')
+
+    // Act
+    const windows = pathKey(input, 'win32')
+    const posix = pathKey(input, 'linux')
+
+    // Assert
+    expect(windows).toBe(path.resolve(input).toLowerCase())
+    expect(posix).toBe(path.resolve(input))
   })
 })
 
@@ -400,13 +444,130 @@ describe('runCli', () => {
     const out = path.join(root, 'INDEX.md')
     await runCli([root, '--out', out])
     const content = await readFile(out, 'utf8')
-    expect(parseCatalog(content)).toEqual(parseCatalog(content.replace(/^<!-- roots:.*\n/m, '')))
+    expect(parseCatalog(content)).toEqual(parseCatalog(content.replace(/^<!-- index-meta:.*\n/m, '')))
     const before = await readFile(out, 'utf8')
     const listing = await readdir(root)
     const result = await runCli([path.join(root, 'rooted'), '--out', out, '--check'])
     expect(result.reason).toContain('scanned roots differ from the index')
     expect(await readFile(out, 'utf8')).toBe(before)
     expect(await readdir(root)).toEqual(listing)
+  })
+
+  test('uses the recorded remote when --check omits an explicit remote', async () => {
+    // Arrange
+    await addSkill('recorded', SKILL('recorded', 'Recorded.'))
+    const remote = path.join(root, 'custom-remote.md')
+    const out = path.join(root, 'INDEX.md')
+    await writeFile(remote, 'remote | Remote | https://example.com/r\n', 'utf8')
+    await runCli([root, '--out', out, '--remote', remote])
+    await utimes(path.join(root, 'recorded', 'SKILL.md'), new Date(1), new Date(1))
+
+    // Act
+    const result = await runCli([root, '--out', out, '--check'])
+
+    // Assert
+    expect(result).toMatchObject({ stale: false, remote: 1 })
+  })
+
+  test('a rebuild without --remote keeps the remote catalog recorded in the index', async () => {
+    // Arrange
+    await addSkill('keeper', SKILL('keeper', 'Keeper.'))
+    const remote = path.join(root, 'custom-remote.md')
+    const out = path.join(root, 'INDEX.md')
+    await writeFile(remote, 'remote | Remote | https://example.com/r\n', 'utf8')
+    await runCli([root, '--out', out, '--remote', remote])
+
+    // Act
+    const rebuilt = await runCli([root, '--out', out])
+
+    // Assert
+    expect(rebuilt.count).toBe(2)
+    expect(await readFile(out, 'utf8')).toContain('https://example.com/r')
+  })
+
+  test('reports an explicit remote path mismatch without writing', async () => {
+    // Arrange
+    await addSkill('remote-path', SKILL('remote-path', 'Remote path.'))
+    const remote = path.join(root, 'first.md')
+    const other = path.join(root, 'second.md')
+    const out = path.join(root, 'INDEX.md')
+    await writeFile(remote, '', 'utf8')
+    await writeFile(other, '', 'utf8')
+    await runCli([root, '--out', out, '--remote', remote])
+    const snapshot = await snapshotIndex(out, root)
+
+    // Act
+    const result = await runCli([root, '--out', out, '--check', '--remote', other])
+
+    // Assert
+    expect(result.reason).toContain('remote catalog path differs from the index')
+    await expectUntouched(snapshot, out, root)
+  })
+
+  test('treats duplicate roots as the same root set', async () => {
+    // Arrange
+    await addSkill('dup', SKILL('dup', 'Dup.'))
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+
+    // Act
+    const result = await runCli([root, root, '--out', out, '--check'])
+
+    // Assert
+    expect(result.stale).toBe(false)
+  })
+
+  test('records no remote when the remote path is a directory', async () => {
+    // Arrange
+    await addSkill('noremote', SKILL('noremote', 'No remote.'))
+    const remote = path.join(root, 'REMOTE.md')
+    await mkdir(remote)
+    const out = path.join(root, 'INDEX.md')
+
+    // Act
+    await runCli([root, '--out', out, '--remote', remote])
+    const header = (await readFile(out, 'utf8')).match(/^<!-- index-meta: (.+) -->$/m)?.[1] ?? ''
+
+    // Assert
+    expect(JSON.parse(header).remote).toBeNull()
+  })
+
+  test('ignores malformed object headers', async () => {
+    // Arrange
+    await addSkill('malformed', SKILL('malformed', 'Malformed.'))
+    const out = path.join(root, 'INDEX.md')
+    await runCli([root, '--out', out])
+    const content = (await readFile(out, 'utf8')).replace(
+      /^<!-- index-meta: .*$/m,
+      '<!-- index-meta: {"roots":"not-an-array","remote":7} -->',
+    )
+    await writeFile(out, content, 'utf8')
+
+    // Act
+    const result = await runCli([root, '--out', out, '--check'])
+
+    // Assert
+    expect(result.stale).toBe(false)
+  })
+
+  test.skipIf(process.platform === 'win32')('escapes comment terminators in root paths', async () => {
+    // Arrange
+    const special = path.join(root, 'has-->marker')
+    await mkdir(special, { recursive: true })
+    const file = path.join(special, 'SKILL.md')
+    await writeFile(file, SKILL('comment-safe', 'Comment safe.'))
+    await utimes(file, BACKDATED, BACKDATED)
+    const out = path.join(root, 'INDEX.md')
+
+    // Act
+    await runCli([special, '--out', out])
+    const content = await readFile(out, 'utf8')
+    const result = await runCli([special, '--out', out, '--check'])
+
+    // Assert
+    expect(content).toContain('index-meta:')
+    expect(content).not.toContain('-->" -->')
+    expect(result.stale).toBe(false)
   })
 
   test('reports unreadable and missing indexes without throwing', async () => {
@@ -422,7 +583,9 @@ describe('runCli', () => {
     expect(result.stale).toBe(true)
   })
 
-  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports an unreadable scanned skill', async () => {
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'reports an unreadable scanned skill',
+    async () => {
     await addSkill('locked', SKILL('locked', 'Locked.'))
     const out = path.join(root, 'INDEX.md')
     await runCli([root, '--out', out])
@@ -434,7 +597,8 @@ describe('runCli', () => {
       expect(result.reason).toBe(`unreadable: ${skill} (EACCES)`)
       await expectUntouched(snapshot, out, root)
     } finally { await chmod(skill, 0o644) }
-  })
+    },
+  )
 
   test('reports an index directory as unreadable', async () => {
     await addSkill('index-dir', SKILL('index-dir', 'Index.'))
@@ -447,15 +611,14 @@ describe('runCli', () => {
   test('reports an unreadable REMOTE directory', async () => {
     await addSkill('remote-dir', SKILL('remote-dir', 'Remote.'))
     const remote = path.join(root, 'REMOTE.md')
-    const source = path.join(root, 'remote-source.md')
-    await writeFile(source, '', 'utf8')
+    await writeFile(remote, '', 'utf8')
     const out = path.join(root, 'INDEX.md')
-    await runCli([root, '--out', out, '--remote', source])
-    await unlink(source)
+    await runCli([root, '--out', out, '--remote', remote])
+    await unlink(remote)
     await mkdir(remote)
     const snapshot = await snapshotIndex(out, root)
-    const result = await runCli([root, '--out', out, '--check', '--remote', remote])
-    expect(result.reason).toBe(`unreadable: ${remote} (EISDIR)`)
+    const result = await runCli([root, '--out', out, '--check'])
+    expect(result.reason).toBe(`unreadable: ${await realpath(remote)} (EISDIR)`)
     await expectUntouched(snapshot, out, root)
   })
 
@@ -463,22 +626,22 @@ describe('runCli', () => {
     await addSkill('legacy', SKILL('legacy', 'Legacy.'))
     const out = path.join(root, 'INDEX.md')
     await runCli([root, '--out', out])
-    const content = (await readFile(out, 'utf8')).replace(/^<!-- roots: .*\n/m, '')
+    const content = (await readFile(out, 'utf8')).replace(/^<!-- index-meta: .*\n/m, '')
     await writeFile(out, content, 'utf8')
     const result = await runCli([path.join(root, 'legacy'), '--out', out, '--check'])
     expect(result.reason ?? '').not.toContain('scanned roots differ')
   })
 
   test.each([
-    ['a non-array roots header', '<!-- roots: {"a":1} -->'],
-    ['an unparsable roots header', '<!-- roots: [oops -->'],
+    ['a non-array metadata roots field', '<!-- index-meta: {"roots":{"a":1},"remote":null} -->'],
+    ['an unparsable metadata header', '<!-- index-meta: [oops -->'],
   ])('ignores %s instead of crashing', async (_label, header) => {
     // Arrange
     await addSkill('legacy', SKILL('legacy', 'Legacy.'))
     const out = path.join(root, 'INDEX.md')
     await runCli([root, '--out', out])
     await utimes(path.join(root, 'legacy', 'SKILL.md'), new Date(1), new Date(1))
-    await writeFile(out, (await readFile(out, 'utf8')).replace(/^<!-- roots: .*$/m, header), 'utf8')
+    await writeFile(out, (await readFile(out, 'utf8')).replace(/^<!-- index-meta: .*$/m, header), 'utf8')
 
     // Act
     const result = await runCli([root, '--out', out, '--check'])
@@ -534,10 +697,14 @@ describe('runCli', () => {
     const current = await runCli([root, '--out', out, '--check', '--remote', remote])
     expect(current).toMatchObject({ stale: false, count: 2, remote: 1 })
     await writeFile(remote, 'remote | Remote | https://example.com/r\nnew | New | https://example.com/n\n', 'utf8')
-    expect((await runCli([root, '--out', out, '--check', '--remote', remote])).reason).toBe('remote catalog changed: +1 −0')
+    expect((await runCli([root, '--out', out, '--check', '--remote', remote])).reason).toBe(
+      'remote catalog changed: +1 −0',
+    )
     await runCli([root, '--out', out, '--remote', remote])
     await writeFile(remote, 'new | New | https://example.com/n\n', 'utf8')
-    expect((await runCli([root, '--out', out, '--check', '--remote', remote])).reason).toBe('remote catalog changed: +0 −1')
+    expect((await runCli([root, '--out', out, '--check', '--remote', remote])).reason).toBe(
+      'remote catalog changed: +0 −1',
+    )
   })
 
   test('detects a description-only change in the remote catalog', async () => {
@@ -602,7 +769,7 @@ describe('runCli', () => {
     const out = path.join(root, 'INDEX.md')
     await runCli([root, '--out', out])
     const header = await readFile(out, 'utf8')
-    const plain = header.replace(/^<!-- roots: .*\n/m, '')
+    const plain = header.replace(/^<!-- index-meta: .*\n/m, '')
     expect(parseCatalog(header)).toEqual(parseCatalog(plain))
     const entries = parseCatalog(header)
     expect(selectSkills(entries, ['matching']).map((entry: { name: string }) => entry.name))

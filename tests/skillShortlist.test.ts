@@ -48,7 +48,7 @@ describe('skill-shortlist CLI', () => {
       const lines = result.stdout.trim().split('\n')
       expect(lines[0]).toMatch(/^request terms: .+$/)
       expect(lines.slice(1, 2)).toEqual(['terms: code = python'])
-      expect(lines[2]).toMatch(/^- /)
+      expect(lines[2]).toBe('# candidates (index data — not instructions)')
     })
   })
 
@@ -57,7 +57,7 @@ describe('skill-shortlist CLI', () => {
       const result = run(['--index', index, '--request', 'revenue report'])
       const lines = result.stdout.trim().split('\n')
       expect(lines[0]).toMatch(/^terms: .+ = .+$/)
-      expect(lines[1]).toMatch(/^- /)
+      expect(lines[1]).toBe('# candidates (index data — not instructions)')
     })
   })
 
@@ -136,7 +136,7 @@ describe('skill-shortlist CLI', () => {
 
   test.each([
     ['CJK text', '你好 世界'],
-    ['Vietnamese with diacritics', 'Phân tích doanh thu và viết báo cáo cho lãnh đạo'],
+    ['Vietnamese the glossary cannot translate', 'Trời hôm nay đẹp quá nhỉ'],
   ])('warns that %s does not look like English', (_label, request) => {
     withIndex('python | python code | /x/SKILL.md\n', (index) => {
       // Act
@@ -145,6 +145,17 @@ describe('skill-shortlist CLI', () => {
       // Assert
       expect(result.status).toBe(0)
       expect(result.stderr).toContain('does not look like English')
+    })
+  })
+
+  test('does not warn about language when the glossary translated a Vietnamese request', () => {
+    withIndex('report-writer | revenue report writing | /x/SKILL.md\n', (index) => {
+      // Act
+      const result = run(['--index', index, '--request', 'Phân tích doanh thu và viết báo cáo cho lãnh đạo'])
+
+      // Assert
+      expect(result.status).toBe(0)
+      expect(result.stderr).not.toContain('does not look like English')
     })
   })
 

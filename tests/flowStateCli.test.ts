@@ -51,6 +51,8 @@ describe('flow-state CLI parsing', () => {
       { command: 'check', state: '.codex-flow/STATE.md', tasks: null }],
     ['check options', ['check', '--state', 's', '--tasks', 't'],
       { command: 'check', state: 's', tasks: 't' }],
+    ['archive paths', ['archive-paths', '--state', 's'],
+      { command: 'archive-paths', state: 's' }],
     ['task defaults', ['task', 'T1', 'done'],
       { command: 'task', id: 'T1', status: 'done', tasks: '.codex-flow/TASKS.md', at: undefined }],
     ['task options', ['task', 'T1', 'done', '--tasks', 't', '--at', 'now'],
@@ -102,6 +104,11 @@ describe('flow-state CLI parsing', () => {
     // Assert
     expect(() => parseCliArgs(argv)).toThrow(message)
     expect(() => parseOptions(['--state'], 0, new Set(['--state']))).toThrow('--state requires a value')
+  })
+
+  test('archive paths rejects options and positionals it does not own', () => {
+    expect(() => parseCliArgs(['archive-paths', '--wat'])).toThrow('unknown option --wat')
+    expect(() => parseCliArgs(['archive-paths', 'extra'])).toThrow('invalid arguments')
   })
 
   test('exports frozen name lists shared with the state kernel', async () => {

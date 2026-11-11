@@ -143,7 +143,7 @@ const PHASE_SKILL_MAP: ReadonlyArray<{ phase: string, skills: readonly string[] 
 ]
 const FLOW_STATE_SUBCOMMANDS = [
   'init', 'approve', 'advance', 'requirement-delta', 'plan-drift', 'improvement-gate',
-  'resume', 'set', 'check', 'task',
+  'resume', 'set', 'check', 'archive-paths', 'task',
 ] as const
 function flowStateCliSubcommands(): string[] {
   try {
@@ -680,6 +680,13 @@ describe('T7 helper call-site inventory', () => {
     expect(skill).toContain('derive the\n  facet terms yourself (Step 2)')
   })
 
+  test('skill-selection documents generic-only pruning and shortlist warning recovery', () => {
+    const skill = readText(SKILL_SELECTION_PATH)
+    expect(skill).toMatch(/`generic-only` tag means remove the candidate as wrong-domain unless its stated purpose matches/)
+    expect(skill).toMatch(/only weak matches.*does not look like English.*derive English terms/s)
+    expect(skill).toContain('--facet name=term,term')
+  })
+
   test('skill-selection Step 1 checks index staleness with the plugin-root helper', () => {
     const skill = readText(SKILL_SELECTION_PATH)
     expect(skill).toContain('node "${CLAUDE_PLUGIN_ROOT}/scripts/build-skills-index.mjs" --check')
@@ -922,6 +929,14 @@ describe('plan-architecture Decision log schema', () => {
 
     expect(taskFields).toEqual(expectedFields)
     expect(eventFields).toEqual(expectedFields)
+  })
+
+  test('documents which fields a non-task event block must carry', () => {
+    const skill = readText(PLAN_ARCHITECTURE_PATH)
+    const normalized = skill.replace(/\s+/g, ' ')
+    expect(normalized).toContain(
+      'A non-task event block must carry the first four fields; `Anchor` and `Applies to` are required only in task blocks.',
+    )
   })
 
   test('tells writers to scope decisions and marks run-wide constraints as all', () => {
@@ -3233,6 +3248,6 @@ describe('orphaned event journal recovery', () => {
     const sentence = text.match(/If STATE\.md does not exist[^]*?orphaned control files/)?.[0] ?? ''
 
     // Assert
-    expect(sentence).toContain('EVENTS.jsonl')
+    expect(sentence).toContain('archive-paths')
   })
 })

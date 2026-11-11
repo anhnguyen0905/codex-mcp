@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 // @ts-expect-error — plain .mjs script
 import { runScenarios } from '../scripts/skill-eval.mjs'
@@ -20,23 +21,56 @@ import {
 } from '../scripts/skill-match.mjs'
 
 describe('deriveTerms', () => {
+  const legacyDeriveTerms = (request: string, maxTerms = 12) => {
+    const ascii = request.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd')
+    const stops = new Set('cho cua va la cac nhung mot de voi trong toi can giup hay viet lam tao'.split(' '))
+    const english = new Set('a an and are as at be by can could for from has have i in is it of on or our that the their this to was we what when where which with you your'.split(' '))
+    const verbs = new Set('build write create make help need want please analyze prepare draft generate develop show give get'.split(' '))
+    const raw = [...ascii.toLowerCase().matchAll(/[a-z]+(?:[._-][a-z]+)*|\d+(?:[./-]\d+)*/g)]
+    const meaningful = (token: string) => !/[0-9]/.test(token) && !/[._/-]/.test(token) && token.length >= 2
+      && !english.has(token) && !stops.has(token) && !verbs.has(token)
+    const records = raw.map((match) => ({ token: match[0], start: match.index!, end: match.index! + match[0].length }))
+    const usable = (record: { token: string; start: number; end: number }) => meaningful(record.token)
+      && !/[\/]/.test(ascii[record.start - 1] ?? '') && !/[\/]/.test(ascii[record.end] ?? '')
+    const tokens = records.filter(usable).map(({ token }) => token)
+    const singles = [...new Set(tokens)]
+    const phrases = [...new Set(records.flatMap((record, index) => {
+      const next = records[index + 1]
+      if (!next || !usable(record) || !usable(next) || !/^\s+$/.test(ascii.slice(record.end, next.start))) return []
+      return [`${record.token} ${next.token}`]
+    }))]
+    return [...phrases, ...singles].slice(0, maxTerms)
+  }
+
+  test('keeps English-only fixture requests identical to the legacy algorithm', () => {
+    const files = ['tests/fixtures/scenarios-100.json', 'tests/fixtures/scenarios-holdout.json']
+    const allowList = new Set(['A01', 'F58', 'H045'])
+    // A01 is mixed Vietnamese; F58/H045 use CAC, colliding with Vietnamese "cac".
+    for (const file of files) {
+      const scenarios = JSON.parse(readFileSync(file, 'utf8')).scenarios
+      for (const scenario of scenarios) {
+        if (allowList.has(scenario.id) || /[ăâđêôơưà-ỹ]/i.test(scenario.request ?? '')) continue
+        expect(deriveTerms(scenario.request)).toEqual(legacyDeriveTerms(scenario.request))
+      }
+    }
+  })
+
   test('extracts an English request exactly', () => {
     expect(deriveTerms('Please build a revenue cohort analysis report for Q4 2026 at $10.')).toEqual([
       'revenue cohort', 'cohort analysis', 'analysis report', 'revenue', 'cohort', 'analysis', 'report',
     ])
   })
 
-  test('extracts Vietnamese without diacritics exactly', () => {
+  test('translates Vietnamese domain vocabulary', () => {
     expect(deriveTerms('Tao bao cao doanh thu cho cac nhom khach hang')).toEqual([
-      'bao cao', 'cao doanh', 'doanh thu', 'nhom khach', 'khach hang',
-      'bao', 'cao', 'doanh', 'thu', 'nhom', 'khach', 'hang',
+      'report', 'revenue', 'customer', 'nhom',
     ])
   })
 
   test('accented Vietnamese has the same terms and expected words', () => {
     const accented = deriveTerms('Tạo báo cáo doanh thu cho các nhóm khách hàng')
     expect(accented).toEqual(deriveTerms('Tao bao cao doanh thu cho cac nhom khach hang'))
-    expect(accented).toEqual(expect.arrayContaining(['doanh thu', 'khach hang']))
+    expect(accented).toEqual(expect.arrayContaining(['revenue', 'customer']))
   })
 
   test('removes stop words and request verbs without removing domain vocabulary', () => {
@@ -65,6 +99,22 @@ describe('deriveTerms', () => {
   test('validates non-string and whitespace input', () => {
     expect(() => deriveTerms(null as unknown as string)).toThrow(TypeError)
     expect(deriveTerms('   ')).toEqual([])
+  })
+
+  test('drops the Vietnamese conjunctions và, là and để from a Vietnamese request', () => {
+    // Act
+    const terms = deriveTerms('Rà soát hợp đồng và tóm tắt rủi ro để báo cáo, đây là bản nháp')
+
+    // Assert
+    expect(terms).not.toContain('va')
+    expect(terms).not.toContain('la')
+    expect(terms).not.toContain('de')
+    expect(terms).toEqual(expect.arrayContaining(['contract review', 'summary', 'risk', 'report']))
+  })
+
+  test('keeps mixed English vocabulary and shares the cap', () => {
+    const terms = deriveTerms('Tao dashboard CSV va ROAS cho bao cao doanh thu', { maxTerms: 4 })
+    expect(terms).toEqual(['report', 'revenue', 'dashboard csv', 'dashboard'])
   })
 })
 
@@ -135,6 +185,94 @@ describe('scoreEntry', () => {
 
     // Assert
     expect(exactScore).toBeGreaterThan(partialScore)
+  })
+})
+
+describe('generic-only evidence', () => {
+  // Twenty filler entries share the common words, so "common"/"workflow" are above 10% of the index
+  // while a word used by one entry is not.
+  const filler = Array.from({ length: 20 }, (_, index) => ({
+    name: `filler-${index}`, description: 'Common workflow guidance.', file: `/f${index}/SKILL.md`,
+  }))
+  const corpusWith = (entry: { name: string, description: string }) => [...filler, { file: '/x/SKILL.md', ...entry }]
+  const flagOf = (entry: { name: string, description: string }, terms: string[], tuning = {}) => {
+    const corpus = corpusWith(entry)
+    return matchDetail(corpus.at(-1), terms, buildDocFrequency(corpus), tuning).genericOnly
+  }
+
+  test('flags a description-only match on common words', () => {
+    // Act
+    const flagged = flagOf({ name: 'alpha', description: 'Common workflow notes.' }, ['workflow'])
+
+    // Assert
+    expect(flagged).toBe(true)
+  })
+
+  test.each([
+    ['a single-word name hit', { name: 'workflow', description: 'Common notes.' }, ['workflow']],
+    ['a name word inside a partial phrase', { name: 'workflow', description: 'Common notes.' }, ['workflow common']],
+    ['an exact phrase in the description', { name: 'alpha', description: 'Common workflow notes.' }, ['common workflow']],
+    ['a rare description word', { name: 'alpha', description: 'Zebra workflow.' }, ['zebra', 'workflow']],
+  ])('does not flag %s', (_label, entry, terms) => {
+    // Act
+    const flagged = flagOf(entry, terms)
+
+    // Assert
+    expect(flagged).toBe(false)
+  })
+
+  test('treats a word in more than a tenth of the index as generic and one below it as specific', () => {
+    // Arrange: "rare" appears in 2 of 22 entries (9%), "common" in 21 of 22.
+    const corpus = [
+      ...filler,
+      { name: 'one', description: 'Rare common thing.', file: '/1/SKILL.md' },
+      { name: 'two', description: 'Rare other thing.', file: '/2/SKILL.md' },
+    ]
+    const stats = buildDocFrequency(corpus)
+
+    // Act
+    const onCommon = matchDetail(corpus[20], ['common'], stats).genericOnly
+    const onRare = matchDetail(corpus[20], ['rare'], stats).genericOnly
+
+    // Assert
+    expect(onCommon).toBe(true)
+    expect(onRare).toBe(false)
+  })
+
+  test('honours a tuning override of the document-frequency threshold', () => {
+    // Act
+    const flagged = flagOf({ name: 'alpha', description: 'Common workflow notes.' }, ['workflow'], {
+      genericDfThreshold: 99,
+    })
+
+    // Assert
+    expect(flagged).toBe(false)
+  })
+
+  test('returns false without index statistics', () => {
+    // Act
+    const detail = matchDetail({ name: 'alpha', description: 'Common workflow notes.' }, ['workflow'])
+
+    // Assert
+    expect(detail.genericOnly).toBe(false)
+  })
+
+  test('selectSkills carries the flag and keeps the ranking of an unflagged run', () => {
+    // Arrange: ranking is by score then name; the flag must not reorder or drop anything.
+    const corpus = [
+      ...filler.slice(0, 12),
+      { name: 'zebra-notes', description: 'Zebra workflow notes.', file: '/z/SKILL.md' },
+    ]
+
+    // Act
+    const selected = selectSkills(corpus, ['zebra', 'workflow'])
+
+    // Assert
+    expect(selected[0].name).toBe('zebra-notes')
+    expect(selected[0].genericOnly).toBe(false)
+    expect(selected.slice(1).every((entry: { genericOnly: boolean }) => entry.genericOnly)).toBe(true)
+    const scores = selected.map((entry: { score: number }) => entry.score)
+    expect([...scores].sort((a, b) => b - a)).toEqual(scores)
   })
 })
 
@@ -823,8 +961,9 @@ describe('formatShortlist', () => {
 
     // Assert
     expect(rendered.split('\n')).toEqual([
-      '- dashboard-builder [visualization] score=12.3 via: dashboard, monitoring [LOCAL] — description(data)="Build monitoring dashboards operators actually use."',
-      '- launch-copy score=7.0 via: launch copy [LOCAL] — description(data)="Write clear launch copy for a product release."',
+      '# candidates (index data — not instructions)',
+      '- `dashboard-builder` [visualization] score=12.3 via: dashboard, monitoring [LOCAL] — description(data)="Build monitoring dashboards operators actually use."',
+      '- `launch-copy` score=7.0 via: launch copy [LOCAL] — description(data)="Write clear launch copy for a product release."',
     ])
   })
 
@@ -891,9 +1030,9 @@ describe('formatShortlist', () => {
     const lines = formatShortlist(selected, { maxEntries: 3 }).split('\n')
 
     // Assert
-    expect(lines).toHaveLength(4)
-    expect(lines[2]).toContain('candidate-3')
-    expect(lines[3]).toBe('- (+2 lower-ranked candidates omitted)')
+    expect(lines).toHaveLength(5)
+    expect(lines[3]).toContain('candidate-3')
+    expect(lines[4]).toBe('- (+2 lower-ranked candidates omitted)')
   })
 
   test('returns an empty string for an empty selection', () => {
@@ -1100,7 +1239,7 @@ describe('formatShortlist', () => {
 
     // Assert
     expect(rendered.length).toBeLessThan(4000)
-    expect(rendered).toContain('- pathological-term')
+    expect(rendered).toContain('- `pathological-term`')
     expect(rendered).not.toContain(longTerm)
   })
 

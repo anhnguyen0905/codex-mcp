@@ -93,7 +93,7 @@ snippets into a Decision-log block.
 Writers SHOULD fill `Applies to`; run-wide constraints use `all`.
 
 For wave integrations, the final review, and declined improvements, append one non-task event block
-using the same six fields with `T<n>` replaced by the event name:
+using the same schema with `T<n>` replaced by the event name:
 
 ```markdown
 ### <event> — <label>
@@ -104,6 +104,9 @@ using the same six fields with `T<n>` replaced by the event name:
 - Anchor: <git HEAD sha at append time>
 - Applies to: <task IDs, files, or contract labels — 'all' for run-wide constraints>
 ```
+
+A non-task event block must carry the first four fields; `Anchor` and `Applies to` are required
+only in task blocks.
 
 ## Design principles
 

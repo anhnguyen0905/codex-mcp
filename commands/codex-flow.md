@@ -35,12 +35,13 @@ Outside `execution`, `resume` resets `currentTask`, `taskStage`, and `wave`; apa
 the legacy-key backfill, it changes no other state field. On restart,
 archive the old control files that exist, including `EVENTS.jsonl`, to
 `.codex-flow/archive/<timestamp>/` and begin fresh; fresh initialization refuses while that journal remains.
+Archive the journal files printed by `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" archive-paths`.
 
 `phase: complete` is terminal: the previous run is finished, so do NOT offer resume for it. Archive
 the run's control files to `.codex-flow/archive/<timestamp>/` and begin fresh, exactly as a restart
 would. Resume is offered only for a non-complete `phase`. If STATE.md does not exist, do not offer
-resume: treat any PLAN.md, TASKS.md or EVENTS.jsonl as orphaned control files and offer to archive them before
-beginning a fresh run.
+resume: treat any PLAN.md, TASKS.md or journal files named by the archive-paths helper as orphaned
+control files and offer to archive them before beginning a fresh run.
 
 Before any `codex_health` call and before baselining, evaluate the **Fast-path gate** (section
 below). When the task qualifies and the user confirms the fast path, run only baseline step 1 below
@@ -398,7 +399,9 @@ in step 8, after the last task.
    `codex-flow:context-discipline` sequential-task compaction point, then move to the next task.
    **Parallel mode**: follow `codex-flow:parallel-execution`'s wave workflow — always commit each
    passed worktree task, and after the wave merge and passing integration review the coordinator
-   appends the schema blocks and takes the wave compaction point.
+   appends the schema blocks, then runs
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --check-plan` and fixes blocks before the
+   next wave, and takes the wave compaction point.
 8. **After the last task**: `flow-state advance` moves `execution → review`; repeat after improvement tasks (only place `phase: review` is written)
    and set `wave -`, then do a dual review — Claude's pass PLUS required
    `mcp__codex__codex_review`. Review the baseline-to-working-tree diff with

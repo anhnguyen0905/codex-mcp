@@ -54,6 +54,72 @@ afterEach(() => {
 })
 
 describe('flow-state journal integration', () => {
+  test('archive-paths prints the pointer and custom target without writing', async () => {
+    const project = makeProject()
+    const custom = join(project.control, 'custom.jsonl')
+    await main([...INIT, '--events', custom], { cwd: project.cwd })
+    const before = readdirSync(project.control).sort()
+    const output = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+
+    const code = await main(['archive-paths'], { cwd: project.cwd })
+
+    expect(code).toBe(0)
+    expect(output).toHaveBeenCalledWith(project.eventsPath)
+    expect(output).toHaveBeenCalledWith(custom)
+    expect(readdirSync(project.control).sort()).toEqual(before)
+  })
+
+  test('archive-paths refuses a redirect target outside the project', async () => {
+    // Arrange
+    const project = makeProject()
+    await main(INIT, { cwd: project.cwd })
+    const outside = join(mkdtempSync(join(tmpdir(), 'flow-state-outside-')), 'elsewhere.jsonl')
+    writeFileSync(outside, '')
+    writeFileSync(project.eventsPath, `${JSON.stringify({ redirect: outside })}\n`)
+    const errors = silenceErrors()
+    const output = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+
+    // Act
+    const code = await main(['archive-paths'], { cwd: project.cwd })
+
+    // Assert
+    expect(code).toBe(1)
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining('archive it by hand'))
+    expect(output).not.toHaveBeenCalled()
+  })
+
+  test('check rejects a redirect to a directory', async () => {
+    const project = makeProject()
+    await main(INIT, { cwd: project.cwd })
+    const directory = join(project.control, 'journal-dir')
+    mkdirSync(directory)
+    writeFileSync(project.eventsPath, `${JSON.stringify({ redirect: directory })}\n`)
+    const errors = silenceErrors()
+
+    const code = await main(['check'], { cwd: project.cwd })
+
+    expect(code).toBe(1)
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining('flow-state: violation: journal:'))
+  })
+
+  test('archive-paths rejects a corrupt redirect without stdout or writes', async () => {
+    const project = makeProject()
+    await main(INIT, { cwd: project.cwd })
+    const directory = join(project.control, 'journal-dir')
+    mkdirSync(directory)
+    writeFileSync(project.eventsPath, `${JSON.stringify({ redirect: directory })}\n`)
+    const errors = silenceErrors()
+    const output = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const before = readdirSync(project.control).sort()
+
+    const code = await main(['archive-paths'], { cwd: project.cwd })
+
+    expect(code).toBe(1)
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining('flow-state: rejected:'))
+    expect(output).not.toHaveBeenCalled()
+    expect(readdirSync(project.control).sort()).toEqual(before)
+  })
+
   test('init writes a begin and a commit and the state checks clean', async () => {
     // Arrange
     const project = makeProject()

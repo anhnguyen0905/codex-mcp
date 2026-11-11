@@ -165,6 +165,87 @@ terms: request = revenue cohorts, executive report, revenue, cohorts, executive,
 - cohort-retention-analysis score=9.3 via: cohorts
 ```
 
+## Vietnamese raw requests (2026-11-11)
+
+Measured against the live 717-entry index with `tests/fixtures/scenarios-vi.json` (157 Vietnamese
+requests: 98 that were already Vietnamese in the 500-suite plus 59 translated by the maintainer;
+labels are inherited from the source scenarios). `deriveTerms` now translates Vietnamese domain
+vocabulary through the glossary in `scripts/skill-terms.mjs` (322 entries, keys diacritic-folded):
+glossary terms come first, then phrases and singles from the text the glossary did not consume, all
+sharing the unchanged 12-term cap. The Vietnamese stop list applies only when the request is detected
+as Vietnamese (a Vietnamese-specific letter or a glossary phrase).
+
+| Suite | Before | After | Hit@1 after | Top-3 after | Average selection after |
+|---|---:|---:|---:|---:|---:|
+| Vietnamese full (157) | 28/157 (17.8%) | 109/157 (69.4%) | 88/157 (56.1%) | 103/157 (65.6%) | 5.04 |
+| Vietnamese dev (105) | 20/105 (19.0%) | 70/105 (66.7%) | — | — | — |
+| Vietnamese holdout (52) | 8/52 (15.4%) | 39/52 (75.0%) | — | — | — |
+| Raw 500-suite (includes 98 Vietnamese) | 348/500 | 400/500 | — | — | 6.55 |
+| Raw 100-suite | 77/100 | 77/100 | — | — | 6.32 |
+| Raw holdout (includes 30 Vietnamese) | 83/100 | 92/100 | — | — | 5.23 |
+| Oracle 500 / 100 / holdout | 500/500 / 100/100 / 100/100 | unchanged | — | — | — |
+
+English-only subsets (requests without Vietnamese-specific letters) are unchanged: 324/394,
+77/100 and 69/70. A test compares `deriveTerms` with the previous algorithm for every English
+request of the 100-suite and the holdout; the three allow-listed ids are one mixed-language request
+and two requests using the acronym CAC, which the old Vietnamese stop word `cac` used to delete.
+
+How the glossary was built: the executor wrote it from the facet vocabulary and general business
+vocabulary while reading dev failures only; the holdout split was evaluated as an aggregate count.
+A Vietnamese-speaking reviewer then removed wrong or unnatural entries and corrected a few to the
+standard term (18 edits) and restored three Vietnamese stop words (`va`, `la`, `de`) that a
+reformatting step had dropped. Together these moved the result from 106/157 (dev 67, holdout 39) to
+109/157 (dev 70, holdout 39); because the reviewer also wrote the translated requests, those extra
+passes are reported separately rather than as clean holdout evidence. The holdout rate is above the
+dev rate, so there is no sign of fitting to the dev split.
+
+Remaining gaps: about a third of Vietnamese requests still fail, mostly because the expected skill
+is outranked after translation (the same class C as raw English) or the request uses vocabulary the
+glossary lacks. Passing explicit English terms with `--facet` remains the reliable path for those.
+
+## Raw English alias expansion (2026-11-11)
+
+No safe improvement shipped. Baseline English-only results were 324/394 (average selection 7.03),
+77/100 (6.32), and 69/70 (5.41) for the 500-suite, 100-suite, and holdout. A trial table of 32
+aliases reached 330/394 (7.10), 83/100 (6.59), and 69/70 (5.23); the 100-suite ceiling was 6.62,
+but the required 500-suite gain was only +6 rather than +15. The acceptance line therefore failed.
+Vietnamese was 109/157 (dev 68/105, holdout 40/52; baseline at that point 108/157) in the trial, and oracle suites were
+unchanged.
+
+The trial moved some class A vocabulary gaps and class C outranking failures, especially around
+CSV/data wrangling, ETL/data pipelines, reconciliation, segmentation, and experiment vocabulary.
+Generic class C failures remained, and broader aliases increased check-set selection size. Since no
+table met every gate, the alias implementation was reverted; no aliases shipped and T1 behavior is
+unchanged.
+
+## Generic-only evidence (2026-11-11)
+
+The matcher exposes `genericOnly` without changing score, rank, relevance floor, budget, or selection
+order. A selected candidate is generic-only when it matched through its description alone, no
+matched term touches a word of its name, no multi-word term occurs as an exact phrase, and every
+matched description word occurs in more than 10% of the index (`GENERIC_DF_RATIO = 0.1`;
+`tuning.genericDfThreshold` overrides the absolute threshold). `skill-shortlist` prints the tag and
+`skill-eval` reports the share; the flag is evidence for the Step 5 wrong-domain prune, not a
+ranking signal.
+
+| Suite | Pass | Average selection | Flagged selected skills | Flagged expected skills | Flagged rejectAny skills |
+|---|---:|---:|---:|---:|---:|
+| oracle 500 | 500/500 | 4.75 | 53/2376 (2.2%) | 0/561 (0.0%) | 2 |
+| oracle 100 | 100/100 | 6.31 | 9/631 (1.4%) | 0/145 (0.0%) | 0 |
+| oracle holdout | 100/100 | 3.38 | 0/338 (0.0%) | 0/114 (0.0%) | 0 |
+| raw 500 (all requests, before the stop-word restoration) | 399/500 | 6.54 | 26/3272 (0.8%) | 0/453 (0.0%) | 0 |
+| Vietnamese raw | 109/157 | 5.04 | 4/789 (0.5%) | 0/119 (0.0%) | 0 |
+
+What this does and does not achieve. The flag is safe — it never marks an expected skill in these
+suites — but it is narrow: it marks 0–2% of selections, and **none of the four recorded wrong-domain
+examples is flagged**. `cohort analysis` → `clinical-decision-support` matches an exact phrase in
+the description; `executive report` → `clinical-reports` hits the name; `planetary mineralogy` →
+`geomaster` matches a rare token; `mycology classification` → `loki-mode` is not selected by these
+terms at all. Those candidates are textually well matched and wrong only in meaning, which term
+evidence cannot see. The requirement that the four examples be flagged (R3.2) is therefore not met;
+the wrong-domain problem remains a judgment made in the Step 5 prune by reading the candidate's
+stated purpose.
+
 ## Domain-mismatch signal (2026-11-11)
 
 The live index was present (720 entries). A generic-head name-qualifier demotion improved some

@@ -99,26 +99,30 @@
     {
       "id": "decision-log-check",
       "obligation": "The single Decision-log writer runs context-slice.mjs --check-plan after appending.",
-      "clauses": ["post-append plan check"],
+      "clauses": ["post-append plan check", "parallel coordinator check"],
       "documents": [
         { "path": "skills/plan-architecture/SKILL.md", "patterns": [
-          { "clause": "post-append plan check", "pattern": "After appending, run[^.]{0,80}context-slice\\.mjs\" --check-plan", "flags": "i" }
+          { "clause": "post-append plan check", "pattern": "After appending, run[^.]{0,80}context-slice\\.mjs\" --check-plan", "flags": "i" },
+          { "clause": "parallel coordinator check", "pattern": "coordinator after the wave merge[\\s\\S]{0,500}After appending, run[^.]{0,80}context-slice\\.mjs\" --check-plan", "flags": "i" }
         ] },
         { "path": "commands/codex-flow.md", "patterns": [
-          { "clause": "post-append plan check", "pattern": "then run `node \"\\$\\{CLAUDE_PLUGIN_ROOT\\}/scripts/context-slice\\.mjs\" --check-plan` and fix the block before the next task if it exits non-zero", "flags": "i" }
+          { "clause": "post-append plan check", "pattern": "then run `node \"\\$\\{CLAUDE_PLUGIN_ROOT\\}/scripts/context-slice\\.mjs\" --check-plan` and fix the block before the next task if it exits non-zero", "flags": "i" },
+          { "clause": "parallel coordinator check", "pattern": "coordinator[\\s\\S]{0,180}context-slice\\.mjs\" --check-plan[\\s\\S]{0,100}next wave", "flags": "i" }
         ] }
       ]
     },
     {
       "id": "event-journal-archive",
       "obligation": "Restart and completed-run archives move EVENTS.jsonl with the other control files.",
-      "clauses": ["journal archived with controls"],
+      "clauses": ["journal archived with controls", "archive paths from the helper"],
       "documents": [
         { "path": "commands/codex-flow.md", "patterns": [
-          { "clause": "journal archived with controls", "pattern": "archive the old control files that exist, including `EVENTS\\.jsonl`", "flags": "i" }
+          { "clause": "journal archived with controls", "pattern": "archive the old control files that exist, including `EVENTS\\.jsonl`", "flags": "i" },
+          { "clause": "archive paths from the helper", "pattern": "Archive the journal files printed by `node \"\\$\\{CLAUDE_PLUGIN_ROOT\\}/scripts/flow-state\\.mjs\" archive-paths`", "flags": "i" }
         ] },
         { "path": "skills/preflight/SKILL.md", "patterns": [
-          { "clause": "journal archived with controls", "pattern": "Archive `EVENTS\\.jsonl` with them", "flags": "i" }
+          { "clause": "journal archived with controls", "pattern": "Archive `EVENTS\\.jsonl` with them", "flags": "i" },
+          { "clause": "archive paths from the helper", "pattern": "Archive the journal files printed by `node \"\\$\\{CLAUDE_PLUGIN_ROOT\\}/scripts/flow-state\\.mjs\" archive-paths`", "flags": "i" }
         ] }
       ]
     }
