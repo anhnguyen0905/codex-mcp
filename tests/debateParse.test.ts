@@ -14,364 +14,559 @@ import {
   parseDebateOutput,
 } from '../scripts/debate-parse.mjs'
 
-const ROUND_BLOCK = `## Challenges
-C1 ... prose ...
-
-\`\`\`json
-{"round":2,"challenges":[
-  {"id":"C1","severity":"BLOCKER","status":"HOLD","claim":"Parsing is not fail-closed."},
-  {"id":"C13","severity":"MAJOR","status":"NEW","claim":"No-code integrity is not enforced."}
-],"alternative":null,"dissent":"still unconvinced"}
-\`\`\`
-`
+const block = (value: unknown) => `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``
+const mapValue = () => ({
+  kind: 'map', stocks: [{ id: 'S1', name: 'users' }],
+  loops: [{ id: 'L1', type: 'R', chain: 'growth' }],
+  delays: [{ id: 'D1', where: 'feedback' }], archetype: null,
+  leverage: [{ id: 'P1', level: 12, point: 'rules' }],
+})
+const roundValue = () => ({
+  round: 2,
+  steelman: 'strongest version', counterThesis: null,
+  challenges: [{ id: 'C1', type: 'LOGIC', severity: 'MAJOR', status: 'NEW',
+    target: 'claim', scheme: 'cause-effect', cq: 'CQ1', claim: 'claim', evidence: 'REASON.md:2' }],
+  contributions: [{ id: 'N1', claim: 'contribution' }],
+  violations: [{ id: 'V1', rule: 'PD1', claim: 'claim' }], dissent: null,
+})
+const feasibilityValue = () => ({
+  kind: 'feasibility', verdict: 'FEASIBLE', effort: 'M', reversible: 'yes',
+  dependencies: ['owner'], risks: [{ id: 'K1', risk: 'risk' }],
+  conditions: ['test'], firstStep: 'prototype',
+})
+const parse = (kind: string, value: unknown, round?: number) => parseDebateOutput(
+  block(value), { kind, ...(round === undefined ? {} : { round }) },
+)
 
 describe('extractLastJsonBlock', () => {
-  test('returns the last fenced json block and the block count', () => {
+  test('returns the last block and count', () => {
     // Arrange
-    const text = '```json\n{"a":1}\n```\nprose\n```json\n{"b":2}\n```\n'
+    const input = `${block({ a: 1 })}\n${block({ b: 2 })}\n`
 
     // Act
-    const result = extractLastJsonBlock(text)
+    const result = extractLastJsonBlock(input)
 
     // Assert
     expect(result).toEqual({ raw: '{"b":2}', blockCount: 2, trailingText: false })
   })
-
-  test('flags non-whitespace text after the closing fence', () => {
-    const result = extractLastJsonBlock('```json\n{"a":1}\n```\nafterthought')
-
-    expect(result.trailingText).toBe(true)
-  })
-
-  test('returns null raw and zero count when no fenced json block exists', () => {
+  test('flags trailing text', () => {
     // Arrange
-    const text = 'no block here\n```\nnot json fence\n```'
+    const input = `${block({ a: 1 })}after`
 
     // Act
-    const result = extractLastJsonBlock(text)
+    const result = extractLastJsonBlock(input)
+
+    // Assert
+    expect(result.trailingText).toBe(true)
+  })
+  test('flags missing blocks', () => {
+    // Arrange
+    const input = 'plain'
+
+    // Act
+    const result = extractLastJsonBlock(input)
 
     // Assert
     expect(result).toEqual({ raw: null, blockCount: 0, trailingText: false })
   })
 })
 
-describe('parseDebateOutput — round kind', () => {
-  test('parses a valid round block with zero dropped entries', () => {
-    // Arrange + Act
-    const result = parseDebateOutput(ROUND_BLOCK, { kind: 'round', round: 2 })
-
-    // Assert
-    expect(result.parsed).toBe(true)
-    expect(result.dropped).toBe(0)
-    expect(result.droppedReasons).toEqual([])
-    expect(result.challenges.map((c: { id: string }) => c.id)).toEqual(['C1', 'C13'])
-    expect(result.alternative).toBeNull()
-    expect(result.dissent).toBe('still unconvinced')
-    expect(result.blockCount).toBe(1)
-  })
-
-  test('fails closed when the block is missing', () => {
-    // Act
-    const result = parseDebateOutput('prose only', { kind: 'round', round: 1 })
-
-    // Assert
-    expect(result.parsed).toBe(false)
-    expect(result.parseError).toMatch(/no fenced json block/i)
-    expect(result.challenges).toEqual([])
-  })
-
-  test('fails closed when the json is syntactically invalid', () => {
-    // Act
-    const result = parseDebateOutput('```json\n{"round":1,\n```', { kind: 'round', round: 1 })
-
-    // Assert
-    expect(result.parsed).toBe(false)
-    expect(result.parseError).toMatch(/invalid json/i)
-  })
-
-  test('fails closed when round does not match the round being run', () => {
-    // Act
-    const result = parseDebateOutput(ROUND_BLOCK, { kind: 'round', round: 3 })
-
-    // Assert
-    expect(result.parsed).toBe(false)
-    expect(result.parseError).toMatch(/round/)
-  })
-
-  test('drops malformed entries with one ordered reason each and keeps valid ones', () => {
+describe.each([
+  ['map', mapValue, {}], ['round', roundValue, { round: 2 }],
+  ['feasibility', feasibilityValue, {}],
+])('%s kind', (kind, makeValue, options) => {
+  test('parses valid input', () => {
     // Arrange
-    const text = '```json\n' + JSON.stringify({
-      round: 1,
-      challenges: [
-        { id: 'C1', severity: 'BLOCKER', status: 'NEW', claim: 'ok' },
-        { id: 'X2', severity: 'BLOCKER', status: 'NEW', claim: 'bad id' },
-        { id: 'C3', severity: 'HUGE', status: 'NEW', claim: 'bad severity' },
-        { id: 'C4', severity: 'MINOR', status: 'MAYBE', claim: 'bad status' },
-        { id: 'C5', severity: 'MINOR', status: 'NEW', claim: '' },
-        { id: 'C1', severity: 'MINOR', status: 'NEW', claim: 'duplicate id' },
-        'not an object',
-      ],
-      alternative: null,
-      dissent: null,
-    }) + '\n```'
+    const input = block(makeValue())
 
     // Act
-    const result = parseDebateOutput(text, { kind: 'round', round: 1 })
+    const result = parseDebateOutput(input, { kind, ...options })
 
     // Assert
-    expect(result.parsed).toBe(true)
-    expect(result.challenges.map((c: { id: string }) => c.id)).toEqual(['C1'])
-    expect(result.dropped).toBe(6)
-    expect(result.droppedReasons).toEqual([
-      'challenges[1].id',
-      'challenges[2].severity',
-      'challenges[3].status',
-      'challenges[4].claim',
-      'challenges[5].id (duplicate)',
-      'challenges[6] (not an object)',
-    ])
-    expect(result.dropped).toBe(result.droppedReasons.length)
+    expect(result).toMatchObject({ kind, parsed: true, dropped: 0 })
   })
-
-  test('fails closed on more than one fenced block or trailing text', () => {
+  test('fails malformed blocks', () => {
     // Arrange
-    const twoBlocks = ROUND_BLOCK + '\n' + ROUND_BLOCK
-    const trailing = ROUND_BLOCK + 'one more sentence'
-
-    // Act + Assert
-    expect(parseDebateOutput(twoBlocks, { kind: 'round', round: 2 })).toMatchObject({
-      parsed: false,
-      parseError: expect.stringMatching(/exactly one fenced json block, found 2/),
-    })
-    expect(parseDebateOutput(trailing, { kind: 'round', round: 2 })).toMatchObject({
-      parsed: false,
-      parseError: expect.stringMatching(/text follows/),
-    })
-  })
-
-  test('fails closed when a required top-level field is absent instead of coercing it', () => {
-    // Arrange
-    const text = '```json\n{"round":1,"challenges":[]}\n```'
+    const input = 'prose only'
 
     // Act
-    const result = parseDebateOutput(text, { kind: 'round', round: 1 })
+    const result = parseDebateOutput(input, { kind, ...options })
 
     // Assert
-    expect(result.parsed).toBe(false)
-    expect(result.parseError).toBe('missing required field: alternative')
-  })
-
-  test('rejects a non-array challenges field and non-string alternative or dissent', () => {
-    // Arrange
-    const text = '```json\n{"round":1,"challenges":{},"alternative":5,"dissent":null}\n```'
-
-    // Act
-    const result = parseDebateOutput(text, { kind: 'round', round: 1 })
-
-    // Assert
-    expect(result.parsed).toBe(false)
-    expect(result.parseError).toMatch(/challenges/)
+    expect(result).toMatchObject({ parsed: false, parseError: expect.stringMatching(/no fenced/) })
   })
 })
 
-describe('parseDebateOutput — signoff kind', () => {
-  test('parses a valid signoff block', () => {
-    // Arrange
-    const text = '```json\n' + JSON.stringify({
-      round: 'signoff',
-      misattributions: [
-        { id: 'C3', expected: 'OPEN', observed: 'AGREED', evidence: 'DEBATE.md round 2' },
-      ],
-      dissent: null,
-    }) + '\n```'
+test('fails closed for invalid JSON', () => {
+  // Arrange
+  const input = '```json\n{"kind":\n```'
 
-    // Act
-    const result = parseDebateOutput(text, { kind: 'signoff' })
+  // Act
+  const result = parseDebateOutput(input, { kind: 'map' })
 
-    // Assert
-    expect(result.parsed).toBe(true)
-    expect(result.dropped).toBe(0)
-    expect(result.misattributions).toHaveLength(1)
-    expect(result.dissent).toBeNull()
-  })
+  // Assert
+  expect(result.parseError).toMatch(/invalid json/)
+})
+test('fails closed for a non-object top level', () => {
+  // Arrange
+  const input = block([])
 
-  test('parses optional pending verdicts and drops malformed ones with reasons', () => {
-    // Arrange
-    const text = '```json\n' + JSON.stringify({
-      round: 'signoff',
-      misattributions: [],
-      pending: [
-        { id: 'C2', verdict: 'CONFIRM', evidence: 'thesis v4 (g) names the CI rule' },
-        { id: 'C3', verdict: 'HOLD', evidence: 'no backtest yet' },
-        { id: 'C5', verdict: 'MAYBE', evidence: 'x' },
-        { id: 'nope', verdict: 'CONFIRM', evidence: 'x' },
-        { id: 'C7', verdict: 'CONFIRM' },
-      ],
-      dissent: null,
-    }) + '\n```'
+  // Act
+  const result = parseDebateOutput(input, { kind: 'map' })
 
-    // Act
-    const result = parseDebateOutput(text, { kind: 'signoff' })
+  // Assert
+  expect(result.parseError).toBe('top level must be an object')
+})
+test('fails closed for multiple blocks', () => {
+  // Arrange
+  const input = `${block(mapValue())}\n${block(mapValue())}`
 
-    // Assert
-    expect(result.parsed).toBe(true)
-    expect(result.pending).toEqual([
-      { id: 'C2', verdict: 'CONFIRM', evidence: 'thesis v4 (g) names the CI rule' },
-      { id: 'C3', verdict: 'HOLD', evidence: 'no backtest yet' },
-    ])
-    expect(result.droppedReasons).toEqual(['pending[2].verdict', 'pending[3].id', 'pending[4].evidence'])
-    expect(result.dropped).toBe(3)
-  })
+  // Act
+  const result = parseDebateOutput(input, { kind: 'map' })
 
-  test('treats a missing pending field as an empty list and rejects a non-array one', () => {
-    const base = { round: 'signoff', misattributions: [], dissent: null }
+  // Assert
+  expect(result.parseError).toMatch(/exactly one fenced json block/)
+})
+test('fails closed for trailing text', () => {
+  // Arrange
+  const input = `${block(mapValue())}\ntrailing`
 
-    expect(parseDebateOutput('```json\n' + JSON.stringify(base) + '\n```', { kind: 'signoff' }).pending).toEqual([])
-    expect(parseDebateOutput('```json\n' + JSON.stringify({ ...base, pending: {} }) + '\n```', { kind: 'signoff' })).toMatchObject({
-      parsed: false,
-      parseError: 'pending must be an array',
-    })
-  })
+  // Act
+  const result = parseDebateOutput(input, { kind: 'map' })
 
-  test('drops misattributions missing required string fields', () => {
-    // Arrange
-    const text = '```json\n' + JSON.stringify({
-      round: 'signoff',
-      misattributions: [{ id: 'C3', expected: 'OPEN' }],
-      dissent: 'x',
-    }) + '\n```'
-
-    // Act
-    const result = parseDebateOutput(text, { kind: 'signoff' })
-
-    // Assert
-    expect(result.parsed).toBe(true)
-    expect(result.misattributions).toEqual([])
-    expect(result.dropped).toBe(1)
-    expect(result.droppedReasons).toEqual(['misattributions[0].observed'])
-  })
-
-  test('drops a misattribution whose id is not a challenge id', () => {
-    // Arrange
-    const text = '```json\n' + JSON.stringify({
-      round: 'signoff',
-      misattributions: [{ id: 'not-C3', expected: 'a', observed: 'b', evidence: 'c' }],
-      dissent: null,
-    }) + '\n```'
-
-    // Act
-    const result = parseDebateOutput(text, { kind: 'signoff' })
-
-    // Assert
-    expect(result.parsed).toBe(true)
-    expect(result.droppedReasons).toEqual(['misattributions[0].id'])
-  })
-
-  test('fails closed when the signoff block omits dissent', () => {
-    const text = '```json\n{"round":"signoff","misattributions":[]}\n```'
-
-    expect(parseDebateOutput(text, { kind: 'signoff' })).toMatchObject({
-      parsed: false,
-      parseError: 'missing required field: dissent',
-    })
-  })
-
-  test('fails closed when a round block is passed as a signoff', () => {
-    // Act
-    const result = parseDebateOutput(ROUND_BLOCK, { kind: 'signoff' })
-
-    // Assert
-    expect(result.parsed).toBe(false)
-    expect(result.parseError).toBe('missing required field: misattributions')
-  })
+  // Assert
+  expect(result.parseError).toMatch(/text follows/)
 })
 
-describe('parseCliArgs and exit codes', () => {
-  test('parses kind, round and file flags', () => {
-    // Act
-    const args = parseCliArgs(['--kind', 'round', '--round', '2', '--file', 'out.md'])
+test.each([
+  ['map', { ...mapValue(), stocks: undefined }, undefined, 'missing required field: stocks'],
+  ['round', { ...roundValue(), contributions: undefined }, 2, 'missing required field: contributions'],
+  ['feasibility', { ...feasibilityValue(), risks: undefined }, undefined, 'missing required field: risks'],
+])('fails closed when %s omits a required field', (kind, value, round, expected) => {
+  // Arrange
+  const input = { ...value }
+  const missingKey = Object.keys(input).find((key) => input[key] === undefined)
+  delete input[missingKey]
 
-    // Assert
-    expect(args).toEqual({ kind: 'round', round: 2, file: 'out.md' })
-  })
+  // Act
+  const result = parse(kind, input, round)
 
-  test('rejects an unknown kind and a round kind without a round number', () => {
-    expect(() => parseCliArgs(['--kind', 'other'])).toThrow(/kind/)
-    expect(() => parseCliArgs(['--kind', 'round'])).toThrow(/round/)
-  })
-
-  test('rejects unknown flags, out-of-cap rounds, and a round on signoff', () => {
-    expect(() => parseCliArgs(['--kind', 'round', '--round', '1', '--wat', 'x'])).toThrow(/unknown flag --wat/)
-    expect(() => parseCliArgs(['--kind', 'round', '--round', '0'])).toThrow(/1-3/)
-    expect(() => parseCliArgs(['--kind', 'round', '--round', '4'])).toThrow(/1-3/)
-    expect(() => parseCliArgs(['--kind', 'signoff', '--round', '1'])).toThrow(/not accepted/)
-  })
-
-  test('exposes distinct exit codes for ok, malformed, and failure', () => {
-    expect(EXIT_OK).toBe(0)
-    expect(EXIT_MALFORMED).toBe(1)
-    expect(EXIT_FAILURE).toBe(2)
-  })
+  // Assert
+  expect(result).toMatchObject({ parsed: false, parseError: expected })
 })
 
-describe('main — CLI entry', () => {
+test('fails closed when the round does not match', () => {
+  // Arrange
+  const input = { ...roundValue(), round: 1 }
+
+  // Act
+  const result = parse('round', input, 2)
+
+  // Assert
+  expect(result.parseError).toMatch(/round mismatch/)
+})
+test.each(['steelman', 'counterThesis'])('fails round 1 when %s is empty', (field) => {
+  // Arrange
+  const input = { ...roundValue(), round: 1, counterThesis: 'counter', [field]: '' }
+
+  // Act
+  const result = parse('round', input, 1)
+
+  // Assert
+  expect(result.parsed).toBe(false)
+  expect(result.parseError).toBe(field === 'steelman'
+    ? 'steelman must be a non-empty string'
+    : 'counterThesis must be a non-empty string for round 1')
+})
+test('fails round parsing when steelman is missing', () => {
+  // Arrange
+  const input = { ...roundValue() }
+  delete input.steelman
+
+  // Act
+  const result = parse('round', input, 2)
+
+  // Assert
+  expect(result).toMatchObject({ parsed: false, parseError: 'missing required field: steelman' })
+})
+test('fails round parsing when violations are not an array', () => {
+  // Arrange
+  const input = { ...roundValue(), violations: {} }
+
+  // Act
+  const result = parse('round', input, 2)
+
+  // Assert
+  expect(result).toMatchObject({
+    parsed: false,
+    parseError: 'challenges, contributions and violations must be arrays',
+  })
+})
+test('accepts null counterThesis from round 2', () => {
+  // Arrange
+  const input = { ...roundValue(), counterThesis: null }
+
+  // Act
+  const result = parse('round', input, 2)
+
+  // Assert
+  expect(result.parsed).toBe(true)
+})
+test('rejects an empty counterThesis from round 2', () => {
+  // Arrange
+  const input = { ...roundValue(), counterThesis: '   ' }
+
+  // Act
+  const result = parse('round', input, 2)
+
+  // Assert
+  expect(result).toMatchObject({
+    parsed: false,
+    parseError: 'counterThesis must be null or a non-empty string for round 2 or later',
+  })
+})
+test('accepts a non-empty counterThesis from round 3', () => {
+  // Arrange
+  const input = { ...roundValue(), round: 3, counterThesis: 'revised counter-thesis' }
+
+  // Act
+  const result = parse('round', input, 3)
+
+  // Assert
+  expect(result).toMatchObject({ parsed: true, counterThesis: 'revised counter-thesis' })
+})
+test('accepts a valid round 1 counterThesis', () => {
+  // Arrange
+  const input = { ...roundValue(), round: 1, counterThesis: 'counter' }
+
+  // Act
+  const result = parse('round', input, 1)
+
+  // Assert
+  expect(result).toMatchObject({ parsed: true, counterThesis: 'counter' })
+})
+test.each([
+  ['target', 'bad', 'challenges[0].target'], ['scheme', 'bad', 'challenges[0].scheme'],
+  ['cq', 'CQ4', 'challenges[0].cq'],
+])('drops challenge with invalid %s', (field, value, reason) => {
+  // Arrange
+  const input = { ...roundValue(), challenges: [{ ...roundValue().challenges[0], [field]: value }] }
+
+  // Act
+  const result = parse('round', input, 2)
+
+  // Assert
+  expect(result.droppedReasons).toContain(reason)
+})
+test.each([
+  [{ id: 'bad', rule: 'PD1', claim: 'claim' }, 'violations[0].id'],
+  [{ id: 'V1', rule: 'PD11', claim: 'claim' }, 'violations[0].rule'],
+  [{ id: 'V1', rule: 'PD1', claim: '' }, 'violations[0].claim'],
+])('drops invalid violations', (violation, reason) => {
+  // Arrange
+  const input = { ...roundValue(), violations: [violation] }
+
+  // Act
+  const result = parse('round', input, 2)
+
+  // Assert
+  expect(result.droppedReasons).toContain(reason)
+})
+test('drops duplicate violation ids and projects valid violations', () => {
+  // Arrange
+  const input = { ...roundValue(), violations: [
+    { id: 'V1', rule: 'PD1', claim: ' first ' }, { id: 'V1', rule: 'PD2', claim: 'second' },
+  ] }
+
+  // Act
+  const result = parse('round', input, 2)
+
+  // Assert
+  expect(result.violations).toEqual([{ id: 'V1', rule: 'PD1', claim: 'first' }])
+  expect(result.droppedReasons).toContain('violations[1].id (duplicate)')
+})
+test('rejects direct round parsing outside the valid range', () => {
+  // Arrange
+  const input = block(roundValue())
+
+  // Act
+  const parseInvalidRound = () => parseDebateOutput(input, { kind: 'round', round: 4 })
+
+  // Assert
+  expect(parseInvalidRound).toThrow(/--round <n> is required for --kind round and must be 1-3/)
+})
+test('fails closed when map has the wrong kind', () => {
+  // Arrange
+  const input = { ...mapValue(), kind: 'round' }
+
+  // Act
+  const result = parse('map', input)
+
+  // Assert
+  expect(result.parseError).toMatch(/expected kind/)
+})
+test('fails closed when feasibility has the wrong kind', () => {
+  // Arrange
+  const input = { ...feasibilityValue(), kind: 'map' }
+
+  // Act
+  const result = parse('feasibility', input)
+
+  // Assert
+  expect(result.parseError).toMatch(/expected kind/)
+})
+
+test('drops invalid map entries in order', () => {
+  // Arrange
+  const value = { ...mapValue(), stocks: [{ id: 'bad', name: 'x' },
+    { id: 'S1', name: ' ok ', extra: 'leak' }, { id: 'S1', name: 'dup' }],
+    loops: [{ id: 'L1', type: 'X', chain: 'x' }], delays: [], leverage: [] }
+
+  // Act
+  const result = parse('map', value)
+
+  // Assert
+  expect(result.stocks).toEqual([{ id: 'S1', name: 'ok' }])
+  expect(result.droppedReasons).toEqual([
+    'stocks[0].id', 'stocks[2].id (duplicate)', 'loops[0].type',
+  ])
+})
+test('drops leverage outside the valid range or non-integer', () => {
+  // Arrange
+  const value = { ...mapValue(), loops: [], leverage: [
+    { id: 'P1', level: 0, point: 'x' }, { id: 'P2', level: 13, point: 'x' },
+    { id: 'P3', level: 1.5, point: 'x' },
+  ] }
+
+  // Act
+  const result = parse('map', value)
+
+  // Assert
+  expect(result.droppedReasons).toEqual([
+    'leverage[0].level', 'leverage[1].level', 'leverage[2].level',
+  ])
+})
+test('drops invalid round challenges', () => {
+  // Arrange
+  const value = { ...roundValue(), challenges: [{ ...roundValue().challenges[0], type: 'BAD' }] }
+
+  // Act
+  const result = parse('round', value, 2)
+
+  // Assert
+  expect(result.droppedReasons).toEqual(['challenges[0].type'])
+})
+test('drops invalid round contributions', () => {
+  // Arrange
+  const value = { ...roundValue(), contributions: [{ id: 'N1', claim: '' },
+    { id: 'N1', claim: 'dup' }] }
+
+  // Act
+  const result = parse('round', value, 2)
+
+  // Assert
+  expect(result.droppedReasons).toEqual(['contributions[0].claim'])
+})
+test('drops duplicate contribution ids', () => {
+  // Arrange
+  const value = { ...roundValue(), contributions: [
+    { id: 'N1', claim: 'first' }, { id: 'N1', claim: 'second' },
+  ] }
+
+  // Act
+  const result = parse('round', value, 2)
+
+  // Assert
+  expect(result.contributions).toEqual([{ id: 'N1', claim: 'first' }])
+  expect(result.droppedReasons).toEqual(['contributions[1].id (duplicate)'])
+})
+test('drops invalid feasibility list entries and risks', () => {
+  // Arrange
+  const value = { ...feasibilityValue(), dependencies: ['', 'ok', 2], conditions: [null, 'ready'],
+    risks: [{ id: 'bad', risk: 'x' }, { id: 'K1', risk: '' }] }
+
+  // Act
+  const result = parse('feasibility', value)
+
+  // Assert
+  expect(result.droppedReasons).toEqual([
+    'risks[0].id', 'risks[1].risk', 'dependencies[0]', 'dependencies[2]', 'conditions[0]',
+  ])
+  expect(result.dependencies).toEqual(['ok'])
+})
+
+test('fails feasibility on invalid verdict', () => {
+  // Arrange
+  const input = { ...feasibilityValue(), verdict: 'MAYBE' }
+
+  // Act
+  const result = parse('feasibility', input)
+
+  // Assert
+  expect(result).toMatchObject({ parsed: false, parseError: 'invalid verdict' })
+})
+test('fails round parsing when contributions are missing', () => {
+  // Arrange
+  const input = { ...roundValue(), contributions: undefined }
+
+  // Act
+  const result = parse('round', input, 1)
+
+  // Assert
+  expect(result).toMatchObject({ parsed: false, parseError: 'missing required field: contributions' })
+})
+test.each([
+  ['effort', 'BAD', 'invalid effort'], ['reversible', 'maybe', 'invalid reversible'],
+  ['firstStep', '', 'firstStep must be a non-empty string'],
+])('fails feasibility on invalid %s', (field, value, expected) => {
+  // Arrange
+  const input = { ...feasibilityValue(), [field]: value }
+
+  // Act
+  const result = parse('feasibility', input)
+
+  // Assert
+  expect(result).toMatchObject({ parsed: false, parseError: expected })
+})
+test('fails feasibility when a list field is not an array', () => {
+  // Arrange
+  const input = { ...feasibilityValue(), dependencies: {} }
+
+  // Act
+  const result = parse('feasibility', input)
+
+  // Assert
+  expect(result).toMatchObject({ parsed: false,
+    parseError: 'dependencies, risks and conditions must be arrays' })
+})
+test('projects round entries and trims text fields', () => {
+  // Arrange
+  const challenge = { ...roundValue().challenges[0], claim: '  claim  ',
+    evidence: '  source  ', extra: 'leak' }
+  const input = { ...roundValue(), challenges: [challenge] }
+
+  // Act
+  const result = parse('round', input, 2)
+
+  // Assert
+  expect(result.challenges).toEqual([{ id: 'C1', type: 'LOGIC', severity: 'MAJOR',
+    status: 'NEW', target: 'claim', scheme: 'cause-effect', cq: 'CQ1', claim: 'claim', evidence: 'source' }])
+})
+test('drops challenges without evidence after validating claim', () => {
+  // Arrange
+  const value = { ...roundValue(), challenges: [{ ...roundValue().challenges[0], evidence: '  ' }] }
+
+  // Act
+  const result = parse('round', value, 2)
+
+  // Assert
+  expect(result.droppedReasons).toEqual(['challenges[0].evidence'])
+})
+test('projects trimmed challenge evidence', () => {
+  // Arrange
+  const value = { ...roundValue(), challenges: [{ ...roundValue().challenges[0], evidence: '  source  ' }] }
+
+  // Act
+  const result = parse('round', value, 2)
+
+  // Assert
+  expect(result.challenges[0].evidence).toBe('source')
+})
+
+describe('CLI and exit codes', () => {
   const tempDirs: string[] = []
-  const makeInputFile = (content: string) => {
+  afterEach(() => tempDirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })))
+
+  test('requires round for round kind', () => {
+    // Arrange
+    const args = ['--kind', 'round', '--round', '2']
+
+    // Act
+    const result = parseCliArgs(args)
+
+    // Assert
+    expect(result).toEqual({ kind: 'round', round: 2, file: undefined })
+  })
+  test.each([
+    ['map', 'only accepted', '1'],
+    ['feasibility', 'only accepted', '1'],
+    ['round', '1-3', '0'],
+    ['round', '1-3', '4'],
+  ])('rejects invalid round argument for %s (%s)', (kind, message, round) => {
+    // Arrange
+    const parseInvalidArgs = () => parseCliArgs(['--kind', kind, '--round', round])
+
+    // Act
+    const result = parseInvalidArgs
+
+    // Assert
+    expect(result).toThrow(new RegExp(message))
+  })
+  test('returns failure for an unknown kind', () => {
+    // Arrange
+    const errors: string[] = []
+
+    // Act
+    const exitCode = main(['--kind', 'signoff'], { stdout: () => undefined,
+      stderr: (message: string) => errors.push(message) })
+
+    // Assert
+    expect(exitCode).toBe(EXIT_FAILURE)
+    expect(errors[0]).toMatch(/kind/)
+  })
+  test('preserves documented exit code constants', () => {
+    // Arrange
+    const expected = { ok: 0, malformed: 1, failure: 2 }
+
+    // Act
+    const actual = { ok: EXIT_OK, malformed: EXIT_MALFORMED, failure: EXIT_FAILURE }
+
+    // Assert
+    expect(actual).toEqual(expected)
+  })
+  test('prints a valid result and returns success', () => {
+    // Arrange
     const dir = mkdtempSync(join(tmpdir(), 'debate-parse-'))
     tempDirs.push(dir)
-    const file = join(dir, 'astra.md')
-    writeFileSync(file, content)
-    return file
-  }
-  const captureIo = () => {
-    const out: string[] = []
-    const err: string[] = []
-    return { io: { stdout: (line: string) => out.push(line), stderr: (line: string) => err.push(line) }, out, err }
-  }
-
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
-  })
-
-  test('exits 0 and prints the parsed result for a valid round file', () => {
-    // Arrange
-    const file = makeInputFile(ROUND_BLOCK)
-    const { io, out } = captureIo()
+    const file = join(dir, 'input.md')
+    writeFileSync(file, block(mapValue()))
+    const output: string[] = []
 
     // Act
-    const code = main(['--kind', 'round', '--round', '2', '--file', file], io)
+    const exitCode = main(['--kind', 'map', '--file', file], { stdout: (line: string) => output.push(line),
+      stderr: () => undefined })
 
     // Assert
-    expect(code).toBe(EXIT_OK)
-    expect(JSON.parse(out.join(''))).toMatchObject({ parsed: true, dropped: 0, round: 2 })
+    expect(exitCode).toBe(EXIT_OK)
+    expect(JSON.parse(output[0])).toMatchObject({ parsed: true, dropped: 0 })
   })
-
-  test('exits 1 but still prints the reasons when the block is malformed', () => {
+  test('prints dropped reasons and returns malformed', () => {
     // Arrange
-    const file = makeInputFile('no json here')
-    const { io, out } = captureIo()
+    const dir = mkdtempSync(join(tmpdir(), 'debate-parse-'))
+    tempDirs.push(dir)
+    const file = join(dir, 'input.md')
+    writeFileSync(file, block({ ...mapValue(), stocks: [{ id: 'bad', name: 'x' }] }))
+    const output: string[] = []
 
     // Act
-    const code = main(['--kind', 'round', '--round', '1', '--file', file], io)
+    const exitCode = main(['--kind', 'map', '--file', file], { stdout: (line: string) => output.push(line),
+      stderr: () => undefined })
 
     // Assert
-    expect(code).toBe(EXIT_MALFORMED)
-    expect(JSON.parse(out.join(''))).toMatchObject({ parsed: false })
+    expect(exitCode).toBe(EXIT_MALFORMED)
+    expect(JSON.parse(output[0]).droppedReasons).toEqual(['stocks[0].id'])
   })
-
-  test('exits 2 on a usage error and on an unreadable file', () => {
+  test('returns failure for an unreadable file', () => {
     // Arrange
-    const usage = captureIo()
-    const unreadable = captureIo()
+    const errors: string[] = []
+    const args = ['--kind', 'map', '--file', join(tmpdir(), 'missing-debate-file.md')]
 
     // Act
-    const usageCode = main(['--kind', 'nope'], usage.io)
-    const readCode = main(['--kind', 'signoff', '--file', join(tmpdir(), 'missing-debate-file.md')], unreadable.io)
+    const exitCode = main(args, { stdout: () => undefined,
+      stderr: (message: string) => errors.push(message) })
 
     // Assert
-    expect(usageCode).toBe(EXIT_FAILURE)
-    expect(usage.err[0]).toMatch(/kind/)
-    expect(readCode).toBe(EXIT_FAILURE)
-    expect(unreadable.err[0]).toMatch(/cannot read input/)
+    expect(exitCode).toBe(EXIT_FAILURE)
+    expect(errors[0]).toMatch(/cannot read input/)
   })
 })

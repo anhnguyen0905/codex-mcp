@@ -43,7 +43,7 @@ const BRAINSTORM_CLAUDE_COMMAND_PATH = path.join(REPO_ROOT, '.claude', 'commands
 const BRAINSTORM_SKILL_PATH = path.join(SKILLS_DIR, 'brainstorm-debate', 'SKILL.md')
 // Brainstorm lane budgets: a thinking workflow must stay far cheaper than the full flow.
 const BRAINSTORM_COMMAND_MAX_BYTES = 12_000
-const BRAINSTORM_SKILL_MAX_BYTES = 10_000 // raised from 8 000 after the 2026-09-10 dry run added sign-off pending verdicts
+const BRAINSTORM_SKILL_MAX_BYTES = 10_000
 // R6.2 detector (documented, explicit): phrases that instruct a per-task full-suite run.
 const FORBIDDEN_PER_TASK_SUITE_PHRASES = [
   'full suite per task',
@@ -3044,9 +3044,40 @@ describe('README wording T14 removed stays removed', () => {
   })
 })
 
-describe('brainstorm command contract (PDCA two-way debate)', () => {
+describe('brainstorm command contract (five thinking phases)', () => {
   const lfBytes = (filePath: string) =>
     Buffer.byteLength(readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n'))
+  const BRAINSTORM_LENSES_SKILL_PATH = path.join(SKILLS_DIR, 'brainstorm-lenses', 'SKILL.md')
+  const BRAINSTORM_LENSES_SKILL_MAX_BYTES = 10_000
+  const PHASE_HEADINGS = [
+    '## Frame — understand the question (Claude)',
+    '## Map — model the system independently (Claude, then Codex)',
+    '## Reason — build and test the argument (Claude ⇄ Codex, 1–3 rounds)',
+    '## Feasibility — can it be done (Codex, one turn)',
+    '## Decide — ratify the analysis (Claude)',
+  ] as const
+  const COMMAND_FORBIDDEN = [
+    'PDCA',
+    'Plan, Do, Check, Act',
+    'DECISION.md',
+    '## Handoff',
+    'rollout',
+    'rollback',
+    'sign-off',
+    'signoff',
+    'K1..K5',
+    'flow-state.mjs',
+    'workspace-write',
+    'danger-full-access',
+    '`verifyCommand`: `',
+    'fall back',
+    'continue without',
+  ] as const
+  const phaseSlice = (command: string, heading: string): string => {
+    const start = command.indexOf(`## ${heading}`)
+    const next = command.indexOf('\n## ', start + 1)
+    return command.slice(start, next === -1 ? command.length : next)
+  }
 
   test('keeps the Claude command mirror byte-identical', () => {
     // Arrange
@@ -3072,30 +3103,46 @@ describe('brainstorm command contract (PDCA two-way debate)', () => {
     expect(malformed).toEqual([])
     expect(missing).toEqual([])
     expect(tokens).toContain('codex-flow:brainstorm-debate')
+    expect(tokens).toContain('codex-flow:brainstorm-lenses')
+    expect(tokens).toContain('codex-flow:brainstorm-argumentation')
   })
 
-  test('names the debate skill inside a Load skills first line', () => {
-    const command = readText(BRAINSTORM_COMMAND_PATH)
+  test('names all three brainstorm skills inside a Load skills first line', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
 
-    expect(command).toMatch(/\*\*Load skills first\*\*:[^\n]*codex-flow:brainstorm-debate/)
+    expect(command).toContain(
+      '**Load skills first**: `codex-flow:brainstorm-debate`, ' +
+        '`codex-flow:brainstorm-lenses`, and `codex-flow:brainstorm-argumentation`',
+    )
   })
 
   test('stays under its own byte budgets', () => {
     expect(lfBytes(BRAINSTORM_COMMAND_PATH)).toBeLessThanOrEqual(BRAINSTORM_COMMAND_MAX_BYTES)
     expect(lfBytes(BRAINSTORM_SKILL_PATH)).toBeLessThanOrEqual(BRAINSTORM_SKILL_MAX_BYTES)
+    expect(lfBytes(BRAINSTORM_LENSES_SKILL_PATH)).toBeLessThanOrEqual(
+      BRAINSTORM_LENSES_SKILL_MAX_BYTES,
+    )
   })
 
-  test('carries the four PDCA phases in order', () => {
+  test('carries the five thinking phases in order and exactly five headings', () => {
     // Arrange
     const command = readText(BRAINSTORM_COMMAND_PATH)
-    const headings = ['## Plan', '## Do', '## Check', '## Act'].map((h) => command.indexOf(h))
+    const headings = command.match(/^## .+$/gm) ?? []
 
     // Assert
-    expect(headings.every((index) => index >= 0)).toBe(true)
-    expect([...headings].sort((a, b) => a - b)).toEqual(headings)
+    expect(headings).toEqual(PHASE_HEADINGS)
   })
 
-  test('runs every Codex call read-only and never touches the full-flow control files', () => {
+  test('pins the exact description and title', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+
+    expect(command).toContain(
+      'description: "Systems-thinking brainstorm: frame the question, map the system independently with Codex, reason through a two-way debate, check feasibility, deliver a ratified analysis — no code is written"',
+    )
+    expect(command).toContain('# Codex Brainstorm — Frame, Map, Reason, Feasibility, Decide')
+  })
+
+  test('runs every Codex call read-only and omits forbidden execution parameters', () => {
     // Arrange
     const command = readText(BRAINSTORM_COMMAND_PATH)
 
@@ -3113,89 +3160,544 @@ describe('brainstorm command contract (PDCA two-way debate)', () => {
     expect(command).toContain('`mcp__codex__codex_continue` is used only for the json re-obtain step')
   })
 
-  test('parses Astra output through the fail-closed helper for rounds and sign-off', () => {
+  test('parses Astra output through the fail-closed helper for map, rounds, and feasibility', () => {
     // Arrange
     const command = readText(BRAINSTORM_COMMAND_PATH)
     const skill = readText(BRAINSTORM_SKILL_PATH)
 
     // Assert
+    expect(command).toContain('debate-parse.mjs --kind map')
     expect(command).toContain('debate-parse.mjs --kind round --round <n>')
-    expect(command).toContain('debate-parse.mjs --kind signoff')
+    expect(command).toContain('debate-parse.mjs --kind feasibility')
+    expect(skill).toContain('### Map turn')
+    expect(skill).toContain('### Reason turn')
+    expect(skill).toContain('### Feasibility turn')
     expect(skill).toContain('node "${CLAUDE_PLUGIN_ROOT}/scripts/debate-parse.mjs" --kind round --round <n> --file <path>')
     expect(skill).toContain('Never reconstruct an entry from the prose.')
     expect(skill).toContain('If the helper is not found, STOP and tell the user to reinstall the')
+    expect(skill).toContain('Exit 1')
+    expect(skill).toContain('Exit 2')
+    expect(skill).toContain('UNVERIFIED')
+    expect(skill).toContain('UNVERIFIED: <droppedReason or parseError>')
   })
 
-  test('follows the auth-aware model rule', () => {
+  test('embeds matching Reason and Feasibility lens blocks in Astra prompts', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+
+    expect(command).toContain('followed by the Reason turn block and the Reason lens block')
+    expect(command).toContain('followed by the Feasibility turn block and the Feasibility lens block')
+    expect(command).toContain("Embed the matching turn block and lens block verbatim in every Astra prompt; Codex cannot read Claude's skills.")
+  })
+
+  test('creates brainstorm parent directories before the unique leaf', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+
+    expect(command).toContain('Create the parent directories `.codex-flow/brainstorm/` and `.codex-flow/notes/` when missing; create the leaf without `-p` on the leaf')
+    expect(command).toContain('append `-2`, `-3`, … and never reuse a directory')
+  })
+
+  test('keeps the removed protocol terms out of the skill', () => {
+    const skill = readText(BRAINSTORM_SKILL_PATH)
+    const forbidden = [
+      'signoff',
+      'sign-off',
+      'PDCA',
+      'K1..K5',
+      'integer weights',
+      'FRAMING',
+      'Alternative:',
+      'DECISION.md',
+    ] as const
+
+    for (const phrase of forbidden) {
+      expect(skill).not.toContain(phrase)
+    }
+  })
+
+  test('parses each turn example for map, rounds 1 through 3, and feasibility', async () => {
+    const skill = readText(BRAINSTORM_SKILL_PATH)
+    const extractJsonLine = (heading: string): string => {
+      const start = skill.indexOf(`### ${heading}`)
+      const next = skill.indexOf('\n### ', start + 1)
+      const section = skill.slice(start, next === -1 ? skill.length : next)
+      const jsonLine = section.split('\n').find((line) => line.startsWith('{') && line.endsWith('}'))
+      if (jsonLine === undefined) throw new Error(`missing JSON example for ${heading}`)
+      return jsonLine
+    }
+    const asJsonFence = (jsonLine: string): string => `\`\`\`json\n${jsonLine}\n\`\`\``
+
+    // @ts-expect-error — plain .mjs script
+    const { parseDebateOutput } = await import('../scripts/debate-parse.mjs')
+
+    const map = parseDebateOutput(asJsonFence(extractJsonLine('Map turn')), { kind: 'map' })
+    const feasibility = parseDebateOutput(
+      asJsonFence(extractJsonLine('Feasibility turn')),
+      { kind: 'feasibility' },
+    )
+
+    expect(map.parsed).toBe(true)
+    expect(map.dropped).toBe(0)
+    expect(feasibility.parsed).toBe(true)
+    expect(feasibility.dropped).toBe(0)
+
+    for (const round of [1, 2, 3]) {
+      const roundJson = extractJsonLine('Reason turn').replace('<n>', String(round))
+      const parsed = parseDebateOutput(asJsonFence(roundJson), { kind: 'round', round })
+
+      expect(parsed.parsed).toBe(true)
+      expect(parsed.dropped).toBe(0)
+    }
+  })
+
+  test('pins the Reason turn order and parser fields', () => {
+    // Arrange
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const reasonStart = skill.indexOf('### Reason turn')
+    const feasibilityStart = skill.indexOf('### Feasibility turn')
+    const reason = skill.slice(reasonStart, feasibilityStart)
+
+    // Assert
+    const turnOrder = [
+      'steelman → counter-thesis (round 1; later rounds keep or revise) → contributions',
+      ' → challenges (each names a Toulmin target, scheme, and cq) → violations (each names PD<k>) → json',
+    ].join('')
+    expect(reason).toContain(turnOrder)
+    expect(reason).toContain('In round 1, answer every Map conflict listed in the prompt.')
+    expect(reason).toContain('Use only NEW, HOLD, or CONCEDE for challenge status.')
+  })
+
+  test('pins the two-way steelman response protocol', () => {
+    // Arrange
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const responseStart = skill.indexOf("## Fable's response format")
+    const mapStart = skill.indexOf('## Map critique', responseStart)
+    const response = skill.slice(responseStart, mapStart)
+
+    // Assert
+    expect(response).toContain('FAITHFUL | UNFAITHFUL')
+    expect(response).toContain('STRAW-MAN')
+    expect(response).toContain('Steelman the counter-thesis before answering it element by element')
+  })
+
+  test('pins Map and Feasibility critique sections', () => {
+    // Arrange
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const mapStart = skill.indexOf('## Map critique')
+    const evidenceStart = skill.indexOf('## Evidence rules')
+    const critiques = skill.slice(mapStart, evidenceStart)
+
+    // Assert
+    expect(critiques).toContain('## Map critique')
+    expect(critiques).toContain('## Feasibility critique')
+    expect(critiques).toContain('Write the critique in MAP.md under `## Map critique`')
+    expect(critiques).toContain('Write the critique in REASON.md under `## Feasibility critique`')
+    expect(critiques).toContain(
+      '<field> ACCEPT | REBUT | REFINE — <Toulmin element> — <evidence>',
+    )
+    expect(critiques).toContain('Put every map conflict into the round-1 Reason prompt')
+    expect(critiques).toContain('Copy disagreements still open to ANALYSIS.md `## Open questions` at Decide')
+  })
+
+  test('pins both C-LEDGER headers and status rules', () => {
+    // Arrange
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const ledgerStart = skill.indexOf('## Standpoint ledger')
+    const stopStart = skill.indexOf('## Stop rule')
+    const ledgers = skill.slice(ledgerStart, stopStart)
+
+    // Assert
+    expect(ledgers).toContain('| Id | Standpoint | Owner | Status | Crux | Evidence |')
+    expect(ledgers).toContain('| Id | Assumption | Held by | Importance | Certainty | Evidence |')
+    expect(ledgers).toContain('MAINTAINED | RETRACTED | UNRESOLVED')
+    expect(ledgers).toContain('Importance and Certainty only to high | low')
+  })
+
+  test('pins challenge disposition to standpoint status mapping', () => {
+    // Arrange
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const ledgerStart = skill.indexOf('## Standpoint ledger')
+    const assumptionStart = skill.indexOf('## Assumption register')
+    const ledger = skill.slice(ledgerStart, assumptionStart)
+    const mapping = [
+      'Map dispositions to standpoints: a challenge Fable REBUTs and Astra later CONCEDEs leaves its',
+      ' standpoint MAINTAINED; a challenge Fable ACCEPTs retracts or revises the standpoint (RETRACTED,',
+      ' or a revised standpoint with a new SP id); a challenge still NEW or HOLD at the stop leaves the',
+      ' standpoint UNRESOLVED with a Crux; a STRAW-MAN challenge changes nothing; an ADOPTed contribution',
+      ' adds or revises a standpoint.',
+    ].join('')
+
+    // Assert
+    expect(ledger).toContain(mapping)
+  })
+
+  test('pins two-sided violation recording', () => {
+    // Arrange
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const violationsStart = skill.indexOf('## Violations')
+    const evidenceStart = skill.indexOf('## Evidence rules')
+    const violations = skill.slice(violationsStart, evidenceStart)
+
+    // Assert
+    expect(violations).toContain('Astra reports Fable\'s violations in the json `violations` array')
+    expect(violations).toContain('Fable records Astra\'s violations as `V<n>` with `PD<k>`')
+    expect(violations).toContain('List both in REASON.md under the round')
+    expect(violations).toContain('affected standpoint\'s Evidence column cites the `V<n>` id')
+    expect(violations).toContain('A sustained PD3 violation is the STRAW-MAN case.')
+  })
+
+  test('pins the C-STOP convergence rule', () => {
+    // Arrange
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const stop = skill.slice(skill.indexOf('## Stop rule'))
+
+    // Assert
+    expect(stop).toContain('Converged when no standpoint is UNRESOLVED without a Crux.')
+    expect(stop).toContain('severity only orders work')
+  })
+
+  test('keeps forbidden command wording out of the command', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+
+    for (const phrase of COMMAND_FORBIDDEN) {
+      expect(command).not.toContain(phrase)
+    }
+  })
+
+  test('follows the auth-aware model rule and payload contract', () => {
     const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
 
     expect(command).toContain('`model`: only when `authMode` is `apikey`, otherwise omit it')
+    expect(command).toContain('when the field is absent, treat it as `chatgpt`')
+    expect(command).toContain('`cwd`: the absolute project root')
+    expect(command).toContain('`reasoningEffort`: `high`')
+    expect(command).toContain('`timeoutMs`: 20 minutes per attempt')
+    expect(command).toContain('`terminal`: `true`')
     expect(command).toContain('Never pass a `model` override under ChatGPT auth')
   })
 
-  test('ratifies the decision explicitly and never hands off while PROPOSED', () => {
+  test('ratifies the analysis explicitly and never hands off while PROPOSED', () => {
     const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
 
     expect(command).toContain('`Status: PROPOSED`')
     expect(command).toContain('Nothing is handed off while `PROPOSED`.')
-    expect(command).toContain('`ACCEPTED` or `REJECTED`')
-    expect(command).toContain('## Handoff')
+    expect(command).toContain('`ACCEPTED`')
+    expect(command).toContain('`REJECTED`')
+    expect(command).toContain('accept / amend / reject / one more round')
+    expect(command).toContain('/codex-flow <topic> — start from <run dir>/ANALYSIS.md')
   })
 
-  test('enforces the no-code integrity check and the single-model labelling', () => {
+  test('writes the eight ANALYSIS sections in contract order', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+    const decidePhase = command.slice(command.indexOf('## Decide —'))
+    const sections = [
+      '## Reframed question',
+      '## System map',
+      '## Reasoning',
+      '## Agreements and disagreements',
+      '## Recommendation',
+      '## Feasibility',
+      '## Open questions',
+      '## Sources',
+    ]
+
+    const positions = sections.map((section) => decidePhase.indexOf(section))
+    expect(positions.every((position) => position >= 0)).toBe(true)
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions)
+  })
+
+  test('enforces single-model labelling and the health-outage procedure', () => {
     const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
 
-    expect(command).toContain('**No-code integrity check** (mechanical)')
     expect(command).toContain('never present a single-model run as a two-model debate')
+    expect(command).toContain('Read `status` first')
+    expect(command).toContain('one AskUserQuestion per outage')
+    expect(command).toContain('retry once (first outage only), continue single-model, or stop and decide from completed turns')
   })
 
   test('writes the durable brainstorm log line in the documented format', () => {
     const command = readText(BRAINSTORM_COMMAND_PATH)
 
     expect(command).toContain(
-      '`<ISO 8601> <one-line topic> rounds=<n> flips=<n> blockers=<n> mode=<two-model|single-model> status=<accepted|rejected|parked> dir=<run dir>`',
+      '`<ISO 8601> <one-line topic> rounds=<n> flips=<n> blockers=<n> feasibility=<verdict> mode=<two-model|single-model> status=<accepted|rejected|parked> dir=<run dir>`',
     )
   })
 
-  test('the skill defines the stop rule, scoring schema, and transcript budget', () => {
+  test('the skill defines the stop rule and transcript budget', () => {
     const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
 
     expect(skill).toContain('Minimum 1 round, cap 3')
     expect(skill).toContain('Never run a fourth round.')
-    expect(skill).toContain('integer weights that sum to 100')
     expect(skill).toContain('exceeds 6 000 estimated tokens')
-    expect(skill).toContain('ONLY together with a BLOCKER or MAJOR that applies to every option in the thesis')
+    expect(skill).toContain('| Id | Standpoint | Owner | Status | Crux | Evidence |')
   })
 
-  test('lets Astra challenge the framing without joining the Plan phase', () => {
+  test('keeps the Map independent and makes Divergence the Reason input', () => {
     // Arrange
-    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const mapStart = command.indexOf('## Map —')
+    const reasonStart = command.indexOf('## Reason —', mapStart)
+    const mapPhase = command.slice(mapStart, reasonStart).replace(/\s+/g, ' ')
     const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
 
     // Assert
-    expect(command).toContain('Astra is not consulted here')
-    expect(command).toContain('any BRIEF.md amendment from an accepted FRAMING challenge')
-    expect(skill).toContain('Prefix its Claim with FRAMING:')
-    expect(skill).toContain('A FRAMING challenge Fable accepts changes BRIEF.md, not the thesis')
+    expect(mapPhase).toContain('Write `MAP.md` with `## Fable map` before the Astra call')
+    expect(mapPhase).toContain('The Map prompt names no run-dir file except FRAME.md.')
+    expect(mapPhase).not.toContain('REASON.md')
+    expect(mapPhase).toContain('This divergence is the input of Reason')
+    expect(skill).toContain('Apply the Map lens block from codex-flow:brainstorm-lenses.')
+    expect(skill).toContain("Fable's map is never shown to you.")
   })
 
-  test('closes round-cap acceptances through sign-off pending verdicts, not a fourth round', () => {
+  test('routes Map critique conflicts into the first Reason prompt', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const mapPhase = phaseSlice(command, 'Map —').replace(/\s+/g, ' ')
+
+    // Assert
+    expect(mapPhase).toContain(
+      'After `## Divergence`, Fable writes `## Map critique` per the skill and carries every map ' +
+        'conflict into the round-1 Reason prompt',
+    )
+  })
+
+  test('keeps the Map run-file fixture scoped to FRAME.md and MAP.md', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const mapPhase = phaseSlice(command, 'Map —')
+
+    // Act
+    const fixture = mapPhase.replace(/\s+/g, ' ')
+
+    // Assert
+    expect(fixture).toContain('only the absolute path of the run dir\'s `FRAME.md`')
+    expect(fixture).toContain('Append the raw Astra answer verbatim under `## Astra map` in `MAP.md`')
+    expect(fixture).toContain('debate-parse.mjs --kind map')
+  })
+
+  test('keeps the Reason run-file fixture on all three inputs and round output', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const reasonPhase = phaseSlice(command, 'Reason —')
+
+    // Act
+    const fixture = reasonPhase.replace(/\s+/g, ' ')
+
+    // Assert
+    expect(fixture).toContain('`FRAME.md`, `MAP.md`, and `REASON.md`')
+    expect(fixture).toContain('append the raw answer verbatim under the round in `REASON.md`')
+    expect(fixture).toContain('debate-parse.mjs --kind round --round <n>')
+  })
+
+  test('embeds the Debate block in every Reason prompt', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const reasonPhase = phaseSlice(command, 'Reason —').replace(/\s+/g, ' ')
+
+    // Assert
+    expect(reasonPhase).toContain(
+      'followed by the Reason turn block and the Reason lens block; the Debate block is also embedded ' +
+        'verbatim',
+    )
+  })
+
+  test('pins Map conflicts and all blocks in the round-1 Reason prompt', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const mapPhase = phaseSlice(command, 'Map —').replace(/\s+/g, ' ')
+    const reasonPhase = phaseSlice(command, 'Reason —').replace(/\s+/g, ' ')
+
+    // Act
+    const conflictRule = 'carries every map conflict into the round-1 Reason prompt'
+
+    // Assert
+    expect(mapPhase).toContain(conflictRule)
+    expect(reasonPhase).toContain('In round 1, include every Map critique conflict in the prompt')
+    expect(reasonPhase).toContain('followed by the Reason turn block and the Reason lens block')
+    expect(reasonPhase).toContain('the Debate block is also embedded verbatim')
+  })
+
+  test('updates the ledger and register for each Reason round', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const reasonPhase = phaseSlice(command, 'Reason —').replace(/\s+/g, ' ')
+
+    // Assert
+    expect(reasonPhase).toContain(
+      "For Fable's answer, update the standpoint ledger and assumption register each round, and " +
+        "stop per the skill's stop rule",
+    )
+  })
+
+  test('keeps the Feasibility run-file fixture on all three inputs and both outputs', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const feasibilityPhase = phaseSlice(command, 'Feasibility —')
+
+    // Act
+    const fixture = feasibilityPhase.replace(/\s+/g, ' ')
+
+    // Assert
+    expect(fixture).toContain('the absolute paths of the run dir\'s `FRAME.md`, `MAP.md`, and `REASON.md`')
+    expect(fixture).toContain('record the verdict as `UNVERIFIED` in `ANALYSIS.md` `## Feasibility`')
+    expect(fixture).toContain('debate-parse.mjs --kind feasibility')
+  })
+
+  test('routes Feasibility critique and remaining disagreements to Open questions', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+    const feasibilityPhase = phaseSlice(command, 'Feasibility —').replace(/\s+/g, ' ')
+
+    // Assert
+    expect(feasibilityPhase).toContain(
+      'After the Astra turn, Fable writes `## Feasibility critique` per the skill and puts remaining ' +
+        'disagreements in `## Open questions`',
+    )
+  })
+
+  test('keeps the skill run-file matrix aligned with the command fixtures', () => {
+    // Arrange
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const rows = [
+      '| Map | FRAME.md | MAP.md `## Astra map`, MAP.md `## Map critique` |',
+      '| Reason | FRAME.md, MAP.md, REASON.md | REASON.md round |',
+      '| Feasibility | FRAME.md, MAP.md, REASON.md | ' +
+        'REASON.md Feasibility turn, REASON.md `## Feasibility critique`; ' +
+        'ANALYSIS.md `## Feasibility` |',
+    ] as const
+
+    // Assert
+    for (const row of rows) expect(skill).toContain(row)
+  })
+
+  test('keeps the skill turn blocks and run-file matrix in order', () => {
+    // Arrange
+    const skill = readText(BRAINSTORM_SKILL_PATH)
+
+    // Act
+    const positions = [
+      '## Standards block',
+      '### Map turn',
+      '### Reason turn',
+      '### Feasibility turn',
+      '## Run files per turn',
+      '## Parse every Astra output fail-closed',
+    ].map((heading) => skill.indexOf(heading))
+
+    // Assert
+    expect(positions.every((position) => position >= 0)).toBe(true)
+    expect([...positions].sort((left, right) => left - right)).toEqual(positions)
+  })
+
+  test('pins Decide routing and verbatim dissent handling', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+    const decidePhase = command.slice(command.indexOf('## Decide —'))
+
+    expect(decidePhase).toContain('One more round is offered only while the Reason round cap leaves room')
+    expect(decidePhase).toContain('never a fourth round')
+    expect(decidePhase).toContain('returns to Reason for one round, then re-runs Feasibility and Decide')
+    expect(decidePhase).toContain('Amend that changes the recommendation re-runs Feasibility then Decide')
+    expect(decidePhase).toContain('wording-only amend is applied and the question is re-asked')
+    expect(decidePhase).toContain('`parked`')
+    expect(decidePhase).toContain("copy Astra's last non-null `dissent` verbatim and never soften it")
+  })
+
+  test('pins temporary raw-answer transport and cleanup', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+
+    expect(command).toContain('save the raw answer verbatim to a temporary file outside the workspace created with `mktemp`')
+    expect(command).toContain('debate-parse.mjs --kind <kind> … --file <tmp path>')
+    expect(command).toContain('append the raw answer verbatim to the phase file')
+    expect(command).toContain('then delete the temporary file')
+  })
+
+  test('pins unparsed Astra destinations for Map and Feasibility', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+
+    expect(command).toContain('unparsed: <parseError>` with the raw answer')
+    expect(command).toContain('mark every Divergence entry from Astra\'s side `UNVERIFIED`')
+    expect(command).toContain('list dropped map entries by their `droppedReasons`')
+    expect(command).toContain('record the verdict as `UNVERIFIED` in `ANALYSIS.md` `## Feasibility`')
+    expect(command).toContain('log `feasibility=unverified`')
+  })
+
+  test('pins the phase boundaries and Feasibility routing', () => {
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+
+    expect(command).toContain('No option or recommendation is written in this phase.')
+    expect(command).toContain("stop per the skill's stop rule")
+    expect(command).toContain('exactly one Astra turn')
+    expect(command).toContain('only the surviving recommendation')
+    expect(command).toContain('A NOT-FEASIBLE verdict returns to Reason at most once')
+    expect(command).toContain('one Reason round within the cap')
+    expect(command).toContain('When the cap is already spent, Fable revises the thesis without a new Astra turn')
+    expect(command).toContain('When no recommendation survives Reason, skip the Astra turn')
+  })
+
+  test('builds Agreements and disagreements from the ledger and register', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+    const decidePhase = command.slice(command.indexOf('## Decide —'))
+
+    // Assert
+    expect(decidePhase).toContain(
+      'Build `## Agreements and disagreements` from the standpoint ledger and assumption register; ' +
+        'include each `UNRESOLVED` standpoint\'s Crux and list high-importance low-certainty assumptions first',
+    )
+    expect(decidePhase).toContain(
+      '`## Open questions` lists UNRESOLVED standpoints with their Crux, UNVERIFIED entries recorded ' +
+        'per the skill, and high-importance low-certainty assumptions first',
+    )
+  })
+
+  test('removes the superseded claims-table wording from the command', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+
+    // Assert
+    expect(command).not.toContain('claims table')
+    expect(command).not.toContain('ACCEPTED (unconfirmed)')
+  })
+
+  test('keeps exactly three Codex execute calls', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH)
+
+    // Assert
+    expect(command.match(/mcp__codex__codex_execute/g) ?? []).toHaveLength(3)
+  })
+
+  test('keeps the skill response rules', () => {
+    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
+
+    expect(skill).toContain('ADOPT | DECLINE')
+    expect(skill).toContain('## Open questions')
+  })
+
+  test('carries the run-dir paths and evidence rules', () => {
     const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
     const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
 
-    expect(skill).toContain('"pending":[{"id":"C2","verdict":"CONFIRM|HOLD","evidence":"..."}]')
-    expect(skill).toContain('CONFIRMED-BY-signoff')
-    expect(command).toContain('apply `pending[]` verdicts per the skill\'s stop rule')
-  })
-
-  test('carries the dry-run fixes: absent authMode, run-dir paths, prior-art evidence, FRAMING reclassification', () => {
-    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
-    const skill = readText(BRAINSTORM_SKILL_PATH).replace(/\s+/g, ' ')
-
-    expect(command).toContain('when the field is absent, treat it as `chatgpt`')
-    expect(command).toContain('the absolute paths of the run dir\'s BRIEF.md and DEBATE.md')
+    expect(command).toContain("the absolute paths of the run dir's `FRAME.md`, `MAP.md`, and `REASON.md`")
     expect(skill).toContain('mark it `prior-art:`')
-    expect(skill).toContain('Fable reclassifies it and says so')
+    expect(skill).toContain(
+      'marked UNVERIFIED in the Evidence column and cannot make a standpoint MAINTAINED',
+    )
   })
 
   test('the sync gate lists the brainstorm mirror pair', async () => {

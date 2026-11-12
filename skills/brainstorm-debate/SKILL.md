@@ -1,141 +1,170 @@
 ---
 name: brainstorm-debate
-description: Two-way debate protocol for the brainstorm command — the Astra critic and sign-off blocks to embed into read-only Codex prompts, the fail-closed json contract parsed by debate-parse.mjs, Fable's response format, anti-sycophancy rules, the scoring schema, the convergence ledger, the transcript budget, and the stop rule.
+description: Read-only Map / Reason / Feasibility prompts with fail-closed debate parsing, Fable response rules, evidence, ledgers, and convergence.
 ---
 
 # Brainstorm debate protocol (embed into Codex prompts)
 
-The brainstorm command produces a decision, not code. Claude (Fable) holds the THESIS; Codex
-(Astra) attacks it and may propose ONE alternative; Fable answers every challenge with evidence;
-the two converge or record dissent. Codex cannot see Claude's skills, so these blocks are the only
-channel that tells Astra how to argue — embed the matching block verbatim in every prompt.
+Use the matching block in a fresh, read-only Astra session. Fable keeps the thesis and records the
+analysis; Astra supplies an independent map, reasoning, and feasibility check.
 
-## Standards block (Do phase, one fresh session per turn)
+## Standards block
 
-```
-Debate rules (mandatory — you are Astra, the independent critic; the workspace is read-only):
-- Attack the thesis, do not polish it. No praise, no restating it back.
-- Every challenge is numbered C<n> and carries four fields: Claim; Evidence or reasoning
-  (cite file:line, a doc, a measurement, or prior art — "I think" is not evidence); Severity
-  BLOCKER | MAJOR | MINOR; What would change my mind (a concrete, checkable condition).
-- BLOCKER = the recommendation fails a stated decision criterion or constraint. MAJOR = a real
-  risk or a missing option that could flip the recommendation. MINOR = everything else.
-- The framing is fair game: a challenge may target BRIEF.md itself — a criterion, a weight, a
-  constraint, or an out-of-scope line that tilts the decision. Prefix its Claim with FRAMING:
-- Ids are global across the debate: reuse an existing C<n> when you HOLD or CONCEDE it, and
-  number genuinely new challenges onward from the last id in the transcript. Re-raising a
-  conceded point without new evidence is a defect.
-- For each earlier challenge: HOLD (name the new evidence that keeps it open) or CONCEDE (name
-  the evidence that settled it). A challenge Fable marked ACCEPT is closed only when you confirm
-  the rewritten thesis actually removes it; otherwise HOLD it with the gap named.
-- Alternative: propose at most ONE option you prefer, argued with the same four fields, and
-  ONLY together with a BLOCKER or MAJOR that applies to every option in the thesis; otherwise
-  write "Alternative: none".
-- Never invent facts about the codebase; read the file before citing it. BRIEF.md and DEBATE.md
-  live at the run-dir paths given in the prompt header. For a non-code topic, cite prior art by
-  name (author, year, title) and mark it `prior-art:`; unfetched prior art is still evidence.
-- End with exactly ONE fenced json block and nothing after it:
-  {"round":<n>,"challenges":[{"id":"C1","severity":"BLOCKER|MAJOR|MINOR",
-  "status":"NEW|HOLD|CONCEDE","claim":"..."}],"alternative":"...or null","dissent":"...or null"}
-```
-
-## Sign-off block (Check phase, fresh session)
+### Map turn
 
 ```
-Sign-off rules (mandatory — read-only; you did not take part in the debate):
-- Read BRIEF.md, DEBATE.md, the convergence ledger and the score table. Check every ledger row
-  against the transcript: right status, right owner, evidence really present. Check every score
-  cell has evidence.
-- Report misattributions only; do not reopen the debate or add new challenges.
-- For every ledger row marked `ACCEPTED-BY-fable (pending)`, judge whether the final thesis
-  really removes the challenge: CONFIRM (name where) or HOLD (name the gap). This is the only
-  place a round-cap acceptance gets closed.
-- State DISSENT when the recommendation does not follow from the ledger and the criteria.
-- End with exactly ONE fenced json block and nothing after it:
-  {"round":"signoff","misattributions":[{"id":"C3","expected":"OPEN","observed":"AGREED",
-  "evidence":"..."}],"pending":[{"id":"C2","verdict":"CONFIRM|HOLD","evidence":"..."}],
-  "dissent":"...or null"}
+Map turn (mandatory — you are Astra; the workspace is read-only):
+- Apply the Map lens block from codex-flow:brainstorm-lenses.
+- Read FRAME.md at the run-dir path given in the prompt header. Build your own system map from it;
+  Fable's map is never shown to you.
+- Name stocks, flows, feedback loops, delays, the fitting archetype or null, and leverage points.
+  Do not introduce an option or recommendation.
+- Read every cited file before citing it. Use run-dir paths from the prompt header.
+- End with exactly ONE fenced json block and nothing after it. The block must have this shape:
+{"kind":"map","stocks":[{"id":"S1","name":"stock"}],"loops":[{"id":"L1","type":"R","chain":"stock -> flow"}],"delays":[{"id":"D1","where":"measurement -> response"}],"archetype":"none fits","leverage":[{"id":"P1","level":1,"point":"change the paradigm"}]}
 ```
+
+### Reason turn
+
+```
+Reason turn (mandatory — you are Astra; the workspace is read-only):
+- Apply the Reason lens block from codex-flow:brainstorm-lenses.
+- Apply the Debate block from codex-flow:brainstorm-argumentation verbatim.
+- Read FRAME.md, MAP.md (Fable map, Astra map, Divergence), and REASON.md (current pyramid thesis
+  and earlier rounds) at the run-dir paths. Attack the thesis; read cited files before citing them.
+- Order the work: steelman → counter-thesis (round 1; later rounds keep or revise) → contributions
+  → challenges (each names a Toulmin target, scheme, and cq) → violations (each names PD<k>) → json.
+- In round 1, answer every Map conflict listed in the prompt. Add useful contributions as N<n>,
+  then raise numbered C<n> challenges. Each challenge states Type (LOGIC, SYSTEM, ASSUMPTION, or
+  EVIDENCE), Claim, Evidence, Severity (BLOCKER, MAJOR, or MINOR), and What would change my mind.
+- Parsed json supplies ids, type, severity, status, target, scheme, cq, and short `evidence`; the
+  parser drops a challenge without it. Prose under C<n> carries the full claim, evidence, and doubt.
+- Reuse global ids. For earlier challenges, state HOLD with the evidence keeping them open or
+  CONCEDE with the evidence that settled them. Do not re-raise a conceded challenge without new
+  evidence. Use only NEW, HOLD, or CONCEDE for challenge status. Include dissent when needed.
+- End with exactly ONE fenced json block and nothing after it. The block must have this shape:
+{"round":<n>,"steelman":"the strongest version of the proposal","counterThesis":"the proposal should be tested against delayed effects","challenges":[{"id":"C1","type":"SYSTEM","severity":"MAJOR","status":"NEW","target":"claim","scheme":"cause-effect","cq":"CQ1","claim":"the proposed change misses a balancing loop","evidence":"REASON.md thesis S2"}],"contributions":[{"id":"N1","claim":"measure the delayed response before choosing an intervention"}],"violations":[{"id":"V1","rule":"PD2","claim":"the standpoint is not yet adequately defended"}],"dissent":null}
+```
+
+### Feasibility turn
+
+```
+Feasibility turn (mandatory — you are Astra; the workspace is read-only):
+- Apply the Feasibility lens block from codex-flow:brainstorm-lenses.
+- Assess only the surviving recommendation. When no recommendation survives Reason, the command
+  skips this turn; record that absence under Open questions instead. If several survive, assess
+  the top-ranked one and name the others.
+- Read FRAME.md, MAP.md, and REASON.md (final thesis and surviving recommendation) at the run-dir
+  paths before citing them. Record exactly one verdict, effort, reversibility, dependencies, risks,
+  conditions, and firstStep.
+- Do not include rollout, rollback, or task-list content.
+- End with exactly ONE fenced json block and nothing after it. The block must have this shape:
+{"kind":"feasibility","verdict":"FEASIBLE-WITH-CONDITIONS","effort":"M","reversible":"partly","dependencies":["approval"],"risks":[{"id":"K1","risk":"the delayed response obscures impact"}],"conditions":["measure the response"],"firstStep":"define the first read-only measurement"}
+```
+
+## Run files per turn
+
+| Turn | Reads | Writes |
+| --- | --- | --- |
+| Map | FRAME.md | MAP.md `## Astra map`, MAP.md `## Map critique` |
+| Reason | FRAME.md, MAP.md, REASON.md | REASON.md round |
+| Feasibility | FRAME.md, MAP.md, REASON.md | REASON.md Feasibility turn, REASON.md `## Feasibility critique`; ANALYSIS.md `## Feasibility` |
 
 ## Parse every Astra output fail-closed
 
-Save `agentMessage` verbatim to DEBATE.md, then run the helper on that text:
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/debate-parse.mjs" --kind round --round <n> --file <path>`
-(or `--kind signoff`). If the helper is not found, STOP and tell the user to reinstall the
-codex-flow plugin (its scripts/ directory is required). Exit 2 is a usage or read failure:
-surface it and STOP. Exit 0 → the printed `challenges[]` (or `misattributions[]` and `pending[]`), `alternative`
-and `dissent` ARE Astra's turn; ids, severity and status come from there, claim and evidence text
-from the prose under the same id. Exit 1 → `parsed: false` or `dropped > 0`: read
-`parseError`/`droppedReasons`, then do ONE re-obtain with `mcp__codex__codex_continue` on that
-turn's `sessionId` asking only for the corrected json block, and parse again. This does not count
-as a round. Still exit 1 → for a round turn the dropped or unparsed challenges enter the ledger
-as `UNVERIFIED`; for the sign-off, DECISION.md `## Astra dissent` records
-`sign-off incomplete: <parseError or n dropped>` and Act is blocked until the user waives it. In
-both cases the raw output stays in DEBATE.md and the user is told.
-Never reconstruct an entry from the prose.
+- Save the raw Astra answer at the run-dir path named in the prompt, then invoke the helper for
+  its turn: `node "${CLAUDE_PLUGIN_ROOT}/scripts/debate-parse.mjs" --kind map --file <path>`,
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/debate-parse.mjs" --kind round --round <n> --file <path>`,
+  or `node "${CLAUDE_PLUGIN_ROOT}/scripts/debate-parse.mjs" --kind feasibility --file <path>`.
+- If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin.
+- Exit 0 accepts the parsed fields only when no entry was dropped. Exit 1 means an unparsed answer
+  or dropped entries: inspect `parseError` and `droppedReasons`, request one corrected JSON block
+  with `mcp__codex__codex_continue`, and parse that answer again. If it still exits 1, record each
+  dropped entry or wholly unparsed turn under `## Open questions` as
+  `UNVERIFIED: <droppedReason or parseError>` with no reconstructed claim.
+- Exit 2 is a usage or read failure: surface the error and STOP.
+- Never reconstruct an entry from the prose. Keep the raw answer and tell the user when a turn is
+  `UNVERIFIED`.
 
 ## Fable's response format
 
-Answer every open `C<n>` in order, one line each, before touching the thesis:
+- Judge Astra's steelman as `FAITHFUL | UNFAITHFUL`. Mark challenges resting on an unfaithful reading
+  `STRAW-MAN` and do not count them.
+- Steelman the counter-thesis before answering it element by element, using the same Toulmin structure.
+- For every counted challenge, name the Toulmin element defended or revised in the disposition.
+- Answer every open `C<n>` in order with exactly one disposition: `C<n> ACCEPT`, `C<n> REBUT`,
+  or `C<n> REFINE`, followed by the change or checkable evidence.
+- Answer every `N<n>` with `ADOPT | DECLINE` and a reason. Rewrite the thesis after the
+  dispositions and append `Changed this round:`.
+- A changed recommendation is one flip. Do not add options through the response format.
 
-- `C<n> ACCEPT — <what changes in the thesis>` — the challenge stands; revise. A BLOCKER stays
-  `ACCEPTED-BY-fable (pending)` until the next Astra turn or the sign-off confirms the rewrite
-  removed it.
-- `C<n> REBUT — <checkable evidence>` — the challenge fails; cite what you verified.
-- `C<n> REFINE — <partial change> / <what still stands>` — split the difference explicitly.
+## Map critique
 
-A challenge whose target is a BRIEF criterion, weight, constraint, or scope line is FRAMING even
-when Astra omitted the prefix; Fable reclassifies it and says so. A FRAMING challenge Fable accepts changes BRIEF.md, not the thesis: amend the criterion, weight,
-constraint, or scope line, record the before/after under `Changed this round:`, and score in Check
-against the amended BRIEF. Map a restated challenge onto its existing id before counting anything
-as new. Critique Astra's
-alternative with the same four-field `C<n>` format, numbering onward from the last id. Admit the
-alternative as an option only when its admission condition holds; merge a near-duplicate into the
-option it resembles and say so. Cap the option set at 4. Then rewrite the THESIS and append
-`Changed this round:`. A changed recommendation counts as one **flip**.
+- Write the critique in MAP.md under `## Map critique`; critique Astra's map and Fable's own map
+  element by element in the Debate block's Toulmin format.
+- Put every map conflict into the round-1 Reason prompt for Astra to answer.
 
-## Anti-sycophancy rules (bind both sides)
+## Feasibility critique
 
-- A concession names the evidence that caused it; "fair point" alone is a defect.
-- A rebuttal cites something Fable checked in this session: a file read, a read-only command,
-  a document, or a measurement — never memory of the codebase. On a non-code topic, named prior
-  art (`prior-art:` author, year, title) counts, fetched when a fetch tool is available; the
-  ledger labels it so a reader can tell it from in-session verification.
-- Fable never re-grades a severity; disagreement with a severity is itself a REBUT with evidence.
-- A claim neither side could check goes to `UNVERIFIED`, never to `AGREED`.
+- Write the critique in REASON.md under `## Feasibility critique`. For each contested field—the
+  verdict, effort, reversibility, and each risk `K<n>`—write one line as
+  `<field> ACCEPT | REBUT | REFINE — <Toulmin element> — <evidence>`.
+- Copy disagreements still open to ANALYSIS.md `## Open questions` at Decide.
+
+## Violations
+
+- Astra reports Fable's violations in the json `violations` array; Fable records Astra's violations
+  as `V<n>` with `PD<k>` in its response.
+- List both in REASON.md under the round; the affected standpoint's Evidence column cites the `V<n>`
+  id. A sustained PD3 violation is the STRAW-MAN case.
+
+## Evidence rules
+
+- Cite a file as `file:line`, a read-only command, a measurement, or named prior art; mark it
+  `prior-art:`. Read a file before citing it.
+- A claim without checkable support is marked UNVERIFIED in the Evidence column and cannot make a
+  standpoint MAINTAINED. A concession names the evidence that caused it. Fable never re-grades
+  Astra's severity.
 
 ## Transcript budget
 
-Each Astra prompt embeds BRIEF.md, the current THESIS, the debate block, and a normalized
-transcript: the ledger so far plus the previous round's dispositions. Estimate tokens as chars/4.
-When the transcript exceeds 6 000 estimated tokens, embed only the ledger and the last round and
-point at `DEBATE.md` for the rest; never raise the budget.
+Estimate tokens as chars/4. When the transcript exceeds 6 000 estimated tokens, embed the standpoint
+ledger, assumption register, and last round; point to the run-dir transcript for the rest; never raise
+the budget.
 
-## Scoring schema (Check phase)
+## Standpoint ledger
 
-BRIEF.md names criteria `K1..K5` with integer weights that sum to 100. Fable scores every option
-on every criterion on a 0–3 scale (0 fails, 1 weak, 2 meets, 3 exceeds) and puts one evidence
-reference per cell (a ledger id, `path:line`, or command); a cell without evidence scores 0 and is
-marked `?`. Total = Σ weight × score. The recommendation is the top total or explains, per
-criterion, why it is not. The sign-off checks the cells.
-
-## Convergence ledger (written in Check)
+Record one compact table with this exact header:
 
 ```markdown
-## Ledger
-| Id | Claim | Raised by | Status | Evidence |
-| C1 | ... | astra | AGREED / CONCEDED-BY-astra / ACCEPTED-BY-fable (pending) / CONFIRMED-BY-signoff / OPEN / UNVERIFIED | path:line, command, or prior-art: |
+| Id | Standpoint | Owner | Status | Crux | Evidence |
+| SP1 | ... | astra or fable | UNRESOLVED | warrant or A<n> | path:line, command, measurement, or prior-art: |
 ```
 
-`OPEN` rows carry both positions and the one observation that would settle them. Astra's final
-`dissent` is copied verbatim into DECISION.md, never summarized or softened.
+- Record the main answer, every argument, and the counter-thesis as standpoints with ids `SP<n>`.
+- End each standpoint at MAINTAINED | RETRACTED | UNRESOLVED. For UNRESOLVED, Crux is
+  required and points to a Toulmin warrant or an `A<n>` assumption.
+- Map dispositions to standpoints: a challenge Fable REBUTs and Astra later CONCEDEs leaves its
+  standpoint MAINTAINED; a challenge Fable ACCEPTs retracts or revises the standpoint (RETRACTED,
+  or a revised standpoint with a new SP id); a challenge still NEW or HOLD at the stop leaves the
+  standpoint UNRESOLVED with a Crux; a STRAW-MAN challenge changes nothing; an ADOPTed contribution
+  adds or revises a standpoint.
+
+## Assumption register
+
+Record one compact table with this exact header:
+
+```markdown
+| Id | Assumption | Held by | Importance | Certainty | Evidence |
+| A1 | ... | astra or fable | high | low | path:line, command, measurement, or prior-art: |
+```
+
+- Record every root assumption as `A<n>`; set Importance and Certainty only to high | low.
+- Trace every UNRESOLVED standpoint to its warrant or an assumption in this register.
 
 ## Stop rule
 
-A round is one Astra turn plus Fable's response. Minimum 1 round, cap 3; the Check sign-off is
-not a round. **Converged** means no BLOCKER or MAJOR row is `OPEN`, `UNVERIFIED`, or
-`ACCEPTED-BY-fable (pending)`. Stop when converged or at the cap. At the cap, the sign-off's
-`pending[]` verdicts close or hold the last round's acceptances (CONFIRM → `CONFIRMED-BY-signoff`,
-HOLD → `OPEN`); rows still open go to DECISION.md `## Unresolved` and it stays `PROPOSED` until
-the user accepts with those risks named. Expect the cap to be reached: Astra confirms an
-acceptance only in a later turn. Never run a fourth round.
+- A round is one Astra Reason turn plus Fable's response. Minimum 1 round, cap 3.
+- Converged when no standpoint is UNRESOLVED without a Crux.
+- Stop when converged or after round 3; severity only orders work. Record remaining standpoints and
+  evidence gaps under `## Open questions`. Never run a fourth round.

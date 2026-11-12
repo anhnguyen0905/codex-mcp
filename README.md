@@ -130,24 +130,31 @@ structured result (`sessionId`, `agentMessage`, `fileChanges`, `commands`, token
 
 ---
 
-## `/codex-flow:brainstorm` — decide before you build (PDCA debate)
+## `/codex-flow:brainstorm` — think before you build (systems-thinking debate)
 
-Not every task should end in code. `/codex-flow:brainstorm <question>` runs a short
-Plan → Do → Check → Act loop whose deliverable is a decision record, produced by two-way debate
-between Claude (Fable, holds the thesis) and Codex (Astra, independent critic):
+Not every task should end in code. `/codex-flow:brainstorm <question>` is a read-only thinking
+workflow that frames the question, builds independent system maps, tests the reasoning, checks the
+surviving recommendation's feasibility, and delivers an `ANALYSIS.md` for user ratification. It is
+grounded in Meadows, *Thinking in Systems*; Senge, *The Fifth Discipline*; Minto, *The Pyramid
+Principle*; Ackoff, *Redesigning the Future* / *Creating the Corporate Future*; and Checkland,
+*Systems Thinking, Systems Practice*.
 
-| Phase | Who | What happens |
-|-------|-----|--------------|
-| **Plan** | Claude | One `codex_health` call, ≤ 3 framing questions, `BRIEF.md` (weighted criteria, git provenance), a THESIS with 2–3 options and its own strongest objections. |
-| **Do** | Codex ⇄ Claude | 1–3 rounds. Each Astra turn is a **fresh read-only** `codex_execute` that returns numbered challenges (BLOCKER/MAJOR/MINOR) and at most one alternative; Claude answers each with ACCEPT / REBUT / REFINE plus evidence. Stops on convergence or at the cap. |
-| **Check** | Claude, then Codex | Ledger + weighted score table, a fresh-session Codex sign-off for misattributions and dissent, and a mechanical `git status` check proving no code was written. |
-| **Act** | Claude + user | `DECISION.md` (`PROPOSED` → accept / amend / reject / one more round) with a `## Handoff` block a later `/codex-flow` run starts from, plus one `brainstorm.log` line that sizes future round caps. |
+| Phase | Who | What | Artifact |
+|-------|-----|------|----------|
+| **Frame** | Claude | Clarify the decision, constraints, and meaning of decided; apply SCQA, CATWOE, treatment, and the system boundary without introducing an option. | `FRAME.md` |
+| **Map** | Claude, then Codex | Build independent system maps with stocks, flows, feedback loops, delays, archetypes, and leverage points; record divergence without an option or recommendation. Fable critiques both maps. | `MAP.md` |
+| **Reason** | Claude ⇄ Codex | Build and challenge a pyramid thesis through steelman → counter-thesis → Toulmin/Walton challenges, and 1–3 fresh read-only Astra rounds. | `REASON.md` |
+| **Feasibility** | Codex | Assess only the surviving recommendation for effort, reversibility, dependencies, risks, conditions, first step, and one verdict; Fable critiques the verdict; skip it when no recommendation survives Reason. | `REASON.md` (raw turn); `ANALYSIS.md` `## Feasibility` |
+| **Decide** | Claude + user | Present the analysis for accept, amend, reject, or one more round; ratify it before offering the analysis as the starting point for a later flow. | `ANALYSIS.md` |
 
-Astra's json is parsed fail-closed by `scripts/debate-parse.mjs`; malformed entries are dropped
-with reasons and re-obtained once, never reconstructed from prose. When Codex is unavailable the
-user chooses, once per outage, between fixing it and a clearly labelled single-model run. All
-artifacts live in `.codex-flow/brainstorm/<timestamp>/`; the full flow's control files are never
-touched.
+The run directory is `.codex-flow/brainstorm/<timestamp>/` and contains `FRAME.md`, `MAP.md`,
+`REASON.md` (append-only), and `ANALYSIS.md`, plus one `.codex-flow/notes/brainstorm.log` line. Astra's JSON is
+parsed fail-closed by `scripts/debate-parse.mjs` with kinds `map`, `round`, and `feasibility`;
+malformed entries are reported and never reconstructed from prose. Reason records a standpoint ledger and
+assumption register, with argumentation grounded in Toulmin, *The Uses of Argument*; Walton, Reed & Macagno,
+*Argumentation Schemes*; van Eemeren & Grootendorst, *A Systematic Theory of Argumentation*; Rapoport's rules
+via Dennett, *Intuition Pumps*; and Mason & Mitroff, *Challenging Strategic Planning Assumptions*. The workflow
+writes no implementation code and does not touch the full flow's control files.
 
 
 ## Highlights

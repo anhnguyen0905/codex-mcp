@@ -1,135 +1,142 @@
 ---
-description: "PDCA brainstorm: Claude frames a thesis, Codex attacks it in read-only debate rounds, both converge on a ratified decision record — no code is written"
+description: "Systems-thinking brainstorm: frame the question, map the system independently with Codex, reason through a two-way debate, check feasibility, deliver a ratified analysis — no code is written"
 argument-hint: "<question, decision, or idea to brainstorm>"
 ---
 
-# Codex Brainstorm — Plan, Do, Check, Act with two-way debate
+# Codex Brainstorm — Frame, Map, Reason, Feasibility, Decide
 
 Topic: $ARGUMENTS
 
-This is a thinking workflow, not a shipping workflow. Claude (Fable) owns the THESIS and the
-decision record; Codex (Astra) is the independent critic. Nobody writes implementation code, every
-Codex call runs `sandbox: read-only`, and none of the full flow's control files
-(`.codex-flow/STATE.md`, `TASKS.md`, slices, reports, ledgers) are created or touched. The
-deliverable is `DECISION.md`; the user ratifies it before anything is handed off.
+This is a thinking workflow, not a shipping workflow. Claude (Fable) owns the analysis and Codex
+(Astra) supplies independent maps, challenges, and feasibility checks. Nobody writes implementation
+code. Every Codex call runs `sandbox: read-only`. The deliverable is `ANALYSIS.md`; the user
+ratifies it before anything is handed off.
 
-**Load skills first**: `codex-flow:brainstorm-debate` (Astra prompt blocks, fail-closed json
-contract, response format, scoring schema, ledger, stop rule). If it cannot be loaded, STOP and
-tell the user to reinstall the codex-flow plugin; never improvise the protocol from memory.
+**Load skills first**: `codex-flow:brainstorm-debate`, `codex-flow:brainstorm-lenses`, and
+`codex-flow:brainstorm-argumentation`. If any skill cannot be loaded, STOP and tell the user to
+reinstall the codex-flow plugin; never improvise the protocol, lenses, or argumentation from memory.
 
 **Run dir**: `.codex-flow/brainstorm/<YYYYMMDD-HHMMSS>/` from the session-start local time.
-Create it without `-p` on the leaf; when it already exists, append `-2`, `-3`, … and never reuse a
-directory. This run writes ONLY `BRIEF.md`, `DEBATE.md` (append-only), and `DECISION.md` in that
-dir plus one line in `.codex-flow/notes/brainstorm.log`. Nothing else in the workspace changes.
+Create the parent directories `.codex-flow/brainstorm/` and `.codex-flow/notes/` when missing; create
+the leaf without `-p` on the leaf. When it already exists, append `-2`, `-3`, … and never reuse a
+directory. This run writes only `FRAME.md`, `MAP.md`, `REASON.md` (append-only), and `ANALYSIS.md`
+in that dir plus one line in `.codex-flow/notes/brainstorm.log`. Nothing else in the workspace
+changes.
 
-## Plan — frame the question (Claude)
+## Frame — understand the question (Claude)
 
-1. **Health gate, once**: call `mcp__codex__codex_health` with `{ deep: true }`. Keep
-   `authMode` for the `model` rule below; when the field is absent, treat it as `chatgpt`. When the call fails, `loggedIn` is false, or
-   `execProbe` is `quota | model | error`, quote the message and use AskUserQuestion once:
-   **Fix Codex and re-check**, or **single-model brainstorm** — a fresh independent Claude
-   subagent (Agent tool, general-purpose) plays Astra with the same prompt blocks, and every
-   artifact, the log line, and the delivery summary are labelled `single-model`. Never degrade
-   silently, and never present a single-model run as a two-model debate.
+1. **Health gate, once**: call `mcp__codex__codex_health` with `{ deep: true }`. Keep `authMode`
+   for the `model` rule below; when the field is absent, treat it as `chatgpt`. If the call fails,
+   `loggedIn` is false, or `execProbe` is `quota | model | error`, quote the message and use
+   AskUserQuestion once: **retry once** (first outage only), **continue single-model**, or **stop**.
+   A single-model run uses a fresh independent Claude subagent
+   with the same prompt blocks; label every artifact, log line, and summary `single-model`, and
+   never present a single-model run as a two-model debate.
 2. **Frame** with at most 3 AskUserQuestion questions, skipping any the topic already answers:
-   what kind of decision this is, the hard constraints, and what "decided" looks like. Read the
-   tail of `.codex-flow/notes/brainstorm.log` when it exists and report the recent median
-   `rounds=` so the user can pick a round cap (1–3, default 3).
-3. **Write `BRIEF.md`**: `## Question`, `## Context` (for code topics, gather paths and line
-   anchors through an Explore subagent — conclusions with `path:line`, no raw file dumps),
-   `## Constraints`, `## Decision criteria` (`K1..K5`, integer weights summing to 100, per the
-   skill's scoring schema), `## Out of scope`, and `## Provenance` (project root,
-   `git rev-parse HEAD`, the full `git status --porcelain` output or "not a git repo",
-   session-start ISO 8601, round cap, `mode: two-model | single-model`).
-4. **Write the THESIS** as `## Thesis` in `DEBATE.md`: 2–3 candidate options, one preliminary
-   recommendation tied to the criteria, and the 3 strongest objections you can already see
-   against your own recommendation. Objections are the hypothesis the Do phase tests. Astra
-   is not consulted here: it gets BRIEF.md, the thesis, and read access in Do, and may attack
-   the framing itself there (FRAMING challenges), so the frame stays independent of the critic.
+   identify the decision, hard constraints, and what "decided" means. Read the tail of
+   `.codex-flow/notes/brainstorm.log` when it exists, suggest a round cap from recent `rounds=`
+   values, and let the user choose 1–3 (default 3).
+3. Apply the Frame lens from `codex-flow:brainstorm-lenses`. Write `FRAME.md` with SCQA and an
+   empty Answer, the mess or problem, treatment (absolve, resolve, solve, or dissolve), CATWOE,
+   the system boundary, constraints, and provenance: project root, `HEAD`, session start, round
+   cap, and mode. `No option or recommendation is written in this phase.`
 
-## Do — test the thesis under attack (Codex ⇄ Claude, 1–3 rounds)
+## Map — model the system independently (Claude, then Codex)
 
-Each round is one Astra turn plus one Fable response. Start a **fresh** session per Astra turn so
-the critic never defends its own earlier wording; `mcp__codex__codex_continue` is used only for
-the json re-obtain step in `codex-flow:brainstorm-debate`.
+1. Apply the Map lens from `codex-flow:brainstorm-lenses`. Write `MAP.md` with `## Fable map`
+   before the Astra call. Do not write an option or recommendation. The map names the system
+   structure and its evidence, not an intervention.
+2. Call `mcp__codex__codex_execute` in one fresh read-only Astra session with a prompt header
+   `Run position: brainstorm — Map` and only the absolute path of the run dir's `FRAME.md`,
+   followed by the Map turn block, the Map lens, and `FRAME.md`. The Map prompt names no run-dir
+   file except FRAME.md. Parse the answer with `debate-parse.mjs --kind map --file <tmp path>` and
+   follow the skill's fail-closed routing.
+3. Append the raw Astra answer verbatim under `## Astra map` in `MAP.md`. If the turn remains
+   unparsed after the one re-obtain, write `## Astra map` as `unparsed: <parseError>` with the raw
+   answer, list dropped map entries by their `droppedReasons`, and mark every Divergence entry from
+   Astra's side `UNVERIFIED`. Write `## Divergence` with agreed, only Fable, only Astra, and conflict
+   entries. This divergence is the input of Reason.
+4. After `## Divergence`, Fable writes `## Map critique` per the skill and carries every map conflict
+   into the round-1 Reason prompt.
+5. `No option or recommendation is written in this phase.`
 
-1. **Astra turn** — `mcp__codex__codex_execute` with:
-   - `prompt`: header `Run position: brainstorm — round <n> of <cap>` plus the absolute paths of
-     the run dir's BRIEF.md and DEBATE.md (so Astra reads them instead of guessing), then BRIEF.md, the
-     current THESIS, the normalized transcript within the skill's transcript budget, and the
-     skill's **Standards block** verbatim. Round 1 additionally asks Astra to read the files
-     BRIEF.md cites before challenging them.
-   - `cwd`: absolute project root; `sandbox`: `read-only`; `reasoningEffort`: `high`;
-     `model`: only when `authMode` is `apikey`, otherwise omit it; `timeoutMs`: 20 minutes per
-     attempt (the server may add bounded auto-resume attempts); `terminal`: `true`; no
-     `verifyCommand`.
-2. **Read `status` first**. `success` → continue. `partial`, `failed`, `aborted`, a timeout, or
-   quota/model signatures in `errors`/`stderr` → read `attempts` and `resumeReasons`, never
-   retry on your own, and use AskUserQuestion once per outage: **retry this turn once** (one
-   extra `codex_execute` after auto-resume is exhausted; offered only for the first outage of the
-   run), **continue single-model** for the remaining turns (label everything from here on), or
-   **stop and decide from the completed rounds**. Record the outcome in DEBATE.md.
-3. **Parse fail-closed** per the skill: save `agentMessage` verbatim under `## Round <n>` in
-   `DEBATE.md` with the `sessionId`, run `debate-parse.mjs --kind round --round <n>` on it, and
-   follow the skill's exit-code routing (one re-obtain, then `UNVERIFIED`). Then verify every
-   claim Astra makes about the codebase by reading the cited file or running a read-only
-   command before it can enter the ledger; list the commands you ran in the round section.
-4. **Fable response** in the skill's format: one `ACCEPT | REBUT | REFINE` line per open
-   challenge (reclassifying as FRAMING any challenge aimed at BRIEF.md, prefixed or not), the
-   critique of Astra's alternative, the admission or merge decision, any BRIEF.md
-   amendment from an accepted FRAMING challenge, the rewritten `## Thesis`, and
-   `Changed this round:`. Append it to the same round section.
-5. **Convergence check** per the skill's stop rule. Converged, or round `<cap>` done → Check.
-   Otherwise start the next round with the updated thesis and transcript.
+## Reason — build and test the argument (Claude ⇄ Codex, 1–3 rounds)
 
-## Check — reconcile and sign off (Claude, then a fresh Codex session)
+1. Apply the Reason lens from `codex-flow:brainstorm-lenses`. Fable writes the pyramid thesis in
+   `REASON.md`: one governing answer, MECE supports with evidence, 2–3 options, and second-order
+   consequences. The thesis uses the Frame, Map, and Divergence records.
+2. For each round, call `mcp__codex__codex_execute` in one fresh Astra session with a prompt header
+   `Run position: brainstorm — Reason round <n> of <cap>` and the absolute paths of the run dir's
+   `FRAME.md`, `MAP.md`, and `REASON.md`, followed by the Reason turn block and the Reason lens block;
+   the Debate block is also embedded verbatim. In round 1, include every Map critique conflict in
+   the prompt. Parse the answer with
+   `debate-parse.mjs --kind round --round <n> --file <tmp path>`. Follow the skill's response
+   format for Fable's answer and append the raw answer verbatim under the round in `REASON.md`.
+3. For Fable's answer, update the standpoint ledger and assumption register each round, and stop per
+   the skill's stop rule. Before a codebase claim enters
+   the standpoint ledger or assumption register, verify it by reading the cited file or running a
+   read-only command. Record the evidence and the check. Record remaining standpoints and evidence
+   gaps under Open questions.
 
-1. Write the **ledger** table per the skill into DEBATE.md under `## Ledger`; every row's
-   evidence is a `path:line`, a command, or a document, never a recollection.
-2. Write the **score table** per the skill's scoring schema under `## Scores`: every surviving
-   option on every criterion, one evidence reference per cell, weighted totals.
-3. **Sign-off** — one `mcp__codex__codex_execute` in a fresh session with the skill's
-   **Sign-off block**, BRIEF.md, DEBATE.md and the two tables, same payload rules as a Do turn.
-   Apply the Do step-2 outage procedure if it fails. Parse with
-   `debate-parse.mjs --kind signoff` under the same exit-code routing. Fix every verified
-   misattribution in the ledger and the scores; apply `pending[]` verdicts per the skill's stop
-   rule (CONFIRM closes a round-cap acceptance, HOLD reopens it); copy `dissent` verbatim. In
-   single-model mode the fresh Claude subagent signs off.
-4. **No-code integrity check** (mechanical): run `git status --porcelain` and compare it with
-   the snapshot in BRIEF.md `## Provenance`. Any changed tracked path or new untracked path other
-   than this run dir and `.codex-flow/notes/brainstorm.log` is a blocker: report the paths, do
-   not enter Act until the user has reverted or explained them, and record the outcome in
-   DEBATE.md. Outside a git repo, state that the check was unavailable.
+## Feasibility — can it be done (Codex, one turn)
 
-## Act — ratify, hand off, feed back (Claude)
+1. If a recommendation survives Reason, make `exactly one Astra turn` on `only the surviving
+   recommendation`: call `mcp__codex__codex_execute` in a fresh session with a prompt header
+   `Run position: brainstorm — Feasibility` and the absolute paths of the run dir's `FRAME.md`,
+   `MAP.md`, and `REASON.md`, followed by the Feasibility turn block and the Feasibility lens block.
+   Parse the answer with `debate-parse.mjs --kind feasibility --file <tmp path>`, following the
+   skill's fail-closed routing. If the turn remains unparsed after the one re-obtain, record the
+   verdict as `UNVERIFIED` in `ANALYSIS.md` `## Feasibility` and log `feasibility=unverified`. After
+   the Astra turn, Fable writes `## Feasibility critique` per the skill and puts remaining
+   disagreements in `## Open questions`.
+2. A NOT-FEASIBLE verdict returns to Reason at most once. That return uses one Reason round within
+   the cap, then re-runs Feasibility and Decide. When the cap is already spent, Fable revises the
+   thesis without a new Astra turn and records that under Open questions. When no recommendation
+   survives Reason, skip the Astra turn and record that fact under Open questions.
 
-1. Write `DECISION.md` with `Status: PROPOSED` and these sections: `## Recommendation`,
-   `## Rationale` (tied to criteria and ledger ids), `## Rejected options` (the challenge that
-   killed each), `## Unresolved` (OPEN, UNVERIFIED and pending rows with the evidence that would
-   settle them, or "none"), `## Astra dissent` (verbatim, or "none"), `## Handoff` (chosen
-   option, verifiable requirement bullets, affected paths and components, contracts touched,
-   acceptance checks, assumptions, risks with settling evidence, rollout and rollback notes,
-   owner, provenance copied from BRIEF.md), and `## Mode` (`two-model` or `single-model`).
-2. AskUserQuestion once: **accept** (or **accept with the listed unresolved risks** when
-   `## Unresolved` is not "none"), **amend**, **reject**, or **one more round** (only while the
-   cap allows). Accept or reject sets `Status:` to `ACCEPTED` or `REJECTED`. **One more round**
-   returns to Do and then re-runs Check in full — new ledger, scores, and a fresh sign-off — before
-   DECISION.md is rewritten. **Amend** that changes the recommendation, an option, or a ledger
-   status reopens Check the same way; a wording-only amend is applied and the question re-asked.
+## Decide — ratify the analysis (Claude)
+
+1. Use the standpoint ledger and assumption register per the skill, then write `ANALYSIS.md` with first line `Status:
+   PROPOSED` and these sections in order: `## Reframed question`, `## System map`, `## Reasoning`,
+   `## Agreements and disagreements`, `## Recommendation`, `## Feasibility`, `## Open questions`,
+   `## Sources`. Build `## Agreements and disagreements` from the standpoint ledger and assumption
+   register; include each `UNRESOLVED` standpoint's Crux and list high-importance low-certainty
+   assumptions first; copy Astra's last non-null `dissent` verbatim and never soften it. `## Open
+   questions` lists UNRESOLVED standpoints with their Crux, UNVERIFIED entries recorded per the skill,
+   and high-importance low-certainty assumptions first, with the evidence that would settle each.
+   `## Sources` lists every `file:line`, command, and `prior-art:` reference cited.
+2. Use one AskUserQuestion with **accept / amend / reject / one more round**.
+   1. One more round is offered only while the Reason round cap leaves room (never a fourth
+      round); it returns to Reason for one round, then re-runs Feasibility and Decide.
+   2. Amend that changes the recommendation re-runs Feasibility then Decide; a wording-only
+      amend is applied and the question is re-asked.
+   3. Reject sets `REJECTED`.
+   4. Accept sets `ACCEPTED`, then offers, without executing it, `/codex-flow <topic> — start
+      from <run dir>/ANALYSIS.md` or parking the analysis. The log `status=` is `accepted`,
+      `rejected`, or `parked` accordingly.
    Nothing is handed off while `PROPOSED`.
-3. On accept, offer the next step without executing it: run
-   `/codex-flow <topic> — start from <run dir>/DECISION.md ## Handoff` for feature work, its
-   small-change lane for a ≤ 2-file change, or park the decision. The user runs the handoff.
-4. **Feed back**: append one line to `.codex-flow/notes/brainstorm.log`:
-   `<ISO 8601> <one-line topic> rounds=<n> flips=<n> blockers=<n> mode=<two-model|single-model> status=<accepted|rejected|parked> dir=<run dir>`.
-   `flips` counts recommendation changes; the Plan step of later runs reads this log to size the
-   round cap. Then deliver a summary: the decision, the ledger counts per status, the dissent,
-   the integrity-check result, and the run dir.
+3. Append this line to `.codex-flow/notes/brainstorm.log` verbatim:
+   `<ISO 8601> <one-line topic> rounds=<n> flips=<n> blockers=<n> feasibility=<verdict> mode=<two-model|single-model> status=<accepted|rejected|parked> dir=<run dir>`.
+   Set `rounds` to Reason rounds run, `flips` to recommendation changes, `blockers` to BLOCKER
+   claims raised, and `feasibility` to the verdict or `skipped`. Then deliver a summary of the
+   analysis, claims, feasibility, open questions, mode, and run dir.
 
 Rules:
-- Never write, edit, or generate implementation code in this workflow; the only files written are
-  the three run-dir files and the log line, and the Check integrity step proves it.
-- Never pass a `model` override under ChatGPT auth; steer with `reasoningEffort`.
-- Never re-grade a severity, reconstruct a dropped challenge from prose, or soften a dissent.
-- Never switch to single-model mode silently or mid-turn; one AskUserQuestion per outage.
-- Never run more than one manual retry per run, and never a fourth debate round.
+- Never write, edit, or generate implementation code in this workflow; write only the four run-dir
+  artifacts and the log line.
+- For every Astra turn, save the raw answer verbatim to a temporary file outside the workspace
+  created with `mktemp`; parse it with `debate-parse.mjs --kind <kind> … --file <tmp path>` per
+  the skill, append the raw answer verbatim to the phase file (`MAP.md` under `## Astra map`,
+  `REASON.md` under the round or Feasibility turn), then delete the temporary file.
+- Embed the matching turn block and lens block verbatim in every Astra prompt; Codex cannot read Claude's skills.
+- For every Codex call, use `cwd`: the absolute project root; `sandbox`: `read-only`;
+  `reasoningEffort`: `high`; `model`: only when `authMode` is `apikey`, otherwise omit it;
+  `timeoutMs`: 20 minutes per attempt; and `terminal`: `true`. Use no verify command.
+- Read `status` first on every Astra result. For `partial`, `failed`, `aborted`, timeout, or
+  quota/model errors, read `attempts` and `resumeReasons`; use one AskUserQuestion per outage:
+  retry once (first outage only), continue single-model, or stop and decide from completed turns.
+  Record it.
+- Start a **fresh** session per Astra turn. `mcp__codex__codex_continue` is used only for the json
+  re-obtain step. Never pass a `model` override under ChatGPT auth.
+- Never reconstruct a dropped entry from prose, re-grade severity, or present a single-model run as
+  a two-model debate. Never run more than one manual retry per run or a fourth Reason round.

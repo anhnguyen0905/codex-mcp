@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- The `brainstorm-lenses` skill provides the Frame, Map, Reason and Feasibility thinking lenses.
+- `tests/brainstormLenses.test.ts` covers the structure and required content of the `brainstorm-lenses` skill.
+- The `brainstorm-argumentation` skill structures steelman, Toulmin, Walton, pragma-dialectical, and assumption audits.
+- `tests/brainstormArgumentation.test.ts` covers the required content of the `brainstorm-argumentation` skill.
+
+### Changed
+
+- **Five-phase brainstorm mode** is grounded in Meadows, Senge, Minto, Ackoff and Checkland; Fable and Astra build independent system maps before the debate.
+- `ANALYSIS.md` replaces `DECISION.md`; `scripts/debate-parse.mjs` now accepts `map | round | feasibility` (the `signoff` kind is removed, which is breaking for callers of that kind).
+- Reason challenges now require an `evidence` field in the round JSON; entries without it are dropped.
+- The sign-off session, K1..K5 score table and git-status integrity check were removed.
+- Round JSON now includes steelman, counter-thesis, target, scheme, critical question, and violation fields (breaking for callers of the previous shape); Reason applies the steelman/STRAW-MAN rule.
+- The standpoint ledger and assumption register replace the claims table, and the stop rule now converges on resolved standpoints or stops after round 3.
+
 ## [0.32.0] - 2026-11-11
 
 ### Added
