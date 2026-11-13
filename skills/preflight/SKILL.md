@@ -134,7 +134,15 @@ fresh run.
    - currentTask: -
    - taskStage: idle
    - wave: -
+   - profile: -
+   - profileMode: off
+   - evidenceMode: off
+   - languageMode: off
+   - runLanguage: -
    ```
+
+   These five keys are optional and validated when present; `flow-state`'s `init` sets them from the
+   router's `initFlags`.
 
    `executor` records who writes code: `codex` (default), `claude (fallback: <reason> <ISO 8601>)`
    after an explicit Executor-fallback choice, or `codex (restored <ISO 8601>)` after returning.
@@ -161,9 +169,3 @@ fresh run.
    outside `execution`, it resets `currentTask`, `taskStage`, and `wave` (apart from the legacy-key
    backfill); later approval or execution transitions update only their corresponding mutable
    fields.
-
-## Why it's a gate
-
-Skipping preflight is how runs go wrong quietly: executing while logged out wastes a round,
-clobbering an interrupted plan loses work, and reviewing without a known-red baseline blames Codex
-for breakage it never caused. The few checks here pay for themselves across the whole flow.

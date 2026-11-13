@@ -30,6 +30,11 @@ export const STATE_KEYS = Object.freeze([
   'currentTask',
   'taskStage',
   'wave',
+  'profile',
+  'profileMode',
+  'evidenceMode',
+  'languageMode',
+  'runLanguage',
 ])
 export { PHASES }
 export const TASK_STAGES = Object.freeze([
@@ -49,6 +54,10 @@ export const TASK_TRANSITIONS = Object.freeze({
   failed: Object.freeze(['pending']),
 })
 const STATE_KEY_SET = new Set(STATE_KEYS)
+export const OPTIONAL_STATE_KEYS = Object.freeze([
+  'profile', 'profileMode', 'evidenceMode', 'languageMode', 'runLanguage',
+])
+const OPTIONAL_STATE_KEY_SET = new Set(OPTIONAL_STATE_KEYS)
 const PHASE_SET = new Set(PHASES)
 const TASK_STAGE_SET = new Set(TASK_STAGES)
 const TASK_STATUS_SET = new Set(TASK_STATUSES)
@@ -105,6 +114,13 @@ export class TransitionRejectedError extends Error {
     this.name = 'TransitionRejectedError'
   }
 }
+/** Error raised when a state key value fails validation. */
+export class StateValueError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'StateValueError'
+  }
+}
 function assertString(value, label) {
   if (typeof value !== 'string') throw new TypeError(`${label} must be a string`)
 }
@@ -144,6 +160,16 @@ function stateValueError(key, value) {
   if (key === 'wave' && value !== NO_SELECTOR && !/^[1-9]\d*$/.test(value)) {
     return 'must be a positive integer or -'
   }
+  if (key === 'profile' && !['code', 'data', 'design', 'plan', 'content', 'mixed', '-'].includes(value)) {
+    return 'must be one of code|data|design|plan|content|mixed|-'
+  }
+  if (['profileMode', 'evidenceMode'].includes(key) && !['off', 'shadow', 'enforce'].includes(value)) {
+    return 'must be one of off|shadow|enforce'
+  }
+  if (key === 'languageMode' && !['off', 'on'].includes(value)) return 'must be one of off|on'
+  if (key === 'runLanguage' && !['vi', 'en', 'mixed', '-'].includes(value)) {
+    return 'must be one of vi|en|mixed|-'
+  }
   return null
 }
 function validateStateKeyValue(key, value) {
@@ -151,10 +177,10 @@ function validateStateKeyValue(key, value) {
   assertString(value, 'value')
   if (!STATE_KEY_SET.has(key)) throw new Error(`unknown state key ${key}`)
   if (/[\r\n]/.test(value)) {
-    throw new Error(`invalid ${key} value ${JSON.stringify(value)}: must be a single line`)
+    throw new StateValueError(`invalid ${key} value ${JSON.stringify(value)}: must be a single line`)
   }
   const reason = stateValueError(key, value)
-  if (reason) throw new Error(`invalid ${key} value ${JSON.stringify(value)}: ${reason}`)
+  if (reason) throw new StateValueError(`invalid ${key} value ${JSON.stringify(value)}: ${reason}`)
 }
 function insertionForMissingKey(text, lines, key, value) {
   const lineEnding = lineEndingOf(text)
@@ -433,7 +459,7 @@ export function checkState(text, { tasksText = null, events, journal = null } = 
   const lines = stateLinesOf(text)
   const keyViolations = STATE_KEYS.flatMap((key) => {
     const matches = lines.filter((line) => line.key === key)
-    if (matches.length === 0) return [{ key, reason: 'missing' }]
+    if (matches.length === 0) return OPTIONAL_STATE_KEY_SET.has(key) ? [] : [{ key, reason: 'missing' }]
     if (matches.length > 1) return [{ key, reason: `appears ${matches.length} times` }]
     const reason = stateValueError(key, matches[0].value)
     return reason ? [{ key, reason }] : []
@@ -594,7 +620,10 @@ async function createFileExclusively(targetPath, contents, label) {
     }
   }
 }
-function createInitialState({ baseline, knownRed, dirtyBaseline = 'none', executor = 'codex' }) {
+function createInitialState({
+  baseline, knownRed, dirtyBaseline = 'none', executor = 'codex', profile = '-', profileMode = 'off',
+  evidenceMode = 'off', languageMode = 'off', runLanguage = '-',
+}) {
   const values = {
     phase: 'interview',
     requirementsApproved: 'no',
@@ -610,6 +639,11 @@ function createInitialState({ baseline, knownRed, dirtyBaseline = 'none', execut
     currentTask: '-',
     taskStage: 'idle',
     wave: '-',
+    profile,
+    profileMode,
+    evidenceMode,
+    languageMode,
+    runLanguage,
   }
   for (const key of STATE_KEYS) validateStateKeyValue(key, values[key])
   return [
@@ -770,6 +804,10 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const writer = writeState ?? ((text) => writeFileAtomically(statePath, text, 'state file'))
     return await runTypedCommand(config, cwd, statePath, writer)
   } catch (error) {
+    if (config.command === 'init' && error instanceof StateValueError) {
+      console.error(`flow-state: ${error.message}`)
+      return 2
+    }
     if (error instanceof TransitionRejectedError || error instanceof JournalRejectedError) {
       console.error(`flow-state: rejected: ${error.message}`)
       return 1

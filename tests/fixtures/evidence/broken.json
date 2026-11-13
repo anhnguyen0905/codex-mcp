@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "deliverable": "deliverable.md",
+  "figures": [
+    {
+      "id": "F1",
+      "value": 42,
+      "command": "node missing.mjs data.csv revenue"
+    }
+  ],
+  "claims": [
+    {
+      "id": "C1",
+      "text": "Revenue totals 42.",
+      "sources": ["missing.csv:1"]
+    }
+  ]
+}

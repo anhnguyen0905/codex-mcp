@@ -163,6 +163,43 @@ describe('run ledger', () => {
     expect(line).toMatchObject({ language: 'vi', languageSource: 'override', wallClockMinutes: 3.5 })
   })
 
+  it('writes switch fields only when append flags are given', () => {
+    // Arrange
+    const withoutModes = buildLine(base('hello'))
+    const withModes = buildLine({
+      ...base('hello'), profileMode: 'shadow', evidenceMode: 'enforce', languageMode: 'on',
+    })
+
+    // Act / Assert
+    expect(withoutModes).not.toHaveProperty('profileMode')
+    expect(withoutModes).not.toHaveProperty('evidenceMode')
+    expect(withoutModes).not.toHaveProperty('languageMode')
+    expect(withModes).toMatchObject({ profileMode: 'shadow', evidenceMode: 'enforce', languageMode: 'on' })
+  })
+
+  it.each([
+    ['profile-mode', 'shadow', 'invalid'],
+    ['evidence-mode', 'enforce', 'invalid'],
+    ['language-mode', 'on', 'invalid'],
+  ])('writes and validates %s', (flag, validValue, invalidValue) => {
+    // Arrange
+    const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
+    const file = join(dir, 'ledger.jsonl')
+    process.env.CODEX_MCP_RUN_LEDGER = file
+
+    // Act
+    const validExitCode = main(cliArgs([`--${flag}`, validValue]))
+    const validLine = JSON.parse(readFileSync(file, 'utf8'))
+    const invalidExitCode = main(cliArgs([`--${flag}`, invalidValue]))
+
+    // Assert
+    expect(validExitCode).toBe(0)
+    expect(validLine).toHaveProperty({
+      'profile-mode': 'profileMode', 'evidence-mode': 'evidenceMode', 'language-mode': 'languageMode',
+    }[flag], validValue)
+    expect(invalidExitCode).toBe(2)
+  })
+
   it('aggregates summary and applies the project filter', () => {
     // Arrange
     const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
@@ -179,6 +216,84 @@ describe('run ledger', () => {
     // Assert
     expect(result).toMatchObject({ total: 2, medians: { fixRounds: 2, ownerGates: 2 }, bypassRate: 0.5 })
     expect(result.counts).toEqual({ 'code × en × done': 2 })
+  })
+
+  it.each([
+    ['lane', 'full', 'brainstorm'],
+    ['profile', 'code', 'data'],
+    ['language', 'en', 'vi'],
+    ['outcome', 'done', 'failed'],
+    ['profileMode', 'shadow', 'enforce'],
+    ['evidenceMode', 'off', 'enforce'],
+    ['languageMode', 'off', 'on'],
+  ])('filters summaries by %s', (key, matchingValue, nonMatchingValue) => {
+    // Arrange
+    const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
+    const file = join(dir, 'ledger.jsonl')
+    const matching = { ...base('one'), [key]: matchingValue }
+    const nonMatching = { ...base('two'), runId: 'r2', [key]: nonMatchingValue }
+    appendLine(buildLine(matching), file)
+    appendLine(buildLine(nonMatching), file)
+
+    // Act
+    const oneKey = summarize(file, undefined, [`${key}=${matchingValue}`])
+    const twoKeys = summarize(file, undefined, [`${key}=${matchingValue}`, 'evidenceMode=off'])
+
+    // Assert
+    expect(oneKey.total).toBe(1)
+    expect(twoKeys.total).toBe(1)
+  })
+
+  it('filters the CLI JSON summary', () => {
+    // Arrange
+    const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
+    const file = join(dir, 'ledger.jsonl')
+    appendLine(buildLine({ ...base('shadow'), profileMode: 'shadow' }), file)
+    appendLine(buildLine({ ...base('enforce'), runId: 'r2', profileMode: 'enforce' }), file)
+    process.env.CODEX_MCP_RUN_LEDGER = file
+    let output = ''
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      output += String(chunk)
+      return true
+    })
+
+    // Act
+    const exitCode = main(['summary', '--json', '--filter', 'profileMode=shadow'])
+    const result = JSON.parse(output)
+
+    // Assert
+    expect(exitCode).toBe(0)
+    expect(Object.keys(result)).toEqual([
+      'total', 'counts', 'medians', 'bypassRate', 'malformed',
+    ])
+    expect(result.total).toBe(1)
+    write.mockRestore()
+  })
+
+  it('matches absent switch fields as off', () => {
+    // Arrange
+    const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
+    const file = join(dir, 'ledger.jsonl')
+    appendLine(buildLine(base('old line')), file)
+
+    // Act
+    const result = summarize(file, undefined, ['profileMode=off'])
+
+    // Assert
+    expect(result.total).toBe(1)
+  })
+
+  it.each(['bad=value', 'profileMode=bad'])('rejects invalid summary filter %s', (filter) => {
+    // Arrange
+    const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
+    const file = join(dir, 'ledger.jsonl')
+    process.env.CODEX_MCP_RUN_LEDGER = file
+
+    // Act
+    const exitCode = main(['summary', '--filter', filter])
+
+    // Assert
+    expect(exitCode).toBe(2)
   })
 
   it('prints the empty summary through the environment override', () => {

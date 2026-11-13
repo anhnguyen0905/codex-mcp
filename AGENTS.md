@@ -51,6 +51,13 @@ behavior is defined in **markdown instruction files**, not runtime code.
   comparisons land in `.codex-flow/notes/jev-shadow.log` (already covered by the `**/.codex-flow/`
   gitignore rule). The procedures live in the opt-in skill `skills/jev-assist`.
 
+- **Profile pilot (multiscope Phase 1)**: switches `CODEX_FLOW_PROFILE_MODE` (`off|shadow|enforce`,
+  default `shadow`), `CODEX_FLOW_EVIDENCE` (`off|shadow|enforce`, default `off`),
+  `CODEX_FLOW_RUN_LANGUAGE` (`off|on`, default `off`); defaults must keep today's behaviour. The
+  behaviour-changing rules live in the conditional skill `skills/profile-pilot` (not in
+  `PHASE_SKILL_MAP`). Byte guards: `commands/codex-flow.md` ≤ 43 150 and the code-run flow total
+  ≤ 162 943 — pay for new command text by trimming unpinned duplicates; never touch Phase 2 skills.
+
 ## Style
 
 - Instruction prose: English, imperative, concise. Match the section style of neighboring skills

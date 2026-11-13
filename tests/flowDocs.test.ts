@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
 // @ts-expect-error — plain .mjs script
 import { parseCliArgs } from '../scripts/flow-state-cli.mjs'
+// @ts-expect-error — plain .mjs script, not part of the tsc build
+import { DATA_PROFILE_GATES } from '../scripts/profile-router.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CONTEXT_DISCIPLINE_PATH = path.join(REPO_ROOT, 'skills', 'context-discipline', 'SKILL.md')
@@ -32,6 +34,7 @@ const INTERVIEW_ELICITATION_PATH = path.join(
 const FAST_PATH_PATH = path.join(REPO_ROOT, 'skills', 'fast-path', 'SKILL.md')
 const RUN_LEDGER_PATH = path.join(REPO_ROOT, 'skills', 'run-ledger', 'SKILL.md')
 const JEV_ASSIST_PATH = path.join(REPO_ROOT, 'skills', 'jev-assist', 'SKILL.md')
+const PROFILE_PILOT_PATH = path.join(REPO_ROOT, 'skills', 'profile-pilot', 'SKILL.md')
 const EXECUTOR_FALLBACK_PATH = path.join(REPO_ROOT, 'skills', 'executor-fallback', 'SKILL.md')
 const SESSION_REPORT_PATH = path.join(REPO_ROOT, 'skills', 'session-report', 'SKILL.md')
 const SKILLS_DIR = path.join(REPO_ROOT, 'skills')
@@ -101,9 +104,9 @@ const COMMAND_MAX_BYTES = 44_000
 //   Phase 4: 23 253 (TS as the language skill) · Phase 5: 26 581
 // Largest = Phase 2 (42 129) rounded up to the next 4 000 → 44 000, under the 48 000 cap.
 const PHASE_SKILLS_MAX_BYTES = 44_000
-// Growth guard, not a diet target: measured command + the 21 flow skills = 162 943 bytes here
+// Growth guard: measured command + the 21 flow skills = 162 806 bytes after the T6 review trims.
 // (run-ledger added in Phase 0 of the multiscope roadmap).
-const FLOW_TOTAL_MAX_BYTES = 164_000
+const FLOW_TOTAL_MAX_BYTES = 162_943
 // C7 phase → skills map. The union of these lists is the "flow skills" set FLOW_TOTAL_MAX_BYTES
 // covers; Phase 4 counts exactly one exec-<lang> skill (TypeScript, this project's language).
 const PHASE_SKILL_MAP: ReadonlyArray<{ phase: string, skills: readonly string[] }> = [
@@ -191,6 +194,7 @@ const EXACT_FRONTMATTER_SKILLS = [
   'parallel-execution',
   'agent-context-persistence',
   'jev-assist',
+  'profile-pilot',
 ] as const
 
 function readText(filePath: string): string {
@@ -714,7 +718,7 @@ describe('run-ledger wiring', () => {
 
 describe('T7 helper call-site inventory', () => {
   const flowSkillNames = [...new Set(PHASE_SKILL_MAP.flatMap(({ skills }) => skills))]
-  const OPT_IN_SKILLS = ['jev-assist'] as const
+  const OPT_IN_SKILLS = ['jev-assist', 'profile-pilot'] as const
   const scope = [
     COMMAND_PATH,
     ...flowSkillNames.map((name) => path.join(SKILLS_DIR, name, 'SKILL.md')),
@@ -836,6 +840,49 @@ describe('opt-in Jev procedure move (C3)', () => {
     expect(jev).toContain('one batched')
     expect(jev).toContain('codex_continue')
     expect(PHASE_SKILL_MAP.flatMap(({ skills }) => skills)).not.toContain('jev-assist')
+  })
+})
+
+describe('profile-pilot skill', () => {
+  test('pins the conditional data profile skill', () => {
+    // Arrange
+    const skill = readText(PROFILE_PILOT_PATH)
+    // Act
+    const routerTable = skill.slice(skill.indexOf('## Router'), skill.indexOf('## Evidence'))
+    const fields = parseFrontmatterFields(skill)
+    const evidence = skill.slice(skill.indexOf('```\nEvidence block\n'), skill.indexOf('```', skill.indexOf('```\nEvidence block\n') + 3))
+
+    // Assert
+    expect(fields.map(({ key }) => key)).toEqual(['name', 'description'])
+    expect(fields[0].value).toBe('profile-pilot')
+    expect(fields.every(({ value }) => value.trim().length > 0)).toBe(true)
+    expect(fields.every(({ value }) => !/^['"]/.test(value.trim()))).toBe(true)
+    expect(Buffer.byteLength(skill)).toBeLessThanOrEqual(6000)
+    expect(skill.match(/^\*\*Helpers\*\*:/gm)).toHaveLength(1)
+    for (const gate of DATA_PROFILE_GATES) expect(routerTable).toContain(gate)
+    expect(skill).toMatch(/```\nEvidence block\n/)
+    expect(evidence).not.toContain('CLAUDE_PLUGIN_ROOT')
+    expect(evidence).not.toContain('reviews.md')
+    expect(evidence).not.toContain('verifyCommand')
+    for (const item of [
+      'reproducible',
+      'sourced',
+      'answers the question',
+      'decision-useful',
+      'language-consistent',
+    ]) expect(skill).toContain(`\`${item}\``)
+    expect(skill).toContain('--sample 3')
+    expect(skill).toContain('Deliverable language: <vi|en>')
+    expect(skill).toContain('the first interview question confirms the profile')
+    expect(skill).toContain('flow-state set knownRed')
+    expect(skill).toContain('Embed the Evidence block and use the checker only when `evidenceMode` is not `off`')
+    expect(skill).toContain('with evidence `off`, data tasks use the `exec-deliverable` Verification block alone')
+    expect(skill).toContain('The Router table applies only when the confirmed profile is `data`')
+    expect(skill).toContain('If the confirmed profile is corrected to `data` while enforcing')
+    expect(skill).toContain('flow-state set profile data')
+    expect(skill).toContain('these replacements take precedence over the command\'s generic steps')
+    expect(skill).toContain('Missing optional keys in an older STATE.md mean `off` for modes and `-` for `profile` and `runLanguage`')
+    expect(PHASE_SKILL_MAP.flatMap(({ skills }) => skills)).not.toContain('profile-pilot')
   })
 })
 
@@ -1093,6 +1140,11 @@ describe('preflight resume protocol', () => {
       'currentTask',
       'taskStage',
       'wave',
+      'profile',
+      'profileMode',
+      'evidenceMode',
+      'languageMode',
+      'runLanguage',
     ])
     expect(skill).toContain('exactly one\n   `## Run state` section')
     expect(skill).toContain('The orchestrator is the only writer.')
@@ -1467,6 +1519,29 @@ function extractFastPathSection(command: string): string {
 // T9 retarget: T8 moved the gate's content into skills/fast-path/SKILL.md; the command keeps only
 // the router. Content assertions read the skill, and one test guards the router itself.
 describe('fast-path gate contract', () => {
+  test('pins the profile router hook and resume routing rule', () => {
+    const routerSection = extractFastPathSection(readText(COMMAND_PATH)).replace(/\s+/g, ' ')
+
+    expect(routerSection).toContain(
+      'node "${CLAUDE_PLUGIN_ROOT}/scripts/profile-router.mjs" resolve --profile <p> '
+        + '--request-file <path> --run-id <report dir name>',
+    )
+    expect(routerSection).toContain('Full flow only (not fast-path lanes): after the Fast-path gate selects full flow')
+    expect(routerSection).toContain(
+      '`<path>` is a temp file outside the workspace holding the user\'s task (e.g. via `mktemp`); '
+        + '`<report dir name>` is the session-start `<YYYYMMDD-HHMMSS>` used for step 4\'s report dir.',
+    )
+    expect(routerSection).toContain(
+      'Load `codex-flow:profile-pilot` when `profileMode` is `enforce`, `evidenceMode` is not `off`, '
+        + 'or `languageMode` is `on`',
+    )
+    expect(routerSection).toContain(
+      'On resume, do not re-run the router: read `profile`, `profileMode`, `evidenceMode`, '
+        + '`languageMode`, `runLanguage` from STATE.md (missing legacy keys mean `off` modes and '
+        + '`-` profile/runLanguage) and apply the same load rule.',
+    )
+  })
+
   test('the command routes the gate to the fast-path skill at the right point', () => {
     const section = extractFastPathSection(readText(COMMAND_PATH)).replace(/\s+/g, ' ')
 
@@ -2613,6 +2688,14 @@ describe('per-run overhead byte budgets (R8.2, C7 as amended)', () => {
         ? []
         : [overageMessage(COMMAND_PATH, bytes, COMMAND_MAX_BYTES, 'COMMAND_MAX_BYTES')],
     ).toEqual([])
+  })
+
+  test('the command stays within the T6 byte limit', () => {
+    // Arrange
+    const bytes = byteLength(COMMAND_PATH)
+
+    // Assert
+    expect(bytes).toBeLessThanOrEqual(43_150)
   })
 
   test('the command stays within the T1 byte limit', () => {

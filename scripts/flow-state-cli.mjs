@@ -48,7 +48,7 @@ export function parseCliArgs(argv) {
   if (command === 'init') {
     const parsed = parseOptions(args, 0, new Set([
       '--state', '--baseline', '--known-red', '--dirty-baseline', '--executor',
-      '--events',
+      '--events', '--profile', '--profile-mode', '--evidence-mode', '--language-mode', '--run-language',
     ]))
     return {
       command,
@@ -57,6 +57,11 @@ export function parseCliArgs(argv) {
       knownRed: requiredOption(parsed.options, '--known-red'),
       dirtyBaseline: parsed.options['--dirty-baseline'],
       executor: parsed.options['--executor'],
+      profile: parsed.options['--profile'],
+      profileMode: parsed.options['--profile-mode'],
+      evidenceMode: parsed.options['--evidence-mode'],
+      languageMode: parsed.options['--language-mode'],
+      runLanguage: parsed.options['--run-language'],
       events: parsed.options['--events'],
     }
   }

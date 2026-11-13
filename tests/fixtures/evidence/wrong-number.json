@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "deliverable": "deliverable.md",
+  "figures": [
+    {
+      "id": "F1",
+      "value": 43,
+      "command": "node sum.mjs data.csv revenue",
+      "display": ["42"]
+    }
+  ],
+  "claims": [
+    {
+      "id": "C1",
+      "text": "Revenue totals 42.",
+      "sources": ["F1", "data.csv:2", "https://example.com/revenue"]
+    }
+  ]
+}

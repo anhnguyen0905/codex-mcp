@@ -10,6 +10,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - The `run-ledger` helper and its tests record and summarize durable run outcomes.
 - The `run-ledger` skill and ledger calls in the full flow, fast path, and brainstorm.
 - The gate inventory and its staleness test document code, git, and test-shaped gates.
+- The profile router adds independent profile, evidence, and run-language switches with a profile shadow log.
+- The evidence checker and its seeded-error suite validate executable evidence manifests.
+- The conditional `profile-pilot` skill provides data-profile, evidence, and language rules.
+- Optional `STATE.md` profile/switch keys, ledger switch fields, and `summary --filter` support pilot evaluation.
+
+### Changed
+
+- `run-ledger summary` now rejects unknown arguments; command and preflight text were trimmed to keep the always-loaded byte budget.
 
 ## [0.33.0] - 2026-11-12
 

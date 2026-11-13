@@ -21,8 +21,11 @@ comma-separated; omit them when empty. Exit 0 means written, exit 2 means usage 
 error with nothing written, and exit 1 means I/O failure.
 
 ```sh
-node "${CLAUDE_PLUGIN_ROOT}/scripts/run-ledger.mjs" append --lane <lane> --project <abs-path> --run-id <id> --profile <profile> --domain <text> --request-file <path> --skills <a,b> --fix-rounds <n> --codex-tokens <n> --started <ISO> --owner-gates <n> --bypasses <a,b> --outcome <outcome>
+node "${CLAUDE_PLUGIN_ROOT}/scripts/run-ledger.mjs" append --lane <lane> --project <abs-path> --run-id <id> --profile <profile> --profile-mode <m> --evidence-mode <m> --language-mode <m> --domain <text> --request-file <path> --skills <a,b> --fix-rounds <n> --codex-tokens <n> --started <ISO> --owner-gates <n> --bypasses <a,b> --outcome <outcome>
 ```
+
+Modes come from STATE.md (`profileMode`, `evidenceMode`, `languageMode`); omit them only when STATE.md
+lacks these keys. The examples below show legacy/minimal runs whose STATE.md lacks these keys.
 
 Complete calls, one for each lane:
 

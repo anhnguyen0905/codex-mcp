@@ -8,9 +8,12 @@ const LANES = ['full', 'fast-path-analysis', 'fast-path-small', 'brainstorm']
 const PROFILES = ['code', 'data', 'design', 'plan', 'content', 'mixed']
 const LANGUAGES = ['vi', 'en', 'mixed']
 const OUTCOMES = ['accepted', 'rejected', 'parked', 'delivered', 'done', 'escalated', 'failed', 'abandoned']
+const MODES = ['off', 'shadow', 'enforce']
+const LANGUAGE_MODES = ['off', 'on']
 const APPEND_FLAGS = new Set([
   'lane', 'project', 'run-id', 'profile', 'domain', 'request', 'request-file', 'language',
   'skills', 'fix-rounds', 'codex-tokens', 'started', 'owner-gates', 'bypasses', 'outcome',
+  'profile-mode', 'evidence-mode', 'language-mode',
 ])
 const ISO = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value))
 const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
@@ -18,6 +21,7 @@ const validStarted = (value, now = Date.now()) => ISO_DATE_TIME.test(value)
   && Number.isFinite(Date.parse(value)) && Date.parse(value) <= now + 5 * 60 * 1000
 const nonNegativeInt = (value) => Number.isInteger(value) && value >= 0
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+const isString = (value) => typeof value === 'string'
 const VIETNAMESE_LETTER_PATTERN = new RegExp([
   '[đăâêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồ',
   'ốổỗộ',
@@ -81,12 +85,22 @@ export function parseAppendArgs(argv) {
   }
   if (!validStarted(values.started)) throw new Error('--started must be a recent ISO date-time')
   if (values.language !== undefined && !LANGUAGES.includes(values.language)) throw new Error('invalid language')
+  if (values.profilemode !== undefined && !MODES.includes(values.profilemode)) throw new Error('invalid profile mode')
+  if (values.evidencemode !== undefined && !MODES.includes(values.evidencemode)) {
+    throw new Error('invalid evidence mode')
+  }
+  if (values.languagemode !== undefined && !LANGUAGE_MODES.includes(values.languagemode)) {
+    throw new Error('invalid language mode')
+  }
   return {
     ...values,
     fixRounds: Number(values.fixrounds),
     ownerGates: Number(values.ownergates),
     codexTokens: values.codextokens === undefined ? null : Number(values.codextokens),
     runId: values.runid,
+    profileMode: values.profilemode,
+    evidenceMode: values.evidencemode,
+    languageMode: values.languagemode,
   }
 }
 
@@ -129,6 +143,9 @@ export function buildLine(input, now = new Date()) {
     ownerGates: input.ownerGates,
     bypasses: input.bypasses ?? [],
     outcome: input.outcome,
+    ...(input.profileMode === undefined ? {} : { profileMode: input.profileMode }),
+    ...(input.evidenceMode === undefined ? {} : { evidenceMode: input.evidenceMode }),
+    ...(input.languageMode === undefined ? {} : { languageMode: input.languageMode }),
   }
 }
 
@@ -150,11 +167,16 @@ const validLine = (line) => isRecord(line) && line.schemaVersion === 1 && ISO(li
   && typeof line.domain === 'string' && line.domain.length > 0 && line.domain.length <= 80
   && LANGUAGES.includes(line.language) && ['detected', 'override'].includes(line.languageSource)
   && typeof line.request === 'string' && line.request.length <= 4000 && Array.isArray(line.skills)
-  && line.skills.every((value) => typeof value === 'string') && nonNegativeInt(line.fixRounds)
+  && line.skills.every(isString)
+  && nonNegativeInt(line.fixRounds)
   && (line.codexTokens === null || nonNegativeInt(line.codexTokens))
-  && typeof line.wallClockMinutes === 'number' && Number.isFinite(line.wallClockMinutes) && line.wallClockMinutes >= 0
+  && typeof line.wallClockMinutes === 'number' && Number.isFinite(line.wallClockMinutes)
+  && line.wallClockMinutes >= 0
   && nonNegativeInt(line.ownerGates) && Array.isArray(line.bypasses)
   && line.bypasses.every((value) => typeof value === 'string') && OUTCOMES.includes(line.outcome)
+  && (line.profileMode === undefined || MODES.includes(line.profileMode))
+  && (line.evidenceMode === undefined || MODES.includes(line.evidenceMode))
+  && (line.languageMode === undefined || LANGUAGE_MODES.includes(line.languageMode))
 
 const emptySummary = () => ({
   total: 0,
@@ -164,8 +186,30 @@ const emptySummary = () => ({
   malformed: 0,
 })
 
+const FILTER_ENUMS = {
+  lane: LANES,
+  profile: PROFILES,
+  language: LANGUAGES,
+  outcome: OUTCOMES,
+  profileMode: MODES,
+  evidenceMode: MODES,
+  languageMode: LANGUAGE_MODES,
+}
+
+const validateFilters = (filters) => filters.map((filter) => {
+  const [key, value, ...extra] = filter.split('=')
+  if (extra.length || !Object.hasOwn(FILTER_ENUMS, key)) throw new Error(`invalid filter key: ${key || ''}`)
+  if (!FILTER_ENUMS[key].includes(value)) throw new Error(`invalid filter value for ${key}: ${value ?? ''}`)
+  return { key, value }
+})
+
 /** Summarize valid ledger lines and count malformed lines. */
-export function summarize(ledgerPath = process.env.CODEX_MCP_RUN_LEDGER ?? DEFAULT_LEDGER, project) {
+export function summarize(
+  ledgerPath = process.env.CODEX_MCP_RUN_LEDGER ?? DEFAULT_LEDGER,
+  project,
+  filters = [],
+) {
+  const parsedFilters = validateFilters(filters)
   let content
   try {
     content = readFileSync(ledgerPath, 'utf8')
@@ -177,7 +221,10 @@ export function summarize(ledgerPath = process.env.CODEX_MCP_RUN_LEDGER ?? DEFAU
   const parsed = lines.map((line) => { try { return JSON.parse(line) } catch { return null } })
   const valid = parsed.filter((line) => validLine(line))
   const malformed = parsed.length - valid.length
-  const filtered = valid.filter((line) => !project || line.project === project)
+  const filtered = valid.filter((line) => {
+    if (project && line.project !== project) return false
+    return parsedFilters.every(({ key, value }) => (line[key] ?? 'off') === value)
+  })
   const counts = {}
   for (const line of filtered) {
     const key = `${line.profile} × ${line.language} × ${line.outcome}`
@@ -230,12 +277,25 @@ export function main(argv = process.argv.slice(2)) {
     }
     if (argv[0] === 'summary') {
       const json = argv.includes('--json')
-      const projectIndex = argv.indexOf('--project')
-      const project = projectIndex >= 0 ? argv[projectIndex + 1] : undefined
-      if (projectIndex >= 0 && (!project || !path.isAbsolute(project))) {
-        throw new Error('--project requires an absolute path')
+      let project
+      const filters = []
+      for (let index = 1; index < argv.length; index += 1) {
+        const flag = argv[index]
+        if (flag === '--json') continue
+        if (flag === '--project') {
+          project = argv[++index]
+          if (!project || !path.isAbsolute(project)) throw new Error('--project requires an absolute path')
+          continue
+        }
+        if (flag === '--filter') {
+          const filter = argv[++index]
+          if (!filter || filter.startsWith('--')) throw new Error('--filter requires key=value')
+          filters.push(filter)
+          continue
+        }
+        throw new Error(`unknown summary argument: ${flag}`)
       }
-      const result = summarize(undefined, project)
+      const result = summarize(undefined, project, filters)
       const output = json
         ? JSON.stringify(result) + '\n'
         : result.total ? formatSummary(result) : 'run-ledger: no runs recorded\n'

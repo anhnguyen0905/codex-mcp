@@ -14,12 +14,23 @@ import {
 describe('flow-state CLI parsing', () => {
   test.each([
     ['init defaults', ['init', '--baseline', 'base', '--known-red', 'none'],
-      { command: 'init', state: '.codex-flow/STATE.md', dirtyBaseline: undefined, executor: undefined }],
+      {
+        command: 'init', state: '.codex-flow/STATE.md', dirtyBaseline: undefined, executor: undefined,
+        profile: undefined, profileMode: undefined, evidenceMode: undefined, languageMode: undefined,
+        runLanguage: undefined,
+      }],
     ['init options', [
       'init', '--baseline', 'base', '--known-red', 'none', '--state', 's', '--dirty-baseline', 'dirty', '--executor',
       'claude',
     ],
       { command: 'init', state: 's', dirtyBaseline: 'dirty', executor: 'claude' }],
+    ['init profile options', [
+      'init', '--baseline', 'base', '--known-red', 'none', '--profile', 'data', '--profile-mode', 'shadow',
+      '--evidence-mode', 'enforce', '--language-mode', 'on', '--run-language', 'vi',
+    ], {
+      command: 'init', profile: 'data', profileMode: 'shadow', evidenceMode: 'enforce', languageMode: 'on',
+      runLanguage: 'vi',
+    }],
     ['approve defaults', ['approve', 'plan'],
       { command: 'approve', gate: 'plan', state: '.codex-flow/STATE.md', delta: false, dir: '.codex-flow' }],
     ['approve options', [

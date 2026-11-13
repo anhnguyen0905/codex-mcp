@@ -346,6 +346,13 @@ best-effort: report a non-zero exit and continue. Inspect aggregates with
 `node scripts/run-ledger.mjs summary [--project <abs path>] [--json]`. The
 [gate inventory](docs/gate-inventory.md) is Phase 0 of the multiscope roadmap accepted on 2026-11-13; analysis kept in the local brainstorm record.
 
+### Profile pilot
+
+The multiscope Phase 1 data-analysis pilot has independent profile, evidence, and run-language switches.
+Defaults preserve today's behaviour; shadow routing records its proposed gate replacements.
+See the [profile pilot procedure](docs/profile-pilot.md) for the manifest, checker, and pass bar.
+Compare switch cohorts with `node scripts/run-ledger.mjs summary --filter key=value`.
+
 Sandbox modes: `read-only`, `workspace-write` (default), `danger-full-access`. Default execution
 timeout is 60 min (`timeoutMs` caps at 2 h). Runs into the same `cwd` are serialized; different
 workspaces run in parallel.

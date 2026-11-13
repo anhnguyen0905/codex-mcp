@@ -1,4 +1,4 @@
-<!-- generated 2026-11-13T06:17:04.221Z from README.md, AGENTS.md, package.json -->
+<!-- generated 2026-11-13T09:28:17.236Z from README.md, AGENTS.md, package.json -->
 
 # Project context
 
@@ -26,7 +26,7 @@ TODO — who runs this and in what environment
 
 - Manifests: `package.json`
 - Entry point: `dist/index.js`
-- Published paths: `dist`, `scripts/tail-progress.mjs`, `scripts/doctor.mjs`, `scripts/startup-probe.mjs`, `scripts/npm-smoke.mjs`, `scripts/build-skills-index.mjs`, `scripts/sync-awesome-skills.mjs`, `scripts/skill-match.mjs` (+26 more)
+- Published paths: `dist`, `scripts/tail-progress.mjs`, `scripts/doctor.mjs`, `scripts/startup-probe.mjs`, `scripts/npm-smoke.mjs`, `scripts/build-skills-index.mjs`, `scripts/sync-awesome-skills.mjs`, `scripts/skill-match.mjs` (+28 more)
 
 <!-- owner-notes -->
 <!-- /owner-notes -->

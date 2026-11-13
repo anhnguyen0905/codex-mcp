@@ -15,6 +15,7 @@ import { afterAll, describe, expect, test, vi } from 'vitest'
 // @ts-expect-error — plain .mjs script, not part of the tsc build
 import {
   STATE_KEYS,
+  OPTIONAL_STATE_KEYS,
   PHASES,
   TASK_TRANSITIONS,
   TransitionRejectedError,
@@ -108,7 +109,8 @@ describe('STATE.md updates', () => {
 
     // Assert
     const parsedKeys = [...state.matchAll(/^- ([A-Za-z]+):/gm)].map((match) => match[1])
-    expect(parsedKeys).toEqual(STATE_KEYS)
+    const requiredKeys = STATE_KEYS.filter((key) => !OPTIONAL_STATE_KEYS.includes(key))
+    expect(parsedKeys).toEqual(requiredKeys)
     expect(state).toContain('- currentTask: T1\n- taskStage: executing\n- wave: -\n')
   })
 
@@ -823,7 +825,7 @@ describe('flow-state CLI', () => {
     stderr.mockRestore()
   })
 
-  test('initializes exactly the canonical 14-key state and refuses overwrite', async () => {
+  test('initializes exactly the canonical 19-key state and refuses overwrite', async () => {
     // Arrange
     const directory = makeTempDirectory('flow-state-init-')
     const controlDirectory = join(directory, '.codex-flow')
@@ -859,11 +861,110 @@ describe('flow-state CLI', () => {
       '- currentTask: -',
       '- taskStage: idle',
       '- wave: -',
+      '- profile: -',
+      '- profileMode: off',
+      '- evidenceMode: off',
+      '- languageMode: off',
+      '- runLanguage: -',
       '',
     ].join('\n'))
     expect(Object.keys(parseState(state))).toEqual(STATE_KEYS)
     expect(secondInit).toBe(1)
     expect(readFileSync(statePath, 'utf8')).toBe(state)
+  })
+
+  test('initializes optional profile and switch values from flags', async () => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-profile-init-')
+    mkdirSync(join(directory, '.codex-flow'))
+
+    // Act
+    const exitCode = await main([
+      'init', '--baseline', 'base', '--known-red', 'none', '--profile', 'data', '--profile-mode', 'shadow',
+      '--evidence-mode', 'enforce', '--language-mode', 'on', '--run-language', 'vi',
+    ], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(0)
+    expect(parseState(readFileSync(join(directory, '.codex-flow/STATE.md'), 'utf8'))).toMatchObject({
+      profile: 'data', profileMode: 'shadow', evidenceMode: 'enforce', languageMode: 'on', runLanguage: 'vi',
+    })
+  })
+
+  test.each([
+    ['profile', 'invalid'],
+    ['profile-mode', 'invalid'],
+    ['evidence-mode', 'invalid'],
+    ['language-mode', 'invalid'],
+    ['run-language', 'invalid'],
+  ])('rejects invalid %s during init without writing', async (flag, value) => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-profile-invalid-init-')
+    mkdirSync(join(directory, '.codex-flow'))
+    const statePath = join(directory, '.codex-flow/STATE.md')
+
+    // Act
+    const exitCode = await main([
+      'init', '--baseline', 'base', '--known-red', 'none', `--${flag}`, value,
+    ], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(2)
+    expect(() => readFileSync(statePath, 'utf8')).toThrow()
+  })
+
+  test('allows legacy state without optional keys and rejects invalid present values', () => {
+    // Arrange
+    const invalid = `${LEGACY_STATE}- profile: invalid\n`
+
+    // Act / Assert
+    expect(checkState(stateWithSelectors({ currentTask: '-', taskStage: 'idle', wave: '-' }))).toEqual([])
+    expect(checkState(invalid)).toContainEqual({
+      key: 'profile', reason: 'must be one of code|data|design|plan|content|mixed|-',
+    })
+  })
+
+  test('preserves optional profile keys across resume and non-linear gates', () => {
+    // Arrange
+    const optional = [
+      '', '- profile: data', '- profileMode: shadow', '- evidenceMode: enforce', '- languageMode: on',
+      '- runLanguage: vi',
+    ].join('\n')
+    const execution = `${stateAtPhase('execution')}${optional}`
+    const expected = {
+      profile: 'data', profileMode: 'shadow', evidenceMode: 'enforce', languageMode: 'on', runLanguage: 'vi',
+    }
+
+    // Act
+    const states = [
+      resumeState(execution, 'head'),
+      requirementDeltaState(execution, { at: AT }),
+      planDriftState(execution, { at: AT }),
+      improvementGateState(execution, { at: AT }),
+    ]
+
+    // Assert
+    for (const state of states) expect(parseState(state)).toMatchObject(expected)
+  })
+
+  test.each([
+    ['profile', 'invalid'],
+    ['profileMode', 'invalid'],
+    ['evidenceMode', 'invalid'],
+    ['languageMode', 'invalid'],
+    ['runLanguage', 'invalid'],
+  ])('rejects invalid optional %s values on set', async (key, value) => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-profile-set-')
+    const statePath = join(directory, 'STATE.md')
+    writeFileSync(statePath, LEGACY_STATE)
+
+    // Act
+    const update = main(['set', key, value, '--state', statePath], { cwd: directory })
+
+    // Assert
+    await expect(update).rejects.toThrow(`invalid ${key} value`)
+    expect(readFileSync(statePath, 'utf8')).toBe(LEGACY_STATE)
   })
 
   test.each([

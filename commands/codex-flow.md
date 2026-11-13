@@ -15,7 +15,7 @@ Each phase names plugin skills (`codex-flow:*`) to load via the Skill tool befor
 
 ## Phase 0 — Preflight (gate, do this FIRST)
 
-**Load skills first**: `codex-flow:preflight` (health gate, resume check, workspace baseline; it carries the detailed checklist for the steps below) plus `codex-flow:fast-path` at the gate and `codex-flow:executor-fallback` when an outage routes there.
+**Load skills first**: `codex-flow:preflight` plus `codex-flow:fast-path` at the gate and `codex-flow:executor-fallback` when an outage routes there.
 
 **Resume check** — if `.codex-flow/STATE.md` exists, treat it as an interrupted run and offer
 **resume** or **restart** per `codex-flow:preflight` Step 2 (resume authority, in-progress task
@@ -78,8 +78,7 @@ about any health failure, then proceed in the analysis lane; the small-change la
 flow require either `loggedIn: true` or an explicit Executor-fallback choice.
 
 On a fresh run, before baselining, when `.codex-flow/PROJECT.md` is absent generate it with
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/project-context.mjs" --generate` (if that helper is missing or
-exits non-zero, surface the error to the user and STOP), and ask the user to confirm or edit it in
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/project-context.mjs" --generate`, and ask the user to confirm or edit it in
 the Phase 1 interview. PROJECT.md is tracked, not run state: include it in the checkpoint and final
 commits and never archive it with the run; when it was created before baselining, list it as
 pre-existing in the `baseline-dirty.patch` manifest.
@@ -114,23 +113,29 @@ Then baseline the workspace per `codex-flow:preflight` Step 3 (in the project ro
 
 ## Fast-path gate — small and analysis-only tasks
 
-**Load skill**: `codex-flow:fast-path` — it carries this gate in full: the two lite lanes
-(analysis, small-change), the exclusions that force the full flow, each lane's workflow, the
-mechanical scope trip-wire, the `fastpath.log` record, and the escalation rule. Evaluate the gate
-here — after the resume check, before the `codex_health` call and before any control file is
-written — then follow that skill for the decision and the chosen lane's workflow.
+**Load skill**: `codex-flow:fast-path`. Evaluate the gate here — after the resume check, before the
+`codex_health` call and before any control file is written — then follow that skill for the decision
+and the chosen lane's workflow.
+
+**Profile router**: Full flow only (not fast-path lanes): after the Fast-path gate selects full flow
+and before baselining, classify the dominant deliverable (`code|data|design|plan|content|mixed`)
+and run `node "${CLAUDE_PLUGIN_ROOT}/scripts/profile-router.mjs" resolve --profile <p>
+--request-file <path> --run-id <report dir name>`. `<path>` is a temp file outside the
+workspace holding the user's task (e.g. via `mktemp`); `<report dir name>` is the session-start
+`<YYYYMMDD-HHMMSS>` used for step 4's report dir. Add its `initFlags` to flow-state's `init`. Load
+`codex-flow:profile-pilot` when `profileMode` is `enforce`, `evidenceMode` is not `off`, or
+`languageMode` is `on`; its rules replace the gates it names. On resume, do not re-run the router:
+read `profile`, `profileMode`, `evidenceMode`, `languageMode`, `runLanguage` from STATE.md (missing
+legacy keys mean `off` modes and `-` profile/runLanguage) and apply the same load rule.
 
 ## Executor fallback — Claude executes when Codex is unavailable
 
-**Load skill**: `codex-flow:executor-fallback` — it carries the outage triggers, the single
-AskUserQuestion switch (task boundary only, never silent), the STATE.md `executor` and
-Decision-log recording, Phase 4 and Phase 5 with Claude as executor (independent subagent review
-in place of `codex_review`, same 3-round cap), returning to Codex, and the small-change lane under
-fallback. Offer the fallback from that skill whenever a trigger fires.
+**Load skill**: `codex-flow:executor-fallback`. Offer the fallback from that skill whenever a
+trigger fires.
 
 ## Phase 1 — Interview (Claude)
 
-**Load skills first**: (if not already loaded this session) `codex-flow:interview-elicitation` (six question domains, stop condition) and `codex-flow:interview-ask-back` (5 Whys, example probing, hidden assumptions).
+**Load skills first**: (if not already loaded this session) `codex-flow:interview-elicitation` and `codex-flow:interview-ask-back`.
 
 Interview the user with AskUserQuestion per those skills. Keep asking until every acceptance criterion is verifiable, then write the Requirements Summary and get confirmation.
 
@@ -154,7 +159,7 @@ elicitation. When in doubt, ask.
 
 ## Phase 2 — Plan & Architecture (Claude)
 
-**Load skills first**: (if not already loaded this session) `codex-flow:plan-research-first` (search existing solutions before designing), `codex-flow:plan-architecture` (convention discovery, option trade-offs, PLAN.md structure), `codex-flow:skill-selection` (pick domain skills from the local skill index), `codex-flow:context-discipline` (Explore subagents, boundary compaction, tiered AGENTS.md), and `codex-flow:session-report` (report templates and PIC rules).
+**Load skills first**: (if not already loaded this session) `codex-flow:plan-research-first`, `codex-flow:plan-architecture`, `codex-flow:skill-selection`, `codex-flow:context-discipline`, and `codex-flow:session-report`.
 
 1. Read `.codex-flow/PROJECT.md` first (the executor under inverted roles reads it too), then explore the codebase through Explore subagents per `codex-flow:context-discipline`, requiring conclusions with paths and line anchors.
 2. **Select domain skills from the local index** by running `codex-flow:skill-selection` end to
@@ -195,7 +200,7 @@ elicitation. When in doubt, ask.
 
 ## Phase 3 — Backlog (Claude)
 
-**Load skill first**: `codex-flow:plan-backlog` (slicing rules, dependency ordering, sanity checks).
+**Load skill first**: `codex-flow:plan-backlog`.
 
 Immediately when the user grants backlog approval below, run `flow-state approve backlog --checkpoint-commits <yes|no> --execution-mode "<mode>"` then `flow-state advance` before entering Phase 4.
 
@@ -274,8 +279,7 @@ For each task in dependency order (sequential mode):
    `- Session: launching (base: <short sha>)`. Make the Status write and its transition line with
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" task T<n> in-progress`, and run `flow-state set currentTask T<n>` and
    `flow-state set taskStage launching`; once the call is dispatched, run `flow-state set taskStage executing`.
-   Both helper calls in this step are required. Complete all of these writes before calling
-   `mcp__codex__codex_execute` with:
+   Complete all of these writes before calling `mcp__codex__codex_execute` with:
    - `prompt`: start with the single header line `Run position: phase execution — task T<n> <title> — next gate: <gate>`, then the opener "Read .codex-flow/CONTEXT-T<n>.md for context (a budgeted slice of PLAN.md; its header records the generation anchor, and blocks marked [verify] must be re-checked against the current code before relying on them)." Then append "Implement task T<n> exactly as specified below, and only this task. Run its acceptance checks before finishing." + the standards, testing, and language blocks from the loaded skills (or the `exec-deliverable` blocks for a non-code task) + a distilled ≤ 30-line rules block per skill in the task's `Skills:` field (see `codex-flow:skill-selection` Step 6 — never paste a whole SKILL.md); do not append the full task text because the slice already embeds it as mandatory content.
    - `cwd`: absolute path of the project root
    - `sandbox`: `workspace-write` by default; `read-only` for investigation-only tasks; `danger-full-access` ONLY when the task genuinely needs network or a global install, and tell the user first.
