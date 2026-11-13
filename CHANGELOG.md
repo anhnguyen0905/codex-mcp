@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- The `run-ledger` helper and its tests record and summarize durable run outcomes.
+- The `run-ledger` skill and ledger calls in the full flow, fast path, and brainstorm.
+- The gate inventory and its staleness test document code, git, and test-shaped gates.
+
 ## [0.33.0] - 2026-11-12
 
 ### Added

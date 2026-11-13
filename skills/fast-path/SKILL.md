@@ -61,6 +61,7 @@ the oversized diff in-lane and do not re-argue eligibility after the fact.
 `<ISO 8601> <analysis|small-change> <one-line task> session=<sessionId or -> outcome=<delivered|done|escalated|failed>`.
 The recorded sessionId is what later `codex_continue` fix rounds attach to; the log is the only
 durable trace a fast-path run leaves, so write it even on escalation or failure.
+Append the matching `fast-path-analysis` or `fast-path-small` run-ledger line at the terminal outcome.
 
 **Escalation rule**: the moment fast-path work reveals the task is bigger than its lane — more
 files than declared (the trip-wire), architectural impact, hidden ambiguity — STOP, log

@@ -336,6 +336,16 @@ incomplete roll-up is visible instead of silent. Note that the shipped `COST_TAB
 `CODEX_MCP_PRICING` does not fill it, so any run that reported usage counts as unpriced:
 `completeness.complete` is never `true` for usage-bearing entries in this release.
 
+### Run ledger & gate inventory
+
+The run ledger is append-only JSONL at `~/.codex-mcp/run-ledger.jsonl`; set
+`CODEX_MCP_RUN_LEDGER` to override the path. Each record captures the lane, project, run ID, profile,
+domain, language, request, selected skills, fix rounds, Codex tokens, wall-clock minutes, owner gates,
+bypasses, and outcome. Requests are redacted and capped at 4,000 characters. Ledger writes are
+best-effort: report a non-zero exit and continue. Inspect aggregates with
+`node scripts/run-ledger.mjs summary [--project <abs path>] [--json]`. The
+[gate inventory](docs/gate-inventory.md) is Phase 0 of the multiscope roadmap accepted on 2026-11-13; analysis kept in the local brainstorm record.
+
 Sandbox modes: `read-only`, `workspace-write` (default), `danger-full-access`. Default execution
 timeout is 60 min (`timeoutMs` caps at 2 h). Runs into the same `cwd` are serialized; different
 workspaces run in parallel.

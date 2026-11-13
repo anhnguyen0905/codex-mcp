@@ -12,15 +12,16 @@ This is a thinking workflow, not a shipping workflow. Claude (Fable) owns the an
 code. Every Codex call runs `sandbox: read-only`. The deliverable is `ANALYSIS.md`; the user
 ratifies it before anything is handed off.
 
-**Load skills first**: `codex-flow:brainstorm-debate`, `codex-flow:brainstorm-lenses`, and
-`codex-flow:brainstorm-argumentation`. If any skill cannot be loaded, STOP and tell the user to
-reinstall the codex-flow plugin; never improvise the protocol, lenses, or argumentation from memory.
+**Load skills first**: `codex-flow:brainstorm-debate`, `codex-flow:brainstorm-lenses`,
+`codex-flow:brainstorm-argumentation`, and `codex-flow:run-ledger`. If any skill cannot be
+loaded, STOP and tell the user to reinstall the codex-flow plugin; never improvise the protocol,
+lenses, or argumentation from memory.
 
 **Run dir**: `.codex-flow/brainstorm/<YYYYMMDD-HHMMSS>/` from the session-start local time.
 Create the parent directories `.codex-flow/brainstorm/` and `.codex-flow/notes/` when missing; create
 the leaf without `-p` on the leaf. When it already exists, append `-2`, `-3`, … and never reuse a
 directory. This run writes only `FRAME.md`, `MAP.md`, `REASON.md` (append-only), and `ANALYSIS.md`
-in that dir plus one line in `.codex-flow/notes/brainstorm.log`. Nothing else in the workspace
+in that dir plus one line in `.codex-flow/notes/brainstorm.log` and one run-ledger line outside the workspace. Nothing else in the workspace
 changes.
 
 ## Frame — understand the question (Claude)
@@ -118,12 +119,12 @@ changes.
 3. Append this line to `.codex-flow/notes/brainstorm.log` verbatim:
    `<ISO 8601> <one-line topic> rounds=<n> flips=<n> blockers=<n> feasibility=<verdict> mode=<two-model|single-model> status=<accepted|rejected|parked> dir=<run dir>`.
    Set `rounds` to Reason rounds run, `flips` to recommendation changes, `blockers` to BLOCKER
-   claims raised, and `feasibility` to the verdict or `skipped`. Then deliver a summary of the
+   claims raised, and `feasibility` to the verdict or `skipped`. Then append one `brainstorm` run-ledger line per `codex-flow:run-ledger`. Then deliver a summary of the
    analysis, claims, feasibility, open questions, mode, and run dir.
 
 Rules:
 - Never write, edit, or generate implementation code in this workflow; write only the four run-dir
-  artifacts and the log line.
+  artifacts, the log line, and the run-ledger line outside the workspace.
 - For every Astra turn, save the raw answer verbatim to a temporary file outside the workspace
   created with `mktemp`; parse it with `debate-parse.mjs --kind <kind> … --file <tmp path>` per
   the skill, append the raw answer verbatim to the phase file (`MAP.md` under `## Astra map`,

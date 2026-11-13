@@ -30,6 +30,7 @@ const INTERVIEW_ELICITATION_PATH = path.join(
   'SKILL.md',
 )
 const FAST_PATH_PATH = path.join(REPO_ROOT, 'skills', 'fast-path', 'SKILL.md')
+const RUN_LEDGER_PATH = path.join(REPO_ROOT, 'skills', 'run-ledger', 'SKILL.md')
 const JEV_ASSIST_PATH = path.join(REPO_ROOT, 'skills', 'jev-assist', 'SKILL.md')
 const EXECUTOR_FALLBACK_PATH = path.join(REPO_ROOT, 'skills', 'executor-fallback', 'SKILL.md')
 const SESSION_REPORT_PATH = path.join(REPO_ROOT, 'skills', 'session-report', 'SKILL.md')
@@ -100,8 +101,9 @@ const COMMAND_MAX_BYTES = 44_000
 //   Phase 4: 23 253 (TS as the language skill) · Phase 5: 26 581
 // Largest = Phase 2 (42 129) rounded up to the next 4 000 → 44 000, under the 48 000 cap.
 const PHASE_SKILLS_MAX_BYTES = 44_000
-// Growth guard, not a diet target: measured command + the 20 flow skills = 160 234 bytes here.
-const FLOW_TOTAL_MAX_BYTES = 162_000
+// Growth guard, not a diet target: measured command + the 21 flow skills = 162 943 bytes here
+// (run-ledger added in Phase 0 of the multiscope roadmap).
+const FLOW_TOTAL_MAX_BYTES = 164_000
 // C7 phase → skills map. The union of these lists is the "flow skills" set FLOW_TOTAL_MAX_BYTES
 // covers; Phase 4 counts exactly one exec-<lang> skill (TypeScript, this project's language).
 const PHASE_SKILL_MAP: ReadonlyArray<{ phase: string, skills: readonly string[] }> = [
@@ -138,6 +140,7 @@ const PHASE_SKILL_MAP: ReadonlyArray<{ phase: string, skills: readonly string[] 
       'review-dual',
       'context-discipline',
       'session-report',
+      'run-ledger',
     ],
   },
 ]
@@ -634,6 +637,81 @@ describe('skill frontmatter contracts', () => {
   )
 })
 
+describe('run-ledger wiring', () => {
+  test('pins the ledger skill format and best-effort rule', () => {
+    // Arrange
+    const skill = readText(RUN_LEDGER_PATH)
+
+    // Act
+    const fields = parseFrontmatterFields(skill)
+
+    // Assert
+    expect(fields.map(({ key }) => key)).toEqual(['name', 'description'])
+    expect(fields[0].value).toBe('run-ledger')
+    expect(skill).toContain(
+      'The ledger is best-effort: report a non-zero exit to the user and continue; never stop a run for it.',
+    )
+    expect(Buffer.byteLength(skill)).toBeLessThanOrEqual(6_000)
+  })
+
+  test('pins the helper-rule exception and review-phase ledger skill', () => {
+    // Arrange
+    const command = readText(COMMAND_PATH)
+
+    // Act
+    const phaseFour = extractPhaseSection(command, 4)
+    const phaseFive = extractPhaseSection(command, 5)
+
+    // Assert
+    expect(command).toContain(
+      'except `run-ledger.mjs`, which is best-effort per `codex-flow:run-ledger`',
+    )
+    expect(extractLoadSkillsText(phaseFour, 4)).not.toContain('`codex-flow:run-ledger`')
+    expect(extractLoadSkillsText(phaseFive, 5)).toContain('`codex-flow:run-ledger`')
+    expect(command).toContain(
+      'Before the final completion `flow-state advance`, append one ledger line per `codex-flow:run-ledger`.',
+    )
+  })
+
+  test('pins fast-path ledger calls for both lanes', () => {
+    // Arrange
+    const skill = readText(FAST_PATH_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const laneRule =
+      'Append the matching `fast-path-analysis` or `fast-path-small` run-ledger line at the terminal outcome.'
+
+    // Assert
+    expect(skill).toContain(laneRule)
+  })
+
+  test('pins the brainstorm ledger call and expanded artifact rule', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const rules = command.slice(command.indexOf('Rules:'))
+
+    // Assert
+    expect(command).toContain('one run-ledger line outside the workspace')
+    expect(rules).toContain('artifacts, the log line, and the run-ledger line outside the workspace')
+  })
+
+  test('pins the brainstorm ledger skill and Decide-step append instruction', () => {
+    // Arrange
+    const command = readText(BRAINSTORM_COMMAND_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const decide = command.slice(command.indexOf('## Decide —'))
+
+    // Assert
+    expect(command).toContain('`codex-flow:brainstorm-argumentation`, and `codex-flow:run-ledger`.')
+    expect(decide).toContain(
+      'Then append one `brainstorm` run-ledger line per `codex-flow:run-ledger`.',
+    )
+  })
+})
+
 describe('T7 helper call-site inventory', () => {
   const flowSkillNames = [...new Set(PHASE_SKILL_MAP.flatMap(({ skills }) => skills))]
   const OPT_IN_SKILLS = ['jev-assist'] as const
@@ -650,8 +728,13 @@ describe('T7 helper call-site inventory', () => {
         expect(text).toContain('**Helper rule**')
         continue
       }
+      const bestEffortHelpers = filePath === RUN_LEDGER_PATH
+        ? new Set(['run-ledger.mjs'])
+        : new Set<string>()
       const occurrences = new Set(
-        [...text.matchAll(/scripts\/([a-z0-9-]+\.mjs)/g)].map((match) => match[1]),
+        [...text.matchAll(/scripts\/([a-z0-9-]+\.mjs)/g)]
+          .map((match) => match[1])
+          .filter((name) => !bestEffortHelpers.has(name)),
       )
       if (occurrences.size === 0) continue
       const helperLines = text.split('\n').filter((line) => line.startsWith('**Helpers**:'))
@@ -2595,7 +2678,7 @@ describe('per-run overhead byte budgets (R8.2, C7 as amended)', () => {
     const bytes = phaseSetBytes(flowSkills) + byteLength(COMMAND_PATH)
 
     // Assert
-    expect(flowSkills).toHaveLength(20)
+    expect(flowSkills).toHaveLength(21)
     expect(
       bytes <= FLOW_TOTAL_MAX_BYTES
         ? []
@@ -3112,7 +3195,7 @@ describe('brainstorm command contract (five thinking phases)', () => {
 
     expect(command).toContain(
       '**Load skills first**: `codex-flow:brainstorm-debate`, ' +
-        '`codex-flow:brainstorm-lenses`, and `codex-flow:brainstorm-argumentation`',
+        '`codex-flow:brainstorm-lenses`, `codex-flow:brainstorm-argumentation`, and `codex-flow:run-ledger`',
     )
   })
 

@@ -89,6 +89,7 @@
     "scripts/skill-brief.mjs",
     "scripts/skill-lint.mjs",
     "scripts/session-cost.mjs",
+    "scripts/run-ledger.mjs",
     "scripts/debate-parse.mjs",
     "scripts/smoke-e2e.mjs",
     "skills",

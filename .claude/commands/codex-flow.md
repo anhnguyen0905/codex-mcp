@@ -11,7 +11,7 @@ Follow the six phases (0–5) strictly. Do NOT write implementation code yoursel
 
 Each phase names plugin skills (`codex-flow:*`) to load via the Skill tool before starting the phase — they carry the detailed checklists this command routes to. If a named skill cannot be loaded, STOP and tell the user to reinstall the codex-flow plugin; never improvise a phase or a lane from memory.
 
-**Helper rule** (every `scripts/*.mjs` call below): If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand.
+**Helper rule** (every `scripts/*.mjs` call below): If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin (its scripts/ directory is required); if it is present but exits non-zero, surface the error to the user and STOP. Never edit control files by hand. (except `run-ledger.mjs`, which is best-effort per `codex-flow:run-ledger`.)
 
 ## Phase 0 — Preflight (gate, do this FIRST)
 
@@ -313,7 +313,7 @@ For each task in dependency order (sequential mode):
 
 ## Phase 5 — Review (Claude, per task + final)
 
-**Load skills first**: (if not already loaded this session) `codex-flow:review-conformance` (requirement/plan/structure conformance — check FIRST), `codex-flow:review-quality` (correctness hazards, silent failures, test quality), `codex-flow:review-security` (mandatory when the diff touches auth, input, queries, files, or secrets), `codex-flow:review-feedback` (severity levels + codex_continue format), `codex-flow:review-dual` (dual review, comparison protocol, improvements ledger + decision gate), `codex-flow:context-discipline` (no-raw-read, task-boundary compaction), and `codex-flow:session-report` (templates for `tasks.md`, `reviews.md`, `cost.md`, `SUMMARY.md`).
+**Load skills first**: (if not already loaded this session) `codex-flow:review-conformance` (requirement/plan/structure conformance — check FIRST), `codex-flow:review-quality` (correctness hazards, silent failures, test quality), `codex-flow:review-security` (mandatory when the diff touches auth, input, queries, files, or secrets), `codex-flow:review-feedback` (severity levels + codex_continue format), `codex-flow:review-dual` (dual review, comparison protocol, improvements ledger + decision gate), `codex-flow:context-discipline` (no-raw-read, task-boundary compaction), `codex-flow:session-report` (templates for `tasks.md`, `reviews.md`, `cost.md`, `SUMMARY.md`), and `codex-flow:run-ledger`.
 
 At the Phase 4 → Phase 5 boundary, `phase` stays `execution`. Sequential mode: set `taskStage` to
 `reviewing` with `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" set taskStage reviewing`.
@@ -439,7 +439,7 @@ in step 8, after the last task.
    Run the impact analysis, the coverage lint with `--plan .codex-flow/PLAN.md`, and backlog sanity
    checks, then get backlog re-approval;
    only afterward run `flow-state approve backlog` then `flow-state advance` before scheduling the new tasks, which run
-   through the normal Phase 4 → Phase 5 loop.
+   through the normal Phase 4 → Phase 5 loop. Before the final completion `flow-state advance`, append one ledger line per `codex-flow:run-ledger`.
    After the improvement decision gate has fully resolved — all approved improvement tasks have
    been executed and reviewed, or no improvements are pending — and just before delivering the
    final summary, generate `cost.md` from the project root per `codex-flow:session-report`. Read

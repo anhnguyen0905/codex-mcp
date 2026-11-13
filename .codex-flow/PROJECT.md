@@ -1,10 +1,10 @@
-<!-- generated 2026-11-10T15:47:04.676Z from README.md, AGENTS.md, package.json -->
+<!-- generated 2026-11-13T06:17:04.221Z from README.md, AGENTS.md, package.json -->
 
 # Project context
 
 ## What it is
 
-- Package: `@anhnguyen0905/codex-mcp` v0.28.0
+- Package: `@anhnguyen0905/codex-mcp` v0.33.0
 - Manifest description: MCP server bridging Claude Code and OpenAI Codex CLI for plan-execute-review workflows
 
 A Claude Code plugin and MCP server that runs a disciplined **plan → execute → review** loop:
@@ -26,7 +26,7 @@ TODO — who runs this and in what environment
 
 - Manifests: `package.json`
 - Entry point: `dist/index.js`
-- Published paths: `dist`, `scripts/tail-progress.mjs`, `scripts/doctor.mjs`, `scripts/startup-probe.mjs`, `scripts/npm-smoke.mjs`, `scripts/build-skills-index.mjs`, `scripts/sync-awesome-skills.mjs`, `scripts/skill-match.mjs` (+19 more)
+- Published paths: `dist`, `scripts/tail-progress.mjs`, `scripts/doctor.mjs`, `scripts/startup-probe.mjs`, `scripts/npm-smoke.mjs`, `scripts/build-skills-index.mjs`, `scripts/sync-awesome-skills.mjs`, `scripts/skill-match.mjs` (+26 more)
 
 <!-- owner-notes -->
 <!-- /owner-notes -->
