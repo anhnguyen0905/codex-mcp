@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.37.1] - 2026-11-15
+
+### Fixed
+
+- `scripts/data-guard.mjs`, `scripts/quality-eval.mjs` and `scripts/quality-grade.mjs` are now in the published package, so every npm script resolves in an installed tree (the CI pack smoke failed on 0.37.0).
+
 ## [0.37.0] - 2026-11-15
 
 ### Added

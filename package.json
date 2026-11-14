@@ -1,6 +1,6 @@
 {
   "name": "@anhnguyen0905/codex-mcp",
-  "version": "0.37.0",
+  "version": "0.37.1",
   "description": "MCP server bridging Claude Code and OpenAI Codex CLI for plan-execute-review workflows",
   "main": "dist/index.js",
   "repository": {
@@ -96,6 +96,9 @@
     "scripts/session-cost.mjs",
     "scripts/run-ledger.mjs",
     "scripts/language-detect.mjs",
+    "scripts/quality-grade.mjs",
+    "scripts/quality-eval.mjs",
+    "scripts/data-guard.mjs",
     "scripts/profile-router.mjs",
     "scripts/evidence-check.mjs",
     "scripts/language-terms.mjs",
