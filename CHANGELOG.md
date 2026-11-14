@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- `evidence-check.mjs` runs figure and table commands with `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8` (operator values still win), so Python commands that read or print non-ASCII text, such as Vietnamese segment names, give the same result on Windows as on macOS/Linux.
+
 ## [0.36.0] - 2026-11-14
 
 ### Added

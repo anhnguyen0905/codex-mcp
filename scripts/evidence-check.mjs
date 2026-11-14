@@ -7,6 +7,7 @@ import { parseAnchors, parseTables, scanNumberTokens, stripAnchoredRegions } fro
 const MAX_BUFFER = 64 * 1024
 const DEFAULT_TIMEOUT = 120000
 const URL_PATTERN = /^https?:\/\//i
+const UTF8_COMMAND_ENV = Object.freeze({ PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' })
 
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -165,6 +166,7 @@ const commandResult = (figure, manifestDir, run) => {
   try {
     return { timeout, result: run(figure.command, {
       shell: true, cwd: manifestDir, timeout, maxBuffer: MAX_BUFFER, encoding: 'utf8',
+      env: { ...UTF8_COMMAND_ENV, ...process.env },
     }) }
   } catch (error) {
     return { timeout, result: { status: null, error } }

@@ -465,6 +465,70 @@ describe('evidence checker seeded suite', () => {
     expect(checkManifest(manifest).findings).toContainEqual(expect.objectContaining({ check: 'table-mismatch' }))
   })
 
+  it('figure and table commands run with UTF-8 Python defaults', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-utf8-env-', {
+      schemaVersion: 2, deliverable: 'deliverable.md',
+      figures: [{ id: 'F1', value: 1, command: 'node -e "console.log(1)"' }],
+      tables: [{ id: 'T1', command: "node -e \"console.log('a,b\\n1,2')\"" }], claims: [],
+    })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), '1<!--F1-->\nCaption <!--T1-->\n| A | B |\n| --- | --- |\n| 1 | 2 |')
+    const run = vi.fn((command: string) => ({
+      status: 0, stdout: command.includes('console.log(1)') ? '1\n' : 'a,b\n1,2\n', stderr: '',
+    }))
+
+    // Act
+    const result = checkManifest(manifest, { run })
+
+    // Assert
+    expect(result).toMatchObject({ status: 'pass', findings: [] })
+    expect(run).toHaveBeenCalledTimes(2)
+    for (const call of run.mock.calls) {
+      expect(call[1].env).toMatchObject({ PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', PATH: process.env.PATH })
+    }
+  })
+
+  it('an operator-set PYTHONUTF8 is not overridden', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-utf8-operator-', {
+      schemaVersion: 2, deliverable: 'deliverable.md',
+      figures: [{ id: 'F1', value: 1, command: 'node -e "console.log(1)"' }], claims: [],
+    })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), '1<!--F1-->')
+    const run = vi.fn(() => ({ status: 0, stdout: '1\n', stderr: '' }))
+    const previous = process.env.PYTHONUTF8
+    process.env.PYTHONUTF8 = '0'
+
+    try {
+      // Act
+      checkManifest(manifest, { run })
+
+      // Assert
+      expect(run.mock.calls[0][1].env).toMatchObject({ PYTHONUTF8: '0', PYTHONIOENCODING: 'utf-8' })
+    } finally {
+      if (previous === undefined) delete process.env.PYTHONUTF8
+      else process.env.PYTHONUTF8 = previous
+    }
+  })
+
+  it.skipIf(spawnSync('python3', ['--version'], { stdio: 'ignore' }).status !== 0)('a python figure command reads UTF-8 text regardless of locale', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-utf8-python-', {
+      schemaVersion: 2, deliverable: 'deliverable.md',
+      figures: [{
+        id: 'F1', value: 1,
+        command: "python3 -c \"import csv; rows=list(csv.reader(open('t.csv'))); print(sum(1 for r in rows if r[0]=='Khác'))\"",
+      }], claims: [],
+    }, { 't.csv': 'Khác,1\n' })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), '1<!--F1-->')
+
+    // Act
+    const result = checkManifest(manifest)
+
+    // Assert
+    expect(result).toMatchObject({ status: 'pass', findings: [] })
+  })
+
   it('does not scan numeric cells in a verified table and marks an uncaptained table unchecked', () => {
     // Arrange
     const manifest = tempManifest('evidence-table-clean-', {
