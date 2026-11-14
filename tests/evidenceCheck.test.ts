@@ -44,7 +44,7 @@ describe('evidence checker seeded suite', () => {
     ['wrong-number.json', 'figure-mismatch'],
     ['unsourced.json', 'claim-unsourced'],
     ['broken.json', 'figure-command-failed'],
-    ['undeclared.json', 'undeclared-number'],
+    ['undeclared.json', 'unanchored-number'],
   ])('catches the defect in %s', (manifest, check) => {
     // Arrange
     const args = ['--manifest', fixture(manifest), '--json']
@@ -94,7 +94,7 @@ describe('evidence checker seeded suite', () => {
   it('reports a real timeout without treating it as a command failure', () => {
     // Arrange
     const manifest = tempManifest('evidence-timeout-', {
-      schemaVersion: 1,
+      schemaVersion: 2,
       deliverable: 'deliverable.md',
       figures: [{ id: 'F1', value: 1, command: 'node slow.mjs', timeoutMs: 100 }],
       claims: [],
@@ -108,7 +108,7 @@ describe('evidence checker seeded suite', () => {
   it('reports ENOBUFS as a command failure instead of a timeout', () => {
     // Arrange
     const manifest = tempManifest('evidence-overflow-', {
-      schemaVersion: 1,
+      schemaVersion: 2,
       deliverable: 'deliverable.md',
       figures: [{ id: 'F1', value: 1, command: 'node noisy.mjs' }],
       claims: [],
@@ -128,7 +128,7 @@ describe('evidence checker seeded suite', () => {
     writeFileSync(path.join(cwd, 'deliverable.md'), 'No figures.\n')
     const manifest = path.join(cwd, 'manifest.json')
     writeFileSync(manifest, JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       deliverable: 'deliverable.md',
       figures: [{ id: 'F1', value: 1, command: 'node print.mjs' }],
       claims: [],
@@ -150,10 +150,10 @@ describe('evidence checker seeded suite', () => {
   it('accepts values inside the default and explicit tolerance', () => {
     // Arrange
     const cwd = mkdtempSync(path.join(os.tmpdir(), 'evidence-tolerance-'))
-    writeFileSync(path.join(cwd, 'deliverable.md'), 'Values 12.30 and 42.\n')
+    writeFileSync(path.join(cwd, 'deliverable.md'), 'Values 12.30<!--F1--> and 42<!--F2-->.\n')
     const manifest = path.join(cwd, 'manifest.json')
     writeFileSync(manifest, JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       deliverable: 'deliverable.md',
       figures: [
         { id: 'F1', value: '12.30', command: 'node precise.mjs' },
@@ -173,12 +173,12 @@ describe('evidence checker seeded suite', () => {
   it('uses numeric value precision instead of display precision for tolerance', () => {
     // Arrange
     const manifest = tempManifest('evidence-display-tolerance-', {
-      schemaVersion: 1,
+      schemaVersion: 2,
       deliverable: 'deliverable.md',
       figures: [{ id: 'F1', value: 42, display: ['42.0'], command: 'node value.mjs' }],
       claims: [],
     })
-    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), 'The value is 42.0.\n')
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), 'The value is 42.0<!--F1-->.\n')
     const run = vi.fn(() => ({ status: 0, stdout: '42.4\n', stderr: '' }))
     // Act
     const result = checkManifest(manifest, { run })
@@ -189,7 +189,7 @@ describe('evidence checker seeded suite', () => {
   it('uses string value precision when the written value is decimal', () => {
     // Arrange
     const manifest = tempManifest('evidence-display-tolerance-string-', {
-      schemaVersion: 1,
+      schemaVersion: 2,
       deliverable: 'deliverable.md',
       figures: [{ id: 'F1', value: '42.0', display: ['42.0'], command: 'node value.mjs' }],
       claims: [],
@@ -287,7 +287,7 @@ describe('evidence checker seeded suite', () => {
   it('reports missing files and lines beyond EOF as source-missing', () => {
     // Arrange
     const manifest = tempManifest('evidence-source-missing-', {
-      schemaVersion: 1,
+      schemaVersion: 2,
       deliverable: 'deliverable.md',
       figures: [{ id: 'F1', value: 1, command: 'node sum.mjs' }],
       claims: [{ id: 'C1', text: 'A claim', sources: ['missing.csv:1', 'source.csv:3'] }],
@@ -302,7 +302,7 @@ describe('evidence checker seeded suite', () => {
   it('reports a source that names an undeclared figure', () => {
     // Arrange
     const manifest = tempManifest('evidence-source-figure-', {
-      schemaVersion: 1,
+      schemaVersion: 2,
       deliverable: 'deliverable.md',
       figures: [{ id: 'F1', value: 1, command: 'node sum.mjs' }],
       claims: [{ id: 'C1', text: 'A claim', sources: ['F2'] }],
@@ -340,5 +340,187 @@ describe('evidence checker seeded suite', () => {
     expect(output.sample[0]).toEqual({
       id: 'C1', text: 'Revenue totals 42.', sources: ['F1', 'data.csv:2', 'https://example.com/revenue'],
     })
+  })
+
+  it('rejects v1 and invalid ignoreNumbers at the manifest boundary', () => {
+    // Arrange
+    const base = { deliverable: 'deliverable.md', figures: [{ id: 'F1', value: 42, display: ['42.0'], command: 'true' }], claims: [] }
+    const cases = [
+      [{ ...base, schemaVersion: 1 }, 'schemaVersion 1 is no longer supported: upgrade to 2 (number anchors <!--Fn-->, tables[])'],
+      [{ ...base, schemaVersion: 2, ignoreNumbers: ['42.0'] }, '42.0'],
+      [{ ...base, schemaVersion: 2, ignoreNumbers: ['1.2'] }, '1.2'],
+      [{ ...base, schemaVersion: 2, ignoreNumbers: ['1,2'] }, '1,2'],
+      [{ ...base, schemaVersion: 2, ignoreNumbers: ['2%'] }, '2%'],
+      [{ ...base, schemaVersion: 2, ignoreNumbers: ['101'] }, '101'],
+    ] as const
+    // Act / Assert
+    for (const [manifest, message] of cases) {
+      const pathName = tempManifest('evidence-boundary-', manifest)
+      expect(() => checkManifest(pathName)).toThrow(message)
+    }
+    const accepted = tempManifest('evidence-boundary-ok-', {
+      ...base, schemaVersion: 2, ignoreNumbers: ['1', '30'], figures: [{ ...base.figures[0], command: 'printf 42' }],
+    })
+    expect(checkManifest(accepted).findings).toEqual([])
+  })
+
+  it('uses anchor position and catches unanchored duplicate and declared literals', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-anchor-', {
+      schemaVersion: 2, deliverable: 'deliverable.md', figures: [{ id: 'F1', value: 42, command: 'true', display: ['42'] }], claims: [],
+    })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), '42<!--F1--> and 42\n')
+    // Act
+    const result = checkManifest(manifest)
+    // Assert
+    expect(result.findings.filter((finding) => finding.check === 'unanchored-number')).toHaveLength(1)
+  })
+
+  it.each([
+    ['unknown anchor', '42<!--F2-->', 'anchor-unknown'],
+    ['wrong anchor literal', '43<!--F1-->', 'anchor-mismatch'],
+    ['empty anchor', '<!--F1-->', 'anchor-mismatch'],
+  ])('reports %s', (_name, text, check) => {
+    // Arrange
+    const manifest = tempManifest('evidence-anchor-finding-', {
+      schemaVersion: 2, deliverable: 'deliverable.md', figures: [{ id: 'F1', value: 42, command: 'true' }], claims: [],
+    })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), `${text}\n`)
+    // Act / Assert
+    expect(checkManifest(manifest).findings).toContainEqual(expect.objectContaining({ check }))
+  })
+
+  it('pilot regression catches swapped anchor literal', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-pilot-a-', {
+      schemaVersion: 2, deliverable: 'deliverable.md',
+      figures: [
+        { id: 'F12', value: 0.41, display: ['0,41%'], command: 'printf 0.41' },
+        { id: 'F13', value: 0.27, display: ['0,27%'], command: 'printf 0.27' },
+      ], claims: [],
+    })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), 'C1 0,27%<!--F12--> và C2 0,27%<!--F13-->')
+    // Act
+    const result = checkManifest(manifest)
+    // Assert
+    expect(result.status).toBe('fail')
+    expect(result.findings).toContainEqual(expect.objectContaining({ check: 'anchor-mismatch', id: 'F12' }))
+  })
+
+  it('pilot regression catches swapped number without anchor', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-pilot-b-', {
+      schemaVersion: 2, deliverable: 'deliverable.md',
+      figures: [
+        { id: 'F12', value: 0.41, display: ['0,41%'], command: 'printf 0.41' },
+        { id: 'F13', value: 0.27, display: ['0,27%'], command: 'printf 0.27' },
+      ], claims: [],
+    })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), 'C1 0,27% và C2 0,27%<!--F13-->')
+    // Act
+    const result = checkManifest(manifest)
+    // Assert
+    expect(result.status).toBe('fail')
+    expect(result.findings).toContainEqual(expect.objectContaining({ check: 'unanchored-number' }))
+  })
+
+  it('pilot regression catches reason swapped percentage', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-pilot-c-', {
+      schemaVersion: 2, deliverable: 'deliverable.md',
+      figures: [
+        { id: 'F20', value: 0.6512, display: ['65,12%'], command: 'printf 0.6512' },
+        { id: 'F21', value: 0.5143, display: ['51,43%'], command: 'printf 0.5143' },
+      ], claims: [],
+    })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), 'ReasonA 51,43%<!--F20--> ; fail 51,43%<!--F21-->')
+    // Act
+    const result = checkManifest(manifest)
+    // Assert
+    expect(result.findings).toContainEqual(expect.objectContaining({ check: 'anchor-mismatch', id: 'F20' }))
+  })
+
+  it.each([
+    ['table-unknown', undefined, '| A | B |\n| --- | --- |\n| 1 | 2 |'],
+    ['table-mismatch', [{ id: 'T1', command: "node -e \"console.log('a,b\\n1,3')\"" }], '| A | B |\n| --- | --- |\n| 1 | 2 |'],
+    ['table-command', [{ id: 'T1', command: 'node -e "process.exit(1)"' }], '| A | B |\n| --- | --- |\n| 1 | 2 |'],
+  ])('reports %s for captioned tables', (check, tables, body) => {
+    // Arrange
+    const manifest = tempManifest(`evidence-${check}-`, { schemaVersion: 2, deliverable: 'deliverable.md', figures: [], tables, claims: [] })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), `Caption <!--T1-->\n${body}`)
+    // Act
+    const result = checkManifest(manifest)
+    // Assert
+    expect(result.findings).toContainEqual(expect.objectContaining({ check }))
+  })
+
+  it('reports table mismatch for a missing row', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-table-row-', {
+      schemaVersion: 2, deliverable: 'deliverable.md', figures: [],
+      tables: [{ id: 'T1', command: "node -e \"console.log('a,b\\n1,2\\n3,4')\"" }], claims: [],
+    })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), 'Caption <!--T1-->\n| A | B |\n| --- | --- |\n| 1 | 2 |')
+    // Act / Assert
+    expect(checkManifest(manifest).findings).toContainEqual(expect.objectContaining({ check: 'table-mismatch' }))
+  })
+
+  it('does not scan numeric cells in a verified table and marks an uncaptained table unchecked', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-table-clean-', {
+      schemaVersion: 2, deliverable: 'deliverable.md', figures: [],
+      tables: [{ id: 'T1', command: "node -e \"console.log('a,b\\n1,2')\"" }, { id: 'T2', command: 'printf a,b' }], claims: [],
+    })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), 'Caption <!--T1-->\n| A | B |\n| --- | --- |\n| 1 | 2 |')
+    // Act
+    const result = checkManifest(manifest)
+    // Assert
+    expect(result.findings.filter((finding) => finding.check === 'unanchored-number')).toEqual([])
+    expect(result.unchecked).toContain('table T2 (not captioned)')
+  })
+
+  it('reports claim-no-figure and samples only figure-backed claims', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-claims-', {
+      schemaVersion: 2, deliverable: 'deliverable.md', figures: [{ id: 'F1', value: 1, command: 'printf 1' }],
+      claims: [{ id: 'C1', text: 'figure', sources: ['F1'] }, { id: 'C2', text: 'file', sources: ['data.csv:2'] }],
+    }, { 'data.csv': 'a\nb\n' })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), '1<!--F1-->')
+    // Act
+    const result = runCli(['--manifest', manifest, '--json', '--sample', '5', '--seed', '1'], path.dirname(manifest))
+    const output = JSON.parse(result.stdout)
+    // Assert
+    expect(output.findings).toContainEqual(expect.objectContaining({ check: 'claim-no-figure', id: 'C2' }))
+    expect(output.sample.map((claim: { id: string }) => claim.id)).toEqual(['C1'])
+  })
+
+  it('keeps checks identical for clean and wrong figure variants', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-check-count-', {
+      schemaVersion: 2, deliverable: 'deliverable.md', figures: [{ id: 'F1', value: 1, command: 'printf 1' }], claims: [],
+    })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), '1<!--F1-->')
+    const clean = checkManifest(manifest)
+    const wrongManifest = JSON.parse(readFileSync(manifest, 'utf8'))
+    wrongManifest.figures[0].value = 2
+    writeFileSync(manifest, JSON.stringify(wrongManifest))
+    // Act
+    const wrong = checkManifest(manifest)
+    // Assert
+    expect(clean.checks).toBe(wrong.checks)
+  })
+
+  it('passes a clean v2 report with anchored prose, verified table, and figure claims', () => {
+    // Arrange
+    const manifest = tempManifest('evidence-clean-v2-', {
+      schemaVersion: 2, deliverable: 'deliverable.md', figures: [{ id: 'F1', value: 1, command: 'printf 1' }],
+      tables: [{ id: 'T1', command: "node -e \"console.log('a,b\\n1,2')\"" }],
+      claims: [{ id: 'C1', text: 'One', sources: ['F1'] }],
+    })
+    writeFileSync(path.join(path.dirname(manifest), 'deliverable.md'), 'Total 1<!--F1-->\nCaption <!--T1-->\n| A | B |\n| --- | --- |\n| 1 | 2 |')
+    // Act
+    const result = checkManifest(manifest)
+    // Assert
+    expect(result).toMatchObject({ status: 'pass', findings: [] })
   })
 })

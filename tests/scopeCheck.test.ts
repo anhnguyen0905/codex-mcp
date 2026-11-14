@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, describe, expect, test, vi } from 'vitest'
@@ -10,6 +10,8 @@ import {
   ScopeDeclarationError,
   canonicalPath,
   collectChangedPaths,
+  collectTreeChangedPaths,
+  createSnapshot,
   isExcludedPath,
   main,
   parseCliArgs,
@@ -615,6 +617,130 @@ describe('parseRawDiff', () => {
 })
 
 describe('scope-check CLI', () => {
+  test('snapshot leaves HEAD, the index and the working tree unchanged', () => {
+    // Arrange
+    const { directory, base } = makeRepo()
+    const file = join(directory, 'src.ts')
+    const before = {
+      head: git(directory, 'rev-parse', 'HEAD'),
+      staged: git(directory, 'diff', '--cached', '--name-only'),
+      status: git(directory, 'status', '--porcelain'),
+      content: readFileSync(file, 'utf8'),
+    }
+
+    // Act
+    createSnapshot(directory)
+
+    // Assert
+    expect(git(directory, 'rev-parse', 'HEAD')).toBe(before.head)
+    expect(git(directory, 'diff', '--cached', '--name-only')).toBe(before.staged)
+    expect(git(directory, 'status', '--porcelain')).toBe(before.status)
+    expect(readFileSync(file, 'utf8')).toBe(before.content)
+    expect(base).toBeTruthy()
+  })
+
+  test('snapshot prints a 40-hex tree id', async () => {
+    // Arrange
+    const { directory } = makeRepo()
+    const { out, err } = captureConsole()
+
+    // Act
+    const exitCode = await main(['snapshot'], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(0)
+    expect(err).toEqual([])
+    expect(out[0]).toMatch(/^[0-9a-f]{40}$/)
+    expect(git(directory, 'cat-file', '-t', out[0])).toBe('tree\n')
+  })
+
+  test('tree base ignores changes made before the snapshot', async () => {
+    // Arrange
+    const tasks = TASKS.replace('scripts/scope-check.mjs, tests/scopeCheck.test.ts', 'src.ts')
+    const { directory } = makeRepo(tasks)
+    writeFileSync(join(directory, 'src.ts'), '// before\n')
+    writeFileSync(join(directory, 'before.txt'), 'before\n')
+    const snapshot = createSnapshot(directory)
+    const { err } = captureConsole()
+
+    // Act
+    const exitCode = await main(['--task', 'T1', '--base', snapshot], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(0)
+    expect(err).toEqual([])
+  })
+
+  test('tree base reports changes made after the snapshot', async () => {
+    // Arrange
+    const tasks = TASKS.replace('scripts/scope-check.mjs, tests/scopeCheck.test.ts', 'src.ts')
+    const { directory } = makeRepo(tasks)
+    const snapshot = createSnapshot(directory)
+    writeFileSync(join(directory, 'src.ts'), '// after\n')
+    writeFileSync(join(directory, 'new.txt'), 'new\n')
+    rmSync(join(directory, 'scripts', 'scope-check.mjs'))
+    const { err } = captureConsole()
+
+    // Act
+    const exitCode = await main(['--task', 'T1', '--base', snapshot], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(1)
+    expect(err.some((line) => line.includes('extra: new.txt'))).toBe(true)
+    expect(err.some((line) => line.includes('extra: scripts/scope-check.mjs'))).toBe(true)
+    expect(err.some((line) => line.includes('extra: src.ts'))).toBe(false)
+  })
+
+  test('tree base excludes ignored paths and .codex-flow', async () => {
+    // Arrange
+    const { directory } = makeRepo()
+    writeFileSync(join(directory, '.gitignore'), 'ignored/\n')
+    git(directory, 'add', '.gitignore')
+    git(directory, 'commit', '-q', '-m', 'ignore generated files')
+    const snapshot = createSnapshot(directory)
+    mkdirSync(join(directory, 'ignored'))
+    mkdirSync(join(directory, '.codex-flow', 'new'))
+    writeFileSync(join(directory, 'ignored', 'file.txt'), 'ignored\n')
+    writeFileSync(join(directory, '.codex-flow', 'new', 'file.txt'), 'flow\n')
+    const { out, err } = captureConsole()
+
+    // Act
+    const exitCode = await main(['--task', 'T1', '--base', snapshot], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(0)
+    expect(out[0]).toContain('all within Files:')
+    expect(err).toEqual([])
+  })
+
+  test('tree base works on an unborn HEAD', () => {
+    // Arrange
+    const directory = makeTempDirectory('scope-check-unborn-')
+    git(directory, 'init', '-q')
+    const snapshot = createSnapshot(directory)
+    writeFileSync(join(directory, 'new.txt'), 'new\n')
+
+    // Act
+    const changed = collectTreeChangedPaths(snapshot, directory)
+
+    // Assert
+    expect(changed).toEqual(['new.txt'])
+  })
+
+  test('a non-commit, non-tree base exits 2', async () => {
+    // Arrange
+    const { directory } = makeRepo()
+    const blob = git(directory, 'rev-parse', 'HEAD:scripts/scope-check.mjs').trim()
+    const { err } = captureConsole()
+
+    // Act
+    const exitCode = await main(['--task', 'T1', '--base', blob], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(2)
+    expect(err[0]).toContain('expected a commit or tree')
+  })
+
   test('exits 0 and reports the change count when every path is declared', async () => {
     // Arrange
     const { directory, base } = makeRepo()

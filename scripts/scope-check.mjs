@@ -10,7 +10,9 @@
 // extra paths (each printed); 2 = usage, file, or git invocation failure.
 
 import { execFileSync } from 'node:child_process'
-import { promises as fs } from 'node:fs'
+import { promises as fs, rmSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -35,7 +37,7 @@ export const EXIT_OK = 0
 export const EXIT_VIOLATION = 1
 export const EXIT_FAILURE = 2
 
-const USAGE = 'usage: node scripts/scope-check.mjs --task T<n> --base <sha> [--tasks <path>]'
+const USAGE = 'usage: node scripts/scope-check.mjs --task T<n> --base <sha> [--tasks <path>]\nusage: node scripts/scope-check.mjs --task T<n> --base <commit-or-snapshot-tree> [--tasks <path>] | snapshot'
 const TASK_ID = /^T\d+$/i
 const TASK_HEADER = /^##\s+(T\d+):\s*(.*)$/i
 const ANY_HEADER = /^##\s+/
@@ -225,6 +227,53 @@ function gitOutput(args, cwd) {
   })
 }
 
+function gitOutputWithEnvironment(args, cwd, environment) {
+  return execFileSync('git', args, {
+    cwd,
+    env: environment,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+}
+
+/** Create a tree for the current worktree without changing the real index. */
+export function createSnapshot(cwd = process.cwd()) {
+  if (typeof cwd !== 'string' || !cwd.trim()) throw new TypeError('cwd must be a non-empty string')
+  const indexPath = path.join(tmpdir(), `scope-check-index-${randomUUID()}`)
+  const environment = { ...process.env, GIT_INDEX_FILE: indexPath }
+  try {
+    try {
+      gitOutputWithEnvironment(['rev-parse', '--verify', 'HEAD'], cwd, environment)
+      gitOutputWithEnvironment(['read-tree', 'HEAD'], cwd, environment)
+    } catch (error) {
+      if (!(error && typeof error === 'object' && error.status === 128)) throw error
+      gitOutputWithEnvironment(['read-tree', '--empty'], cwd, environment)
+    }
+    gitOutputWithEnvironment(['add', '-A'], cwd, environment)
+    return gitOutputWithEnvironment(['write-tree'], cwd, environment).trim()
+  } finally {
+    rmSync(indexPath, { force: true })
+  }
+}
+
+export function gitObjectType(objectName, cwd = process.cwd()) {
+  if (typeof objectName !== 'string' || !GIT_OBJECT_NAME.test(objectName)) {
+    throw new TypeError(`base must be a git object name (got: ${objectName})`)
+  }
+  return gitOutput(['cat-file', '-t', objectName], cwd).trim()
+}
+
+export function collectTreeChangedPaths(baseTree, cwd = process.cwd()) {
+  if (typeof baseTree !== 'string' || !GIT_OBJECT_NAME.test(baseTree)) {
+    throw new TypeError(`base must be a git object name (got: ${baseTree})`)
+  }
+  const currentTree = createSnapshot(cwd)
+  return gitOutput(
+    ['diff-tree', '-r', '-z', '--no-renames', '--name-only', baseTree, currentTree],
+    cwd,
+  ).split('\0').filter(Boolean)
+}
+
 /** Return paths whose worktree diff has no content-line changes. */
 function gitModeOnlyPaths(base, cwd) {
   return gitOutput(['diff', '--numstat', '-z', '--no-renames', base], cwd)
@@ -290,6 +339,16 @@ export function parseCliArgs(argv) {
 export async function main(argv = process.argv.slice(2), { cwd = process.cwd() } = {}) {
   if (typeof cwd !== 'string' || !cwd.trim()) throw new TypeError('cwd must be a non-empty string')
 
+  if (argv.length === 1 && argv[0] === 'snapshot') {
+    try {
+      console.log(createSnapshot(cwd))
+      return EXIT_OK
+    } catch (error) {
+      console.error(`scope-check: snapshot failed: ${errorMessage(error)}`)
+      return EXIT_FAILURE
+    }
+  }
+
   let config
   try {
     config = parseCliArgs(argv)
@@ -310,7 +369,10 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd() }
 
   let changedPaths
   try {
-    changedPaths = collectChangedPaths(config.base, cwd)
+    const objectType = gitObjectType(config.base, cwd)
+    if (objectType === 'tree') changedPaths = collectTreeChangedPaths(config.base, cwd)
+    else if (objectType === 'commit') changedPaths = collectChangedPaths(config.base, cwd)
+    else throw new Error(`base ${config.base} is a ${objectType}; expected a commit or tree`)
   } catch (error) {
     console.error(`scope-check: git failed for base ${config.base}: ${errorMessage(error)}`)
     return EXIT_FAILURE

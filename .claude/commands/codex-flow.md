@@ -273,7 +273,7 @@ For each task in dependency order (sequential mode):
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --task T<n>`. If it reports
    `mandatory slice content exceeds tokenBudget`, split the
    oversized task in the backlog before continuing; never raise the slice budget. Immediately
-   before the call, record `git rev-parse --short HEAD` as the task's base sha. In the same durable
+   before the call, record `git rev-parse --short HEAD` as the task's base sha. When `checkpointCommits` is `no`, use the `scope-check.mjs snapshot` tree id instead. In the same durable
    update, set the task's `- Status:` line to `in-progress`, append
    `  - <ISO 8601 ts> pending -> in-progress` beneath it, and write
    `- Session: launching (base: <short sha>)`. Make the Status write and its transition line with
@@ -302,8 +302,7 @@ For each task in dependency order (sequential mode):
    is a fresh `codex_execute` per task; use `codex_continue` for review/fix rounds within the same
    task. Cross-task session reuse is allowed only when the next task directly depends on the
    previous task AND stays in the same domain, and is capped at that one adjacent task — after
-   that, start fresh. A fresh session gets the new task's distilled skill blocks instead of
-   inheriting stale context from the previous domain.
+   that, start fresh. A fresh session gets the new task's distilled skill blocks instead of inheriting stale context from the previous domain.
 4. Keep the task `in-progress` while it is under review and its durable handoff is being written.
    Do not mark it done here; Phase 5 step 7 makes that the last durable task write. When a
    task is abandoned, set `- Status:` to `failed` via `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" task T<n> failed` (the helper appends the

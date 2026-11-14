@@ -7,7 +7,7 @@ description: Conditional multiscope Phase 1 rules for data deliverables, evidenc
 
 Load this skill when `profileMode` is `enforce`, `evidenceMode` is not `off`, or `languageMode` is `on`. Its rules replace the gates they name; each switch is independent. The Router table applies only when the confirmed profile is `data`.
 
-**Helpers**: required — profile-router.mjs, evidence-check.mjs; if either helper is missing, STOP and tell the user to reinstall the plugin; if profile-router.mjs exits non-zero, surface the error and STOP; evidence-check.mjs exit 1 is a finding and exit 2 is a manifest error, both routed back to Codex, and neither stops the run.
+**Helpers**: required — profile-router.mjs, evidence-check.mjs, scope-check.mjs; helper rule: paths are `scripts/profile-router.mjs`, `scripts/evidence-check.mjs`, `scripts/scope-check.mjs`; if helper is missing, STOP and tell the user to reinstall the plugin; profile-router.mjs or `scope-check.mjs snapshot` non-zero → surface error and STOP; scope-check task exit 1 is a blocking finding routed per the scope trip-wire; evidence-check.mjs exit 1 or 2 is routed back to Codex.
 
 ## Router (enforce, data)
 
@@ -16,7 +16,7 @@ Load this skill when `profileMode` is `enforce`, `evidenceMode` is not `off`, or
 | Known-red test baseline | Snapshot input paths, `du -h` sizes, row counts, and sha256 into PLAN.md's Known-red section; initialize with `--known-red "n/a (data profile)"`. |
 | Verify command | Use `evidence-check.mjs` as `verifyCommand` when `evidenceMode` is `enforce`; otherwise omit `verifyCommand` and apply the `exec-deliverable` Verification block, with Claude re-deriving one figure. |
 | Codex review git diff | Run `codex_review` scoped to the deliverable and its manifest, plus the rubric below. |
-| Checkpoint task commits | Do not ask; approve the backlog with `--checkpoint-commits no`. |
+| Checkpoint task commits | Approve with `--checkpoint-commits no`; record each task's base as the tree id printed by `node "${CLAUDE_PLUGIN_ROOT}/scripts/scope-check.mjs" snapshot` (scope-check accepts it as `--base`). |
 
 Data tasks embed `codex-flow:exec-deliverable` blocks instead of coding blocks.
 For the gates named in the Router table, these replacements take precedence over the command's generic steps.
@@ -32,14 +32,19 @@ Embed the Evidence block and use the checker only when `evidenceMode` is not `of
 
 ```
 Evidence block
-- Write `evidence.json` next to the deliverable with schemaVersion 1, deliverable, figures (id, value, command, and optional tolerance, timeoutMs, display), claims (id, text, sources), and optional ignoreNumbers.
-- Every number in the deliverable is a figure whose command re-derives it from source data. Put formatted literals such as 1,234,567 and 12,3% in `display`.
-- Every claim cites a figure id, a file[:line], or a URL.
+- Write `evidence.json` next to the deliverable with `schemaVersion: 2` (v1 is rejected), `deliverable`, `figures` (id, value, command, and optional tolerance, timeoutMs, display), `claims` (id, text, sources), and optional `tables[]` and `ignoreNumbers`.
+- Put `<!--Fn-->` directly after every measured number in prose. A table copied from a results file needs a caption line carrying `<!--Tn-->` plus a `tables[]` entry whose command prints CSV with the header row first; compare cells exactly, and do not anchor its numbers.
+- Use `ignoreNumbers` only for structural literals: no `.`, `,`, or `%`, integers ≤ 100, and never a figure value or display.
+- Every claim cites at least one figure id. V2 adds findings `anchor-mismatch`, `anchor-unknown`, `unanchored-number`, `table-unknown`, `table-mismatch`, `table-command`, and `claim-no-figure`; existing figure, claim, and source findings still apply.
 - Keep commands portable: use `node`, `duckdb`, or `python3` invocations runnable from the manifest directory.
 - Run `evidence-check.mjs --manifest evidence.json` before finishing; the orchestrator gives the absolute script path.
 ```
 
 In shadow, after acceptance, Claude runs the checker with `--json` and records the result in reviews.md without blocking. In enforce, the same command, with the plugin root expanded to an absolute path, is the task `verifyCommand`. Evidence-check exit 1 is a finding and exit 2 is a manifest error; route either back to Codex. evidence.json is executable: its commands run with the operator's shell and have the same trust as a verifyCommand, so review them like code.
+
+## Fast-path analysis lane
+
+When `CODEX_FLOW_EVIDENCE` is `shadow` or `enforce`, write `evidence.json` (v2) next to the deliverable and run the checker. In `enforce`, deliver only after exit 0; in `shadow`, put the result in the "what I verified" note. Append `evidence=<pass|fail|off>` to the `fastpath.log` line.
 
 ## Rubric and sampling
 

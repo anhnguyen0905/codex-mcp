@@ -7,11 +7,9 @@ description: Route small or read-only codex-flow work through a lite lane instea
 
 **Helpers**: required — none; optional — none.
 
-The full six-phase flow exists for multi-task feature work. Its fixed overhead (interview docs,
-PLAN/TASKS/STATE, per-task slices, dual review, reports) is the wrong cost for a small or
-read-only task, so route those through one of two lite lanes instead. Evaluate this gate right
-after the preflight resume check and BEFORE the first `mcp__codex__codex_health` call, before any
-control file is written.
+The full six-phase flow is for multi-task feature work; route small or read-only work through one
+of these lite lanes. Evaluate this gate after the preflight resume check and BEFORE the first
+`mcp__codex__codex_health` call, before writing control files.
 
 **Eligibility** — the task must fit ONE of these lanes, and NONE of the exclusions:
 
@@ -58,7 +56,7 @@ file — excluding generated lockfiles — triggers the escalation rule automati
 the oversized diff in-lane and do not re-argue eligibility after the fact.
 
 **Fast-path log**: append one line per fast-path run to `.codex-flow/notes/fastpath.log`:
-`<ISO 8601> <analysis|small-change> <one-line task> session=<sessionId or -> outcome=<delivered|done|escalated|failed>`.
+`<ISO 8601> <analysis|small-change> <one-line task> session=<sessionId or -> outcome=<delivered|done|escalated|failed> evidence=<pass|fail|off>`; see profile-pilot's Fast-path analysis lane for evidence rules.
 The recorded sessionId is what later `codex_continue` fix rounds attach to; the log is the only
 durable trace a fast-path run leaves, so write it even on escalation or failure.
 Append the matching `fast-path-analysis` or `fast-path-small` run-ledger line at the terminal outcome.

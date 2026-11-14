@@ -157,11 +157,18 @@ const diffSchema = z
     statusTruncated: z.boolean(),
     patch: z.string(),
     truncated: z.boolean(),
+    unavailable: z.boolean().optional(),
+    reason: z.string().optional(),
   })
   .nullable()
 
 const attributionSchema = z
-  .object({ files: z.array(z.looseObject({})), untracked: z.array(z.looseObject({})) })
+  .object({
+    files: z.array(z.looseObject({})),
+    untracked: z.array(z.looseObject({})),
+    unavailable: z.boolean().optional(),
+    reason: z.string().optional(),
+  })
   .nullable()
 
 const codexResultShape = {

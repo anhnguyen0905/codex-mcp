@@ -21,6 +21,11 @@ export interface CodexCommand {
   exitCode: number | null
 }
 
+export interface PostRunAvailability {
+  unavailable?: boolean
+  reason?: string
+}
+
 export interface CodexResult {
   sessionId: string | null
   agentMessage: string | null

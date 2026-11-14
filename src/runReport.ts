@@ -1,4 +1,4 @@
-import type { RunOptions, RunOutcomeWithEvents } from './codexRunner.js'
+import { DEFAULT_TIMEOUT_MS, type RunOptions, type RunOutcomeWithEvents } from './codexRunner.js'
 import { parseEvents, type ParsedEvents } from './eventParser.js'
 import type { LiveView } from './liveView.js'
 import { appendMetric, errorMessageHead, type MetricEntry } from './metricsLog.js'
@@ -12,12 +12,19 @@ import {
   attributeWorkspaceDiff,
   captureStatusPorcelainZ,
   captureWorkspaceDiff,
+  captureWorkspaceSnapshot,
   type AttributeFn,
   type DiffFn,
   type RunAttribution,
   type SnapshotFn,
+  type WorkspaceDiff,
   type WorkspaceSnapshot,
 } from './workspaceDiff.js'
+
+export const POST_RUN_DEADLINE_MS = 30_000
+const POST_RUN_DEADLINE_REASON = 'post-run deadline exceeded'
+const EMPTY_DIFF: WorkspaceDiff = { status: '', statusTruncated: false, patch: '', truncated: false }
+const EMPTY_ATTRIBUTION: RunAttribution = { files: [], untracked: [] }
 
 /**
  * Shared "run one Codex invocation and build its result payload + metric entry" pipeline,
@@ -52,7 +59,10 @@ export interface RunAndReportDeps {
   queueMs?: number
 }
 
-export const safeDiff = async (diffFn: DiffFn, cwd: string) => {
+export const safeDiff = async (
+  diffFn: DiffFn,
+  cwd: string,
+): Promise<WorkspaceDiff | null> => {
   try {
     return await diffFn(cwd)
   } catch {
@@ -60,14 +70,52 @@ export const safeDiff = async (diffFn: DiffFn, cwd: string) => {
   }
 }
 
+export const SNAPSHOT_DEADLINE_MS = 30_000
+
 export const safeSnapshot = async (
   snapshotFn: SnapshotFn,
   cwd: string,
+  signal?: AbortSignal,
 ): Promise<WorkspaceSnapshot | null> => {
+  if (signal?.aborted) return null
+  const controller = new AbortController()
+  let capture: Promise<WorkspaceSnapshot | null>
   try {
-    return await snapshotFn(cwd)
+    capture =
+      snapshotFn === captureWorkspaceSnapshot
+        ? captureWorkspaceSnapshot(cwd, controller.signal)
+        : snapshotFn(cwd)
+  } catch {
+    controller.abort()
+    return null
+  }
+  let deadlineTimer: NodeJS.Timeout | undefined
+  const deadline = new Promise<null>((resolve) => {
+    deadlineTimer = setTimeout(() => {
+      controller.abort()
+      resolve(null)
+    }, SNAPSHOT_DEADLINE_MS)
+    deadlineTimer.unref?.()
+  })
+  let resolveAbort: (() => void) | undefined
+  const onAbort = (): void => {
+    controller.abort()
+    resolveAbort?.()
+  }
+  const aborted = signal
+    ? new Promise<null>((resolve) => {
+        resolveAbort = () => resolve(null)
+        signal.addEventListener('abort', onAbort, { once: true })
+      })
+    : null
+  try {
+    return await Promise.race(aborted === null ? [capture, deadline] : [capture, deadline, aborted])
   } catch {
     return null
+  } finally {
+    if (deadlineTimer) clearTimeout(deadlineTimer)
+    controller.abort()
+    signal?.removeEventListener('abort', onAbort)
   }
 }
 
@@ -88,29 +136,84 @@ const capturePostRunWorkspace = async (
   attributeFn: AttributeFn,
   cwd: string,
   snapshot: WorkspaceSnapshot | null,
-): Promise<{
-  diff: Awaited<ReturnType<DiffFn>> | null
-  attribution: RunAttribution | null
-}> => {
-  if (diffFn !== captureWorkspaceDiff || attributeFn !== attributeWorkspaceDiff) {
-    const [diff, attribution] = await Promise.all([
-      safeDiff(diffFn, cwd),
-      safeAttribute(attributeFn, cwd, snapshot),
-    ])
-    return { diff, attribution }
-  }
-
-  const statusPorcelainZ = captureStatusPorcelainZ(cwd)
+  signal?: AbortSignal,
+): Promise<PostRunCapture> => {
+  if (signal?.aborted) return { diff: null, attribution: null }
+  const shareStatus = diffFn === captureWorkspaceDiff && attributeFn === attributeWorkspaceDiff
+  const statusPorcelainZ = shareStatus ? captureStatusPorcelainZ(cwd, signal) : undefined
+  const postRunDiff: DiffFn =
+    diffFn === captureWorkspaceDiff
+      ? (workspace) =>
+          captureWorkspaceDiff(workspace, {
+            ...(statusPorcelainZ === undefined ? {} : { statusPorcelainZ }),
+            signal,
+          })
+      : diffFn
+  const postRunAttribute: AttributeFn =
+    attributeFn === attributeWorkspaceDiff
+      ? (workspace, beforeRun) =>
+          attributeWorkspaceDiff(workspace, beforeRun, {
+            ...(statusPorcelainZ === undefined ? {} : { statusPorcelainZ }),
+            signal,
+          })
+      : attributeFn
   const [diff, attribution] = await Promise.all([
-    safeDiff((workspace) => captureWorkspaceDiff(workspace, { statusPorcelainZ }), cwd),
-    safeAttribute(
-      (workspace, beforeRun) =>
-        attributeWorkspaceDiff(workspace, beforeRun, { statusPorcelainZ }),
-      cwd,
-      snapshot,
-    ),
+    safeDiff(postRunDiff, cwd),
+    safeAttribute(postRunAttribute, cwd, snapshot),
   ])
   return { diff, attribution }
+}
+
+interface PostRunCapture {
+  diff: WorkspaceDiff | null
+  attribution: RunAttribution | null
+}
+
+const unavailablePostRun = (): PostRunCapture => ({
+  diff: { ...EMPTY_DIFF, unavailable: true, reason: POST_RUN_DEADLINE_REASON },
+  attribution: {
+    ...EMPTY_ATTRIBUTION,
+    unavailable: true,
+    reason: POST_RUN_DEADLINE_REASON,
+  },
+})
+
+const captureWithDeadline = async (
+  diffFn: DiffFn,
+  attributeFn: AttributeFn,
+  cwd: string,
+  snapshot: WorkspaceSnapshot | null,
+  externalSignal?: AbortSignal,
+): Promise<PostRunCapture> => {
+  if (externalSignal?.aborted) return { diff: null, attribution: null }
+  const controller = new AbortController()
+  const onAbort = (): void => controller.abort()
+  let resolveExternalAbort: ((capture: PostRunCapture) => void) | undefined
+  const onExternalAbort = (): void => resolveExternalAbort?.({ diff: null, attribution: null })
+  externalSignal?.addEventListener('abort', onAbort, { once: true })
+  const capture = capturePostRunWorkspace(diffFn, attributeFn, cwd, snapshot, controller.signal)
+  let deadlineTimer: NodeJS.Timeout | undefined
+  const deadline = new Promise<PostRunCapture>((resolve) => {
+    deadlineTimer = setTimeout(() => {
+      controller.abort()
+      resolve(unavailablePostRun())
+    }, POST_RUN_DEADLINE_MS)
+    deadlineTimer.unref?.()
+  })
+  const aborted = externalSignal
+    ? new Promise<PostRunCapture>((resolve) => {
+        resolveExternalAbort = resolve
+        externalSignal.addEventListener('abort', onExternalAbort, { once: true })
+      })
+    : null
+  try {
+    return await Promise.race(aborted === null ? [capture, deadline] : [capture, deadline, aborted])
+  } finally {
+    if (deadlineTimer) clearTimeout(deadlineTimer)
+    controller.abort()
+    externalSignal?.removeEventListener('abort', onAbort)
+    externalSignal?.removeEventListener('abort', onExternalAbort)
+  }
 }
 
 /** Keep the last `n` chars without leaving a dangling low surrogate that would corrupt on encode. */
@@ -254,7 +357,7 @@ export const runOnce = async (
     // (pre-existing dirt vs changes this run actually made). Best-effort — never fails the run.
     const snapshot =
       deps.presetSnapshot === undefined
-        ? await safeSnapshot(snapshotFn, options.cwd)
+        ? await safeSnapshot(snapshotFn, options.cwd, options.signal)
         : deps.presetSnapshot
     // First-stdout probe measures spawn → first output for the metric log, on every run.
     let firstStdoutAt: number | undefined
@@ -263,7 +366,21 @@ export const runOnce = async (
     }
     const onStdout = combineSinks(firstStdoutProbe, view.onStdout, progressNotifier?.sink)
     const spawnAt = Date.now()
-    const outcome = await runFn(args, { ...options, onStdout })
+    progressNotifier?.setPhase?.('running')
+    const phaseTimeout = progressNotifier?.setPhase
+      ? setTimeout(() => progressNotifier.setPhase?.('terminating'), options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+      : undefined
+    phaseTimeout?.unref?.()
+    const onAbort = (): void => progressNotifier?.setPhase?.('terminating')
+    options.signal?.addEventListener('abort', onAbort, { once: true })
+    let outcome: RunOutcomeWithEvents
+    try {
+      outcome = await runFn(args, { ...options, onStdout })
+    } finally {
+      if (phaseTimeout) clearTimeout(phaseTimeout)
+      options.signal?.removeEventListener('abort', onAbort)
+    }
+    if (outcome.timedOut || outcome.aborted) progressNotifier?.setPhase?.('terminating')
     // Prefer the runner's lossless streamed parse (it saw bytes the raw stdout tail may have
     // rotated out). Fallback re-parse only covers injected fakes that return a bare RunOutcome.
     const rawParsed: ParsedEvents = outcome.parsed ?? parseEvents(outcome.stdout)
@@ -281,11 +398,13 @@ export const runOnce = async (
         : null
     // Capture the diff even on timeout/abort: the workspace may be half-mutated and the caller
     // needs to see (and attribute) what changed before deciding to retry or roll back.
-    const { diff, attribution } = await capturePostRunWorkspace(
+    progressNotifier?.setPhase?.('post-run')
+    const { diff, attribution } = await captureWithDeadline(
       diffFn,
       attributeFn,
       options.cwd,
       snapshot,
+      options.signal,
     )
     const payload: RunPayload = {
       ...parsed,

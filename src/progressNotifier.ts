@@ -7,6 +7,8 @@ export type ProgressSender = (message: string, progress: number) => void
 
 /** Coalescing window: at most one progress notification per run per this interval. */
 export const PROGRESS_INTERVAL_MS = 250
+export const HEARTBEAT_MS = 30_000
+export type ProgressPhase = 'running' | 'terminating' | 'post-run'
 
 // A single unterminated JSONL line must not grow the pending buffer without bound (progress is
 // forwarded even after the runner's byte cap). 1MB is far above any real event line.
@@ -19,6 +21,7 @@ const MAX_PENDING_BYTES = 1024 * 1024
 export interface ProgressNotifier {
   sink: ProgressSink
   settle: () => void
+  setPhase: (phase: ProgressPhase) => void
 }
 
 interface PendingMessage {
@@ -45,6 +48,10 @@ export const createProgressNotifier = (
   let latest: PendingMessage | null = null
   let timer: NodeJS.Timeout | null = null
   let lastSentAt = Number.NEGATIVE_INFINITY
+  let heartbeat: NodeJS.Timeout | null = null
+  let phase: ProgressPhase = 'running'
+  let settled = false
+  const startedAt = Date.now()
 
   const emitLatest = (): void => {
     if (latest === null) return
@@ -85,6 +92,20 @@ export const createProgressNotifier = (
     return true
   }
 
+  const sendHeartbeat = (): void => {
+    if (settled) return
+    progress += 1
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
+    try {
+      send(`still running — ${phase}, ${elapsedSeconds}s`, progress)
+    } catch {
+      // Heartbeats are best-effort and must not escape the interval callback.
+    }
+  }
+
+  heartbeat = setInterval(sendHeartbeat, HEARTBEAT_MS)
+  heartbeat.unref?.()
+
   const sink: ProgressSink = (chunk) => {
     const lines = (pending + decoder.write(chunk)).split('\n')
     pending = lines.pop() ?? ''
@@ -100,14 +121,20 @@ export const createProgressNotifier = (
 
   /** Flush the final state immediately: the last message must never be dropped or delayed. */
   const settle = (): void => {
+    if (settled) return
+    settled = true
     clearTimer()
+    if (heartbeat !== null) {
+      clearInterval(heartbeat)
+      heartbeat = null
+    }
     // The final line may not be newline-terminated — format it before the last flush.
     noteLine(pending + decoder.end())
     pending = ''
     emitLatest()
   }
 
-  return { sink, settle }
+  return { sink, settle, setPhase: (nextPhase) => { phase = nextPhase } }
 }
 
 /**

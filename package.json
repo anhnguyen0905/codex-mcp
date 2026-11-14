@@ -64,6 +64,7 @@
   },
   "files": [
     "dist",
+    "scripts/evidence-scan.mjs",
     "scripts/tail-progress.mjs",
     "scripts/doctor.mjs",
     "scripts/startup-probe.mjs",

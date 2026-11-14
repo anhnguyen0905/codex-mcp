@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { createProgressNotifier, PROGRESS_INTERVAL_MS } from '../src/progressNotifier.js'
+import { createProgressNotifier, HEARTBEAT_MS, PROGRESS_INTERVAL_MS } from '../src/progressNotifier.js'
 import { createServer } from '../src/server.js'
 import type { RunOutcome } from '../src/types.js'
 
@@ -52,6 +52,7 @@ describe('createProgressNotifier throttling', () => {
     expect(sent[1].message).toContain('msg-9')
     // The monotonic counter still counts every event, not every send.
     expect(sent[1].progress).toBe(10)
+    notifier.settle()
     expect(vi.getTimerCount()).toBe(0)
   })
 
@@ -131,6 +132,50 @@ describe('createProgressNotifier throttling', () => {
 
     expect(sent).toHaveLength(0)
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  test('sends a heartbeat at least every 30 s while unsettled', () => {
+    const sent: string[] = []
+    const notifier = createProgressNotifier((message) => sent.push(message))
+
+    vi.advanceTimersByTime(HEARTBEAT_MS)
+
+    expect(sent).toContain('still running — running, 30s')
+    notifier.settle()
+  })
+
+  test('stops heartbeats after settle', () => {
+    const sent: string[] = []
+    const notifier = createProgressNotifier((message) => sent.push(message))
+
+    vi.advanceTimersByTime(HEARTBEAT_MS)
+    notifier.settle()
+    const countAfterSettle = sent.length
+    vi.advanceTimersByTime(HEARTBEAT_MS * 2)
+
+    expect(sent).toHaveLength(countAfterSettle)
+  })
+
+  test('heartbeat carries the current phase label', () => {
+    const sent: string[] = []
+    const notifier = createProgressNotifier((message) => sent.push(message))
+
+    notifier.setPhase('terminating')
+    vi.advanceTimersByTime(HEARTBEAT_MS)
+
+    expect(sent.at(-1)).toContain('still running — terminating, 30s')
+    notifier.settle()
+  })
+
+  test('heartbeat survives a throwing sender', () => {
+    const send = vi.fn(() => {
+      throw new Error('notification failed')
+    })
+    const notifier = createProgressNotifier(send)
+
+    expect(() => vi.advanceTimersByTime(HEARTBEAT_MS)).not.toThrow()
+    expect(send).toHaveBeenCalledTimes(1)
+    notifier.settle()
   })
 })
 

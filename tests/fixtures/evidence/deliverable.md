@@ -1,8 +1,8 @@
 # Revenue report
 
-The total revenue is 42.
+The total revenue is 42<!--F1-->.
 
-- 1. Daily total: 42
+- 1. Daily total: 42<!--F1-->
 - Reference figure F1 and claim C1.
 
 Date: 2026-11-13

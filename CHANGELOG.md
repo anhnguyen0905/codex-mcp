@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `scripts/evidence-scan.mjs`; evidence manifest v2 with anchors, `tables[]`, and findings; `scope-check snapshot` tree bases; a 30 s progress heartbeat with phase labels; and a 30 s post-run deadline reporting `diff`/`attribution` as `unavailable` with `reason`.
+
+### Changed
+
+- `evidence-check` rejects schemaVersion 1 (breaking); `ignoreNumbers` is structural-only; claims require a figure; post-run git runs in its own process group with SIGKILL escalation; hashing uses bounded concurrency (8); and the pre-run snapshot has a 30 s deadline.
+
+### Fixed
+
+- Tool calls that never returned after a timeout. Two `codex_review` calls recorded `timedOut: true` but returned only after 4.5 h and 63 min; Codex had gone silent after 34 s. The runner settled in time, but post-run workspace diff and hashing over a cloud-synced tree were unbounded and sent no progress, so the MCP client idle-aborted. A call now returns within about `timeoutMs + 40 s` per attempt, plus `verifyTimeoutMs` when `verifyCommand` is set; reviews never auto-resume.
+
 ## [0.34.0] - 2026-11-14
 
 ### Added

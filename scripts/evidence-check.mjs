@@ -2,10 +2,10 @@ import { existsSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { parseAnchors, parseTables, scanNumberTokens, stripAnchoredRegions } from './evidence-scan.mjs'
 
 const MAX_BUFFER = 64 * 1024
 const DEFAULT_TIMEOUT = 120000
-const NUMBER_PATTERN = /[+-]?\d+(?:[.,]\d+)*%?/g
 const URL_PATTERN = /^https?:\/\//i
 
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -79,7 +79,11 @@ export function parseManifest(manifestPath) {
     const message = error instanceof Error ? error.message : String(error)
     fail(`could not read manifest: ${message}`)
   }
-  if (!isRecord(parsed) || parsed.schemaVersion !== 1) fail('schemaVersion must be 1')
+  if (!isRecord(parsed)) fail('manifest must be an object')
+  if (parsed.schemaVersion === 1) {
+    fail('schemaVersion 1 is no longer supported: upgrade to 2 (number anchors <!--Fn-->, tables[])')
+  }
+  if (parsed.schemaVersion !== 2) fail('schemaVersion must be 2')
   requireRelativePath(parsed.deliverable, 'deliverable')
   if (!Array.isArray(parsed.figures) || !Array.isArray(parsed.claims)) {
     fail('figures and claims must be arrays')
@@ -91,6 +95,22 @@ export function parseManifest(manifestPath) {
   }
   const ids = new Set()
   parsed.figures.forEach((figure, index) => validateFigure(figure, index, ids))
+  const tableIds = new Set()
+  if (parsed.tables !== undefined && !Array.isArray(parsed.tables)) fail('tables must be an array')
+  for (const [index, table] of (parsed.tables ?? []).entries()) {
+    const prefix = `tables[${index}]`
+    if (!isRecord(table) || typeof table.id !== 'string' || !/^T\d+$/.test(table.id)) fail(`${prefix}.id is invalid`)
+    if (tableIds.has(table.id)) fail(`duplicate id: ${table.id}`)
+    tableIds.add(table.id)
+    if (typeof table.command !== 'string' || table.command.length === 0) fail(`${prefix}.command must be a non-empty string`)
+    if (table.timeoutMs !== undefined && (!Number.isInteger(table.timeoutMs) || table.timeoutMs <= 0)) fail(`${prefix}.timeoutMs must be an integer > 0`)
+  }
+  const figureLiterals = new Set(parsed.figures.flatMap((figure) => [String(figure.value), ...(figure.display ?? [])]))
+  for (const [index, entry] of (parsed.ignoreNumbers ?? []).entries()) {
+    if (figureLiterals.has(entry)) fail(`ignoreNumbers[${index}] must not match a figure value or display literal: ${entry}`)
+    if (/[.,%]/.test(entry)) fail(`ignoreNumbers[${index}] must not contain '.', ',' or '%': ${entry}`)
+    if (/^\d+$/.test(entry) && Number(entry) > 100) fail(`ignoreNumbers[${index}] integer must be <= 100: ${entry}`)
+  }
   parsed.claims.forEach((claim, index) => validateClaim(claim, index, ids))
   return parsed
 }
@@ -112,43 +132,6 @@ const declaredNumbers = (figures, ignoreNumbers = []) => new Set([
   ...figures.flatMap((figure) => [String(figure.value), ...(figure.display ?? [])]),
   ...ignoreNumbers,
 ].map(normalizeNumber))
-
-const stripMarkup = (text) => text
-  .replace(/```[\s\S]*?(?:```|$)/g, (match) => match.replace(/[^\n]/g, ' '))
-  .replace(/`[^`\n]*`/g, (match) => match.replace(/[^\n]/g, ' '))
-
-const maskPattern = (text, pattern) => text.replace(pattern, (match) => match.replace(/[^\n]/g, ' '))
-
-const scanNumberTokens = (text) => {
-  let cleaned = stripMarkup(text)
-  cleaned = maskPattern(
-    cleaned,
-    /\b\d{4}-\d{2}-\d{2}(?:(?:T|\s)\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b/g,
-  )
-  cleaned = maskPattern(
-    cleaned, /\b\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?\b/g,
-  )
-  cleaned = maskPattern(cleaned, /\b\d{1,2}\/\d{1,2}\/\d{4}\b/g)
-  cleaned = maskPattern(cleaned, /\b(?:0?[1-9]|1[0-2])\/(?:19\d{2}|20\d{2}|2100)\b/g)
-  cleaned = maskPattern(cleaned, /\b(?:19\d{2}|20\d{2}|2100)-(?:0?[1-9]|1[0-2])\b/g)
-  cleaned = maskPattern(cleaned, /\b(?:19\d{2}|20\d{2}|2100)\b/g)
-  const withoutDates = cleaned
-  const withoutIdentifiers = withoutDates
-    .replace(/^\s*(?:[-*+]\s*)?\d+[.)](?=\s)/gm, (match) => match.replace(/\d/g, ' '))
-    .replace(/\b[A-Za-z][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*/g, (match) => match.replace(/[^\n]/g, ' '))
-  const results = []
-  for (const [lineIndex, line] of withoutIdentifiers.split(/\n/).entries()) {
-    for (const match of line.matchAll(NUMBER_PATTERN)) {
-      const start = match.index ?? 0
-      const end = start + match[0].length
-      const before = line[start - 1] ?? ''
-      const after = line[end] ?? ''
-      if (/[A-Za-z0-9]/.test(before) || /[A-Za-z0-9]/.test(after)) continue
-      results.push({ literal: match[0], line: lineIndex + 1 })
-    }
-  }
-  return results
-}
 
 const findUndeclaredEntries = (text, figures, ignoreNumbers = []) => {
   const declared = declaredNumbers(figures, ignoreNumbers)
@@ -228,6 +211,7 @@ const sourceFindings = (manifest, sourceFiles, findings, unchecked) => {
   const figureIds = new Set(manifest.figures.map((figure) => figure.id))
   for (const claim of manifest.claims) {
     const sources = claim.sources ?? []
+    if (!sources.some(sourceIsFigure)) addFinding(findings, 'claim-no-figure', claim.id, 'expected at least one figure source')
     if (sources.length === 0) {
       addFinding(findings, 'claim-unsourced', claim.id, 'expected at least one source, actual none')
     }
@@ -259,6 +243,49 @@ const sourceFindings = (manifest, sourceFiles, findings, unchecked) => {
   }
 }
 
+const csvRows = (output) => output.trim().split(/\r?\n/).filter(Boolean).map((line) => {
+  const cells = []; let cell = ''; let quoted = false
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]
+    if (character === '"' && line[index + 1] === '"' && quoted) { cell += '"'; index += 1; continue }
+    if (character === '"') { quoted = !quoted; continue }
+    if (character === ',' && !quoted) { cells.push(cell.trim()); cell = ''; continue }
+    cell += character
+  }
+  cells.push(cell.trim()); return cells
+})
+
+const checkTables = (manifest, deliverable, manifestDir, run, findings, unchecked) => {
+  const declared = new Map((manifest.tables ?? []).map((table) => [table.id, table]))
+  const parsed = parseTables(deliverable)
+  const captions = new Set(parsed.map((table) => table.id))
+  for (const table of parsed) {
+    const declaration = declared.get(table.id)
+    if (!declaration) { addFinding(findings, 'table-unknown', table.id, 'expected a declared table'); continue }
+    const { timeout, result } = commandResult(declaration, manifestDir, run)
+    if (result?.error || result?.status !== 0 || result?.signal) {
+      addFinding(findings, 'table-command', table.id, `expected exit 0 within ${timeout} ms`); continue
+    }
+    const actual = csvRows(String(result.stdout ?? '')).slice(1)
+    if (actual.length !== table.rows.length || actual.some((row, rowIndex) => row.length !== table.rows[rowIndex].length
+      || row.some((cell, cellIndex) => cell !== table.rows[rowIndex][cellIndex]))) {
+      addFinding(findings, 'table-mismatch', table.id, 'expected every table body cell to match command CSV output')
+    }
+  }
+  for (const table of manifest.tables ?? []) if (!captions.has(table.id)) unchecked.push(`table ${table.id} (not captioned)`)
+  return parsed.filter((table) => declared.has(table.id))
+}
+
+const anchorFindings = (manifest, deliverable, findings) => {
+  const figures = new Map(manifest.figures.map((figure) => [figure.id, figure]))
+  for (const anchor of parseAnchors(deliverable)) {
+    const figure = figures.get(anchor.id)
+    if (!figure) { addFinding(findings, 'anchor-unknown', anchor.id, 'expected a declared figure'); continue }
+    const accepted = new Set([String(figure.value), ...(figure.display ?? [])])
+    if (anchor.literal === null || !accepted.has(anchor.literal)) addFinding(findings, 'anchor-mismatch', anchor.id, `actual ${anchor.literal ?? '<null>'}`)
+  }
+}
+
 const preflightFiles = (manifest, manifestDir) => {
   const deliverablePath = path.resolve(manifestDir, manifest.deliverable)
   const deliverable = readFileSync(deliverablePath, 'utf8')
@@ -287,15 +314,22 @@ const checkParsedManifest = (manifestPath, manifest, run = (command, options) =>
   for (const figure of manifest.figures) checkFigure(figure, manifestDir, run, findings)
   const unchecked = ['claim meaning (owner sampling)']
   sourceFindings(manifest, sourceFiles, findings, unchecked)
+  const parsedTables = checkTables(manifest, deliverable, manifestDir, run, findings, unchecked)
+  anchorFindings(manifest, deliverable, findings)
   const sourceCount = manifest.claims.reduce(
     (total, claim) => total + (claim.sources?.length ?? 0), 0,
   )
-  const undeclared = findUndeclaredEntries(deliverable, manifest.figures, manifest.ignoreNumbers)
+  const anchored = new Set(parseAnchors(deliverable).filter((anchor) => anchor.literal !== null)
+    .map((anchor) => `${anchor.line}:${anchor.column}`))
+  const scanned = scanNumberTokens(stripAnchoredRegions(deliverable, parsedTables))
+  const ignored = new Set(manifest.ignoreNumbers ?? [])
+  const undeclared = scanned.filter(({ literal, line, column }) => !anchored.has(`${line}:${column}`)
+    && !ignored.has(literal))
   for (const { literal, line } of undeclared) {
-    addFinding(findings, 'undeclared-number', manifest.deliverable,
+    addFinding(findings, 'unanchored-number', manifest.deliverable,
       `expected a declared number, actual ${literal} on line ${line}`)
   }
-  const checks = manifest.figures.length + manifest.claims.length + sourceCount + 1
+  const checks = manifest.figures.length + manifest.claims.length + sourceCount + (manifest.tables ?? []).length + 1
   return { status: findings.length === 0 ? 'pass' : 'fail', checks, findings, unchecked }
 }
 
@@ -365,7 +399,8 @@ const parseArgs = (argv) => {
 }
 
 const printResult = (result, args, manifest) => {
-  const sample = args.sample === undefined ? undefined : sampleClaims(manifest.claims, args.sample, args.seed)
+  const sampleableClaims = manifest.claims.filter((claim) => (claim.sources ?? []).some(sourceIsFigure))
+  const sample = args.sample === undefined ? undefined : sampleClaims(sampleableClaims, args.sample, args.seed)
     .map(({ id, text, sources }) => ({ id, text, sources: sources ?? [] }))
   const output = { ...result, ...(sample === undefined ? {} : { sample }) }
   if (args.json) {
