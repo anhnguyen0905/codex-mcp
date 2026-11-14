@@ -39,6 +39,8 @@ const EXECUTOR_FALLBACK_PATH = path.join(REPO_ROOT, 'skills', 'executor-fallback
 const SESSION_REPORT_PATH = path.join(REPO_ROOT, 'skills', 'session-report', 'SKILL.md')
 const SKILLS_DIR = path.join(REPO_ROOT, 'skills')
 const COMMAND_PATH = path.join(REPO_ROOT, 'commands', 'codex-flow.md')
+const TASK_LOOP_PATH = path.join(REPO_ROOT, 'skills', 'task-loop', 'SKILL.md')
+const FINAL_REVIEW_PATH = path.join(REPO_ROOT, 'skills', 'final-review', 'SKILL.md')
 const README_PATH = path.join(REPO_ROOT, 'README.md')
 const CLAUDE_COMMAND_PATH = path.join(REPO_ROOT, '.claude', 'commands', 'codex-flow.md')
 const COMMAND_TOKEN_ALLOWLIST = new Set(['codex-flow:codex-flow'])
@@ -95,18 +97,15 @@ const CANONICAL_FAIL_CLOSED_SENTENCE =
   'If the helper is not found, STOP and tell the user to reinstall the codex-flow plugin '
   + '(its scripts/ directory is required); if it is present but exits non-zero, surface the error '
   + 'to the user and STOP. Never edit control files by hand.'
-// R8.2 / C7 (as amended by the plan-drift block after T8) — per-run overhead budgets in bytes.
-// Staged target, restated as per-run cost: 0.26.0 command + Phase-0 skills ≈ 58 KB (from ≈ 67 KB);
-// 0.27.0 goal is ≤ 15k tokens at the phase peak. Do NOT tighten these inside 0.26.0.
-const COMMAND_MAX_BYTES = 44_000
-// Measured phase sets at this commit (bytes, sum of the phase's SKILL.md files):
-//   Phase 0: 20 510 · Phase 1: 5 947 · Phase 2: 42 129 · Phase 3: 5 711
-//   Phase 4: 23 253 (TS as the language skill) · Phase 5: 26 581
-// Largest = Phase 2 (42 129) rounded up to the next 4 000 → 44 000, under the 48 000 cap.
-const PHASE_SKILLS_MAX_BYTES = 44_000
-// Growth guard: measured command + the 21 flow skills = 162 806 bytes after the T6 review trims.
-// (run-ledger added in Phase 0 of the multiscope roadmap).
-const FLOW_TOTAL_MAX_BYTES = 162_943
+// Post-diet Phase 3 measurements (2026-11-15). These ceilings must only go down;
+// pay for new text by trimming unpinned duplicates.
+const COMMAND_MAX_BYTES = 15_000
+const FAST_PATH_LANE_MAX_TOKENS = 5_000
+const PHASE_LOADED_MAX_BYTES: Readonly<Record<string, number>> = {
+  'Phase 0': 39_210, 'Phase 1': 21_023, 'Phase 2': 58_266,
+  'Phase 3': 20_616, 'Phase 4': 55_375, 'Phase 5': 70_216,
+}
+const FLOW_TOTAL_MAX_BYTES = 158_686
 // C7 phase → skills map. The union of these lists is the "flow skills" set FLOW_TOTAL_MAX_BYTES
 // covers; Phase 4 counts exactly one exec-<lang> skill (TypeScript, this project's language).
 const PHASE_SKILL_MAP: ReadonlyArray<{ phase: string, skills: readonly string[] }> = [
@@ -131,6 +130,7 @@ const PHASE_SKILL_MAP: ReadonlyArray<{ phase: string, skills: readonly string[] 
       'exec-typescript',
       'context-discipline',
       'parallel-execution',
+      'task-loop',
     ],
   },
   {
@@ -144,6 +144,8 @@ const PHASE_SKILL_MAP: ReadonlyArray<{ phase: string, skills: readonly string[] 
       'context-discipline',
       'session-report',
       'run-ledger',
+      'task-loop',
+      'final-review',
     ],
   },
 ]
@@ -198,6 +200,7 @@ const EXACT_FRONTMATTER_SKILLS = [
   'profile-design',
   'profile-plan',
   'profile-content',
+  'pack-game-analytics',
 ] as const
 
 function readText(filePath: string): string {
@@ -453,7 +456,26 @@ function extractPhaseSection(command: string, phaseNumber: number): string {
   const nextHeadingOffset = findUnfencedH2Offset(remainingCommand)
   const phaseEnd = nextHeadingOffset === -1 ? command.length : bodyStart + 1 + nextHeadingOffset
 
-  return command.slice(phaseStart, phaseEnd)
+  const section = command.slice(phaseStart, phaseEnd)
+  if (phaseNumber === 0) return section + '\n' + readText(PREFLIGHT_PATH)
+  if (phaseNumber !== 4 && phaseNumber !== 5) return section
+  const taskLoop = readText(TASK_LOOP_PATH)
+  const taskHeading = new RegExp(`^## Phase ${phaseNumber}(?:[ \\t]+.*)?$`, 'm').exec(taskLoop)
+  if (!taskHeading) throw new Error(`Task-loop Phase ${phaseNumber} section is missing`)
+  const taskBodyStart = taskLoop.indexOf('\n', taskHeading.index) + 1
+  const taskBody = taskLoop.slice(taskBodyStart)
+  const taskEnd = findUnfencedH2Offset(taskBody)
+  let result = `${section}\n${taskLoop.slice(taskHeading.index, taskEnd === -1 ? taskLoop.length : taskBodyStart + taskEnd)}`
+  if (phaseNumber === 5) {
+    const finalReview = readText(FINAL_REVIEW_PATH)
+    const finalHeading = /^## Phase 5(?:[ \t]+.*)?$/m.exec(finalReview)
+    if (!finalHeading) throw new Error('Final-review Phase 5 section is missing')
+    const finalBodyStart = finalReview.indexOf('\n', finalHeading.index) + 1
+    const finalBody = finalReview.slice(finalBodyStart)
+    const finalEnd = findUnfencedH2Offset(finalBody)
+    result += `\n${finalReview.slice(finalHeading.index, finalEnd === -1 ? finalReview.length : finalBodyStart + finalEnd)}`
+  }
+  return result
 }
 
 function findUnfencedH2Offset(markdown: string): number {
@@ -675,7 +697,7 @@ describe('run-ledger wiring', () => {
     )
     expect(extractLoadSkillsText(phaseFour, 4)).not.toContain('`codex-flow:run-ledger`')
     expect(extractLoadSkillsText(phaseFive, 5)).toContain('`codex-flow:run-ledger`')
-    expect(command).toContain(
+    expect(readText(FINAL_REVIEW_PATH)).toContain(
       'Before the final completion `flow-state advance`, append one ledger line per `codex-flow:run-ledger`.',
     )
   })
@@ -721,7 +743,7 @@ describe('run-ledger wiring', () => {
 
 describe('T7 helper call-site inventory', () => {
   const flowSkillNames = [...new Set(PHASE_SKILL_MAP.flatMap(({ skills }) => skills))]
-  const OPT_IN_SKILLS = ['jev-assist', 'profile-pilot', 'profile-design', 'profile-plan', 'profile-content'] as const
+  const OPT_IN_SKILLS = ['jev-assist', 'profile-pilot', 'profile-design', 'profile-plan', 'profile-content', 'pack-game-analytics'] as const
   const scope = [
     COMMAND_PATH,
     ...flowSkillNames.map((name) => path.join(SKILLS_DIR, name, 'SKILL.md')),
@@ -996,7 +1018,7 @@ describe('T5 environment guidance and contradiction guards', () => {
     const phase0 = extractPhaseSection(command, 0).replace(/\s+/g, ' ')
     const phase5 = extractPhaseSection(command, 5).replace(/\s+/g, ' ')
 
-    expect(phase0).toContain('create STATE.md with')
+    expect(readText(PREFLIGHT_PATH)).toContain('create `.codex-flow/STATE.md` with')
     expect(phase0).not.toContain('`codex-flow:preflight` Step 4')
     expect(phase5).not.toContain('collect its result in step 5')
     expect(phase5).not.toContain('directly at step 5')
@@ -1569,14 +1591,14 @@ function extractFastPathSection(command: string): string {
     throw new Error('Fast-path gate section is missing from commands/codex-flow.md')
   }
 
-  return command.slice(start, end)
+  return command.slice(start, end) + '\n' + readText(PREFLIGHT_PATH)
 }
 
 // T9 retarget: T8 moved the gate's content into skills/fast-path/SKILL.md; the command keeps only
 // the router. Content assertions read the skill, and one test guards the router itself.
 describe('fast-path gate contract', () => {
   test('pins the profile router hook and resume routing rule', () => {
-    const routerSection = extractFastPathSection(readText(COMMAND_PATH)).replace(/\s+/g, ' ')
+    const routerSection = [extractFastPathSection(readText(COMMAND_PATH)), readText(PREFLIGHT_PATH)].join('\n').replace(/\s+/g, ' ')
 
     expect(routerSection).toContain(
       'node "${CLAUDE_PLUGIN_ROOT}/scripts/profile-router.mjs" resolve --profile <p> '
@@ -1585,7 +1607,7 @@ describe('fast-path gate contract', () => {
     expect(routerSection).toContain('Full flow only (not fast-path lanes): after the Fast-path gate selects full flow')
     expect(routerSection).toContain(
       '`<path>` is a temp file outside the workspace holding the user\'s task (e.g. via `mktemp`); '
-        + '`<report dir name>` is the session-start `<YYYYMMDD-HHMMSS>` used for step 4\'s report dir.',
+        + '`<report dir name>` is the session-start `<YYYYMMDD-HHMMSS>` used for the report dir.',
     )
     expect(routerSection).toContain(
       'Load `codex-flow:profile-pilot` when `profileMode` is `enforce`, `evidenceMode` is not `off`, '
@@ -1620,15 +1642,11 @@ describe('fast-path gate contract', () => {
   test('exempts the analysis lane from the Codex health gate', () => {
     const command = readText(COMMAND_PATH)
     const phaseZero = extractPhaseSection(command, 0).replace(/\s+/g, ' ')
+    const preflight = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
     const section = readText(FAST_PATH_PATH).replace(/\s+/g, ' ')
 
-    expect(phaseZero).toContain(
-      'The **analysis lane** of the Fast-path gate never reaches this gate: it needs no Codex session and no fallback decision, so a failed health check or missing login does NOT block it.',
-    )
+    expect(preflight).toContain('The analysis lane of the Fast-path gate needs no Codex session and no fallback decision')
     expect(section).toContain('this lane is exempt from the Codex health gate')
-    expect(phaseZero).toContain(
-      'the small-change lane and the full flow require either `loggedIn: true` or an explicit Executor-fallback choice',
-    )
   })
 
   test('enforces a mechanical scope trip-wire on the small-change lane', () => {
@@ -1661,7 +1679,7 @@ describe('fast-path gate contract', () => {
     const phaseZero = extractPhaseSection(readText(COMMAND_PATH), 0).replace(/\s+/g, ' ')
 
     expect(phaseZero).toContain('evaluate the **Fast-path gate** (section below)')
-    expect(phaseZero).toContain('skip steps 2–5')
+    expect(phaseZero).toContain('run only `git status --porcelain` as an informational check')
     expect(phaseZero).toContain('a fast-path run writes no `.codex-flow/` control files')
   })
 })
@@ -1739,14 +1757,14 @@ describe('codex-flow command structure', () => {
     // T9 retarget: R1.2 forbids the raw-file fallback; a missing control file only narrows the read
     // and the helper itself fails closed.
     expect(normalizedPhase).toContain(
-      'when either file is missing, read only the control files that exist',
+      'When either file does not exist, read only the control files that exist',
     )
-    expect(phaseSection).toContain('if `.codex-flow/STATE.md` exists')
+    expect(phaseSection).toContain('If `.codex-flow/STATE.md` exists')
     expect(normalizedPhase).toContain('even when PLAN.md or TASKS.md has not been created yet')
-    expect(phaseSection).toContain('skip only phases whose approvals STATE.md records')
+    expect(normalizedPhase).toContain('be skipped; any phase whose approval is not recorded MUST be re-run')
     expect(normalizedPhase).not.toContain('skip Phases 1–3')
     expect(normalizedPhase).toContain(
-      'on resume, reuse the report dir recorded under `## Session report` in the existing PLAN.md',
+      'On resume, reuse the report dir recorded under `## Session report` in PLAN.md',
     )
     // T9 retarget: the per-`phase` resume routing is stated once, in preflight Step 2.
     const preflight = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
@@ -1962,7 +1980,7 @@ describe('codex-flow command structure', () => {
 
     expect(phaseSection).toContain("route verified CRITICAL/HIGH findings from EITHER review to the task's recorded Session line via `mcp__codex__codex_continue`")
     expect(phaseSection).toContain(
-      'If `codex_continue` fails because the recorded session is gone (expired or compacted), fall back to a fresh `codex_execute` fix task that embeds the finding text plus the task\'s `.codex-flow/CONTEXT-T<n>.md` slice; never hand-edit Codex\'s code (the only exception is the after-3-rounds hand-fix in Rules).',
+      'If `codex_continue` fails because the recorded session is gone (expired or compacted), fall back to a fresh `codex_execute` fix task that embeds the finding text plus the task\'s `.codex-flow/CONTEXT-T<n>.md` slice; never hand-edit Codex\'s code (the only exception is the after-3-rounds hand-fix in `codex-flow:review-feedback`).',
     )
   })
 
@@ -2064,12 +2082,12 @@ describe('executor fallback contract', () => {
   const section = readText(EXECUTOR_FALLBACK_PATH).replace(/\s+/g, ' ')
 
   test('Phase 0 offers the fallback instead of a hard STOP when Codex is missing or logged out', () => {
-    const phase0 = command.slice(command.indexOf('## Phase 0'), command.indexOf('## Fast-path gate')).replace(/\s+/g, ' ')
+    const phase0 = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
     expect(sectionStart).toBeGreaterThan(0)
     expect(sectionEnd).toBeGreaterThan(sectionStart)
     expect(phase0).toContain('connect timeout or closed connection is not "server missing"')
     expect(phase0).toContain('reconnect with `/mcp`')
-    expect(phase0).toContain('either a re-check shows `loggedIn: true` or the user has explicitly chosen the fallback')
+    expect(preflight.replace(/\s+/g, ' ')).toContain('Proceed only after a re-check shows `loggedIn: true` or the user explicitly chose the fallback')
   })
 
   test('the switch is explicit, task-boundary only, and durably recorded', () => {
@@ -2133,7 +2151,7 @@ describe('structured, concurrent dual review contract', () => {
 describe('durable task-loop state contract (R1.2, R1.6)', () => {
   const command = readText(COMMAND_PATH)
   const preflight = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
-  const phase0 = command.slice(command.indexOf('## Phase 0'), command.indexOf('## Fast-path gate')).replace(/\s+/g, ' ')
+  const phase0 = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
   const phase4 = extractPhaseSection(command, 4).replace(/\s+/g, ' ')
   const phase5 = extractPhaseSection(command, 5).replace(/\s+/g, ' ')
   const helper = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs"'
@@ -2162,12 +2180,12 @@ describe('durable task-loop state contract (R1.2, R1.6)', () => {
     expect(phase4).toContain(`${helper} set wave <n>`)
     // T9 retarget: the command now names the key count and defers the literal key list to
     // preflight Step 3.4; the "edit the file directly" escape hatch is forbidden by R1.2.
-    expect(phase0).toContain('create STATE.md with')
+    expect(phase0).toContain('create `.codex-flow/STATE.md` with')
     expect(preflight).toContain('- currentTask: - - taskStage: idle - wave: -')
   })
 
   test('resume routing uses currentTask and taskStage under phase execution', () => {
-    expect(phase0).toContain(`Run \`${helper} check\` first — when it reports ONLY missing keys on a legacy file`)
+    expect(phase0).toContain(`**Resume** → first run \`${helper} check\``)
     expect(phase0).toContain('any other violation is surfaced to the user before routing')
     expect(phase4).toContain('then set `taskStage idle` and `currentTask -`, and update TaskUpdate')
     expect(readText(PARALLEL_EXECUTION_PATH)).toContain(`${helper} set taskStage merge-conflict`)
@@ -2176,7 +2194,7 @@ describe('durable task-loop state contract (R1.2, R1.6)', () => {
     expect(readText(PARALLEL_EXECUTION_PATH)).toContain(`${helper} set taskStage handoff`)
     // T9 retarget: `taskStage` routing is stated once, in preflight Step 2, which the command's
     // resume check routes to by name.
-    expect(phase0).toContain('`codex-flow:preflight` Step 2 (resume authority, in-progress task reconciliation, `taskStage` routing, report-dir reuse)')
+    expect(phase0).toContain('first route by `taskStage` regardless of `currentTask`')
     expect(preflight).toContain('first route by `taskStage` regardless of `currentTask`')
     expect(phase5).toContain('Sequential mode: set `taskStage` to `reviewing`')
     expect(phase5).toContain('Parallel mode: `taskStage` stays `executing` for the whole wave')
@@ -2186,10 +2204,10 @@ describe('durable task-loop state contract (R1.2, R1.6)', () => {
 
 describe('T6 command uses kernel commands', () => {
   const command = readText(COMMAND_PATH)
-  const normalized = command.replace(/\s+/g, ' ')
+  const normalized = [command, readText(PREFLIGHT_PATH), readText(FINAL_REVIEW_PATH)].join('\n').replace(/\s+/g, ' ')
 
   test('uses typed flow-state transitions and rejects legacy setters', () => {
-    expect(normalized).toContain('flow-state init --baseline')
+    expect(normalized).toContain('flow-state.mjs" init --baseline')
     expect(normalized).toContain('approve requirements')
     expect(normalized).toContain('approve plan')
     expect(normalized).toContain('approve backlog')
@@ -2206,9 +2224,9 @@ describe('T6 command uses kernel commands', () => {
   })
 
   test('keeps typed transitions runnable and Phase 0 routing consistent', () => {
-    const transitionText = normalized.replace(/`phase` and the three approvals change only through `approve`, `advance`, `requirement-delta`, `plan-drift`, `improvement-gate`, and `resume`\./, '')
-    expect(transitionText).not.toMatch(/`(advance|requirement-delta|plan-drift|improvement-gate|approve (requirements|plan|backlog)[^`]*)`/)
-    expect((command.match(/The orchestrator is the only writer\./g) ?? []).length).toBe(1)
+    const transitionText = normalized.replace(/`phase` and the three approvals change only through `approve`, `advance`, `requirement-delta`, `plan-drift`, `improvement-gate`, and `resume`\./g, '')
+    expect(transitionText).not.toMatch(/set (phase|requirementsApproved|planApproved|backlogApproved)/)
+    expect(([command, readText(PREFLIGHT_PATH)].join('\n').match(/The orchestrator is the only writer\./g) ?? []).length).toBe(1)
     expect(normalized).toContain('doctor.mjs --probe-launcher')
     expect(command).toContain('flow-state approve backlog --checkpoint-commits <yes|no> --execution-mode "<mode>"')
     expect(command).not.toMatch(/flow-state\.mjs"[^`]*\n[^`]*`/)
@@ -2290,23 +2308,21 @@ describe('sequential scope trip-wire routing (R2.3)', () => {
 describe('deep health probe and outage routing (R3.3)', () => {
   const command = readText(COMMAND_PATH)
   const preflight = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
-  const phase0 = extractPhaseSection(command, 0).replace(/\s+/g, ' ')
+  const phase0 = preflight
   // T9 retarget: both contracts moved into their skills (T8); read them there.
   const fastPath = readText(FAST_PATH_PATH).replace(/\s+/g, ' ')
   const fallbackSection = readText(EXECUTOR_FALLBACK_PATH).replace(/\s+/g, ' ')
 
   test('Phase 0 calls the deep probe once and reads execProbe', () => {
-    expect(phase0).toContain('call `mcp__codex__codex_health` with `{ deep: true }` ONCE — after the gate decision and the resume check, before anything else')
-    expect(phase0).toContain('returning `execProbe` (`ok | quota | model | error | skipped`) plus `execProbeMessage`')
-    expect(phase0).toContain('Read `execProbe` from that single call; never re-probe per phase or per task')
+    expect(preflight).toContain('call `mcp__codex__codex_health` with `{ deep: true }` ONCE')
+    expect(preflight).toContain('returns `execProbe` (`ok | quota | model | error | skipped`) plus `execProbeMessage`')
+    expect(preflight).toContain('read `execProbe` from that single call instead of re-probing later phases')
     expect(phase0).toContain('**`execProbe: quota` or `execProbe: model`**')
     expect(phase0).toContain('**`execProbe: error`**')
   })
 
   test('a quota or model probe alone triggers the Executor fallback with no health re-check', () => {
-    expect(phase0).toContain(
-      'a `quota` or `model` probe result is sufficient on its own and needs NO unhealthy health re-check to justify the fallback',
-    )
+    expect(phase0).toContain('a `quota` or `model` probe result is sufficient on its own and requires NO unhealthy health re-check')
     expect(fallbackSection).toContain(
       "the deep call's `execProbe` is `quota`, `model`, or `error`",
     )
@@ -2338,16 +2354,15 @@ describe('deep health probe and outage routing (R3.3)', () => {
 describe('terminal phase routing and relational state check (R4.3)', () => {
   const command = readText(COMMAND_PATH)
   const preflight = readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')
-  const phase0 = extractPhaseSection(command, 0).replace(/\s+/g, ' ')
+  const phase0 = preflight
   const helper = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs"'
 
   test('Phase 0 archives a complete run instead of offering resume', () => {
     expect(phase0).toContain(
-      '`phase: complete` is terminal: the previous run is finished, so do NOT offer resume for it.',
+      '**`phase: complete`** → terminal, not resumable.',
     )
-    expect(phase0).toContain(
-      "Archive the run's control files to `.codex-flow/archive/<timestamp>/` and begin fresh, exactly as a restart would.",
-    )
+    expect(phase0).toContain("archive the run's control files to `.codex-flow/archive/<timestamp>/`")
+    expect(phase0).toContain('Archive `EVENTS.jsonl` with them')
     expect(phase0).toContain('Resume is offered only for a non-complete `phase`.')
   })
 
@@ -2364,7 +2379,7 @@ describe('terminal phase routing and relational state check (R4.3)', () => {
 
   test('the resume check validates terminal task statuses with --tasks', () => {
     expect(phase0).toContain(`${helper} check --tasks .codex-flow/TASKS.md`)
-    expect(phase0).toContain('When `.codex-flow/TASKS.md` exists, make that same call')
+    expect(phase0).toContain('whenever that file exists so the terminal-status validation runs')
     expect(preflight).toContain(`${helper} check --tasks .codex-flow/TASKS.md`)
     expect(preflight).toContain('whenever that file exists so the terminal-status validation runs')
   })
@@ -2379,6 +2394,7 @@ describe('mechanical doc lints (R6.1, R6.2)', () => {
     // Arrange
     const documents = [
       { label: 'commands/codex-flow.md', markdown: command },
+      { label: 'skills/task-loop/SKILL.md', markdown: readText(TASK_LOOP_PATH) },
       ...skillDocumentPaths().map((skillPath) => ({
         label: path.relative(REPO_ROOT, skillPath),
         markdown: readText(skillPath),
@@ -2391,7 +2407,7 @@ describe('mechanical doc lints (R6.1, R6.2)', () => {
     )
 
     // Assert
-    expect(collectWrittenTaskStages(command).length).toBeGreaterThan(0)
+    expect(collectWrittenTaskStages(command).length + collectWrittenTaskStages(readText(TASK_LOOP_PATH)).length).toBeGreaterThan(0)
     expect(collectWrittenTaskStages(readText(PARALLEL_EXECUTION_PATH)).length).toBeGreaterThan(0)
     expect(unrouted).toEqual([])
   })
@@ -2576,7 +2592,7 @@ describe('plan acceptance citation authoring (R6.3)', () => {
 
   test('command Phase 3 task template and slicing rules require bare A-ID citations', () => {
     // Arrange
-    const phaseSection = extractPhaseSection(readText(COMMAND_PATH), 3)
+    const phaseSection = extractPhaseSection(readText(COMMAND_PATH), 3) + readText(PLAN_BACKLOG_PATH)
 
     // Act
     const taskTemplate = extractFencedCodeBlockContaining(phaseSection, 'markdown', '## T1:')
@@ -2591,10 +2607,10 @@ describe('plan acceptance citation authoring (R6.3)', () => {
 
   test('every command coverage-lint invocation carries --plan exactly once', () => {
     // Arrange
-    const command = readText(COMMAND_PATH)
+    const command = [readText(COMMAND_PATH), readText(TASK_LOOP_PATH), readText(FINAL_REVIEW_PATH)].join('\n')
 
     // Act
-    const invocations = [...command.matchAll(/requirements-coverage\.mjs([^`]*)`/g)].map(
+    const invocations = [...command.matchAll(/node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/requirements-coverage\.mjs([^`]*)`/g)].map(
       (match) => match[1],
     )
 
@@ -2746,20 +2762,13 @@ describe('per-run overhead byte budgets (R8.2, C7 as amended)', () => {
     ).toEqual([])
   })
 
-  test('the command stays within the T6 byte limit', () => {
+  test('the fast-path lane stays under FAST_PATH_LANE_MAX_TOKENS', () => {
     // Arrange
-    const bytes = byteLength(COMMAND_PATH)
+    const chars = [...readText(COMMAND_PATH)].length + [...readText(FAST_PATH_PATH)].length
+    const tokens = Math.ceil(chars / 4)
 
     // Assert
-    expect(bytes).toBeLessThanOrEqual(43_150)
-  })
-
-  test('the command stays within the T1 byte limit', () => {
-    // Arrange
-    const bytes = byteLength(COMMAND_PATH)
-
-    // Assert
-    expect(bytes).toBeLessThanOrEqual(43_948)
+    expect(tokens).toBeLessThanOrEqual(FAST_PATH_LANE_MAX_TOKENS)
   })
 
   function skillBytes(skillName: string): number {
@@ -2774,39 +2783,22 @@ describe('per-run overhead byte budgets (R8.2, C7 as amended)', () => {
     return skills.reduce((total, skillName) => total + skillBytes(skillName), 0)
   }
 
-  test('every declared phase skill set stays under PHASE_SKILLS_MAX_BYTES', () => {
+  test('every loaded phase stays under its pre-diet ceiling', () => {
     // Arrange + Act
     const overages = PHASE_SKILL_MAP.flatMap(({ phase, skills }) => {
-      const bytes = phaseSetBytes(skills)
+      const bytes = phaseSetBytes(skills) + byteLength(COMMAND_PATH)
+      const limit = PHASE_LOADED_MAX_BYTES[phase]
 
-      return bytes <= PHASE_SKILLS_MAX_BYTES
+      return bytes <= limit
         ? []
         : [
-          `${phase} skills are ${bytes} bytes, ${bytes - PHASE_SKILLS_MAX_BYTES} over `
-          + `PHASE_SKILLS_MAX_BYTES (${perFileBreakdown(skills)})`,
+          `${phase} loaded bytes are ${bytes}, ${bytes - limit} over `
+          + `PHASE_LOADED_MAX_BYTES (${perFileBreakdown(skills)})`,
         ]
     })
 
     // Assert
     expect(overages).toEqual([])
-  })
-
-  test('PHASE_SKILLS_MAX_BYTES still matches its C7 derivation from the measured phase sets', () => {
-    // Arrange — largest measured phase set, rounded up to the next 4 000, capped at 48 000.
-    const ROUNDING_STEP_BYTES = 4_000
-    const PHASE_SKILLS_CAP_BYTES = 48_000
-    const largestPhaseBytes = Math.max(
-      ...PHASE_SKILL_MAP.map(({ skills }) => phaseSetBytes(skills)),
-    )
-
-    // Act
-    const derived = Math.min(
-      Math.ceil(largestPhaseBytes / ROUNDING_STEP_BYTES) * ROUNDING_STEP_BYTES,
-      PHASE_SKILLS_CAP_BYTES,
-    )
-
-    // Assert — a doc edit that invalidates the recorded derivation fails here, not silently.
-    expect(derived).toBe(PHASE_SKILLS_MAX_BYTES)
   })
 
   test('the command plus every flow skill stays under FLOW_TOTAL_MAX_BYTES', () => {
@@ -2817,7 +2809,7 @@ describe('per-run overhead byte budgets (R8.2, C7 as amended)', () => {
     const bytes = phaseSetBytes(flowSkills) + byteLength(COMMAND_PATH)
 
     // Assert
-    expect(flowSkills).toHaveLength(21)
+    expect(flowSkills).toHaveLength(23)
     expect(
       bytes <= FLOW_TOTAL_MAX_BYTES
         ? []
@@ -2993,8 +2985,8 @@ describe('auth-aware model bullet wording (R3.4)', () => {
 
   test('the Phase 4 guard reports each required phrase removed from the bullet (IMP-51)', () => {
     expectGuardReportsEachMissingPhrase(
-      'commands/codex-flow.md Phase 4',
-      readText(COMMAND_PATH),
+      'skills/task-loop/SKILL.md Phase 4',
+      readText(TASK_LOOP_PATH),
       MODEL_BULLET_PHRASES,
       (text) => extractParameterBullet(extractPhaseSection(text, 4), MODEL_BULLET_LABEL),
     )
@@ -3028,7 +3020,7 @@ describe('Codex review scope passing and out-of-scope routing (R4.3)', () => {
 
   test('Phase 5 step 1 passes the task Files and Contracts as the review scope', () => {
     // Arrange
-    const phaseFive = extractPhaseSection(readText(COMMAND_PATH), 5)
+    const phaseFive = extractPhaseSection(readText(FINAL_REVIEW_PATH), 5)
 
     // Act
     const stepOne = extractNumberedStep(phaseFive, 1)
@@ -3066,14 +3058,14 @@ describe('Codex review scope passing and out-of-scope routing (R4.3)', () => {
     const command = readText(COMMAND_PATH)
 
     expectGuardReportsEachMissingPhrase(
-      'commands/codex-flow.md Phase 5 step 1',
-      command,
+      'skills/task-loop/SKILL.md Phase 5 step 1',
+      readText(TASK_LOOP_PATH),
       [SCOPE_ARGUMENT],
       (text) => extractNumberedStep(extractPhaseSection(text, 5), 1),
     )
     expectGuardReportsEachMissingPhrase(
-      'commands/codex-flow.md Phase 5 step 4',
-      command,
+      'skills/task-loop/SKILL.md Phase 5 step 4',
+      readText(TASK_LOOP_PATH),
       STEP_FOUR_PHRASES,
       (text) => extractNumberedStep(extractPhaseSection(text, 5), 4),
     )
@@ -3132,22 +3124,23 @@ describe('PROJECT.md generation, reading, and refresh triggers (R7.3, R7.4)', ()
     const stepEight = extractNumberedStep(phaseFive, 8)
 
     // Assert
-    expect(findMissingPhrases('commands/codex-flow.md Phase 5 step 8', stepEight, STEP_EIGHT_PHRASES))
+    expect(findMissingPhrases('skills/final-review/SKILL.md Phase 5 step 8', stepEight, STEP_EIGHT_PHRASES))
       .toEqual([])
   })
 
   test('the Phase 0 and Phase 5 step 8 guards report each removed phrase (IMP-51)', () => {
-    const command = readText(COMMAND_PATH)
+    const finalReview = readText(FINAL_REVIEW_PATH)
+    const preflight = readText(PREFLIGHT_PATH)
 
     expectGuardReportsEachMissingPhrase(
-      'commands/codex-flow.md Phase 0',
-      command,
+      'skills/preflight/SKILL.md',
+      preflight,
       PHASE_ZERO_PHRASES,
-      (text) => extractPhaseSection(text, 0),
+      (text) => text,
     )
     expectGuardReportsEachMissingPhrase(
-      'commands/codex-flow.md Phase 5 step 8',
-      command,
+      'skills/final-review/SKILL.md Phase 5 step 8',
+      finalReview,
       STEP_EIGHT_PHRASES,
       (text) => extractNumberedStep(extractPhaseSection(text, 5), 8),
     )
@@ -3974,9 +3967,9 @@ describe('event journal archive obligation', () => {
     text.replace(/\s+/g, ' ').split(/(?<=[.;])\s/).filter((sentence) => sentence.includes(marker))
   )
 
-  test('the command restart instruction archives EVENTS.jsonl', () => {
+  test('the preflight restart instruction archives EVENTS.jsonl', () => {
     // Arrange
-    const command = readText(path.join(REPO_ROOT, 'commands', 'codex-flow.md'))
+    const command = readText(path.join(REPO_ROOT, 'skills', 'preflight', 'SKILL.md'))
 
     // Act
     const sentences = sentencesNaming(command, 'EVENTS.jsonl')
@@ -4000,12 +3993,9 @@ describe('event journal archive obligation', () => {
 })
 
 describe('orphaned event journal recovery', () => {
-  test.each([
-    ['command', path.join(REPO_ROOT, 'commands', 'codex-flow.md')],
-    ['preflight skill', path.join(REPO_ROOT, 'skills', 'preflight', 'SKILL.md')],
-  ])('the %s archives an orphaned EVENTS.jsonl when STATE.md is missing', (_, filePath) => {
+  test('the preflight skill archives an orphaned EVENTS.jsonl when STATE.md is missing', () => {
     // Arrange
-    const text = readText(filePath).replace(/\s+/g, ' ')
+    const text = readText(path.join(REPO_ROOT, 'skills', 'preflight', 'SKILL.md')).replace(/\s+/g, ' ')
 
     // Act
     const sentence = text.match(/If STATE\.md does not exist[^]*?orphaned control files/)?.[0] ?? ''

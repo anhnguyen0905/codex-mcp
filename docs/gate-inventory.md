@@ -5,10 +5,10 @@ This Phase 0 inventory records gates that assume code, git, or tests, so the mul
 | Gate | File | Anchor | Phase | Assumes | Applies to non-code runs | Profile equivalent (proposed) |
 | --- | --- | --- | --- | --- | --- | --- |
 | Git cleanliness and baseline ref | skills/preflight/SKILL.md | `Git cleanliness + ref` | 0 | git | partly | Data profile: record input paths, hashes, and the starting repository ref. |
-| Dirty-baseline patch | commands/codex-flow.md | `baseline-dirty.patch` | 0 | git | partly | Data profile: snapshot input files as the before-state; keep the patch for repository files. |
-| Live logs ignored | commands/codex-flow.md | `so raw live-progress JSONL logs never land` | 0 | git | partly | Keep as-is for repository runs; exclude transient analysis logs from deliverables. |
+| Dirty-baseline patch | skills/preflight/SKILL.md | `baseline-dirty.patch` | 0 | git | partly | Data profile: snapshot input files as the before-state; keep the patch for repository files. |
+| Live logs ignored | skills/preflight/SKILL.md | `raw JSONL progress logs never land` | 0 | git | partly | Keep as-is for repository runs; exclude transient analysis logs from deliverables. |
 | Known-red test baseline | skills/preflight/SKILL.md | `Record pre-existing failures as the` | 0 | test | yes | Data profile: snapshot input paths, sizes, row counts, and hashes as the before-state. |
-| PROJECT.md commit | commands/codex-flow.md | `PROJECT.md is tracked, not run state` | 0 | git | partly | Keep as-is for repository context; record the analysis brief beside non-code outputs. |
+| PROJECT.md commit | skills/preflight/SKILL.md | `PROJECT.md is tracked, not run state` | 0 | git | partly | Keep as-is for repository context; record the analysis brief beside non-code outputs. |
 | AGENTS.md commit | commands/codex-flow.md | `commit every AGENTS.md creation/update` | 2 | git | partly | Keep as-is for repository guidance; non-code profiles use their approved rubric. |
 | Fast-path eligibility | skills/fast-path/SKILL.md | `the task must fit ONE of these lanes` | fast-path | code, git | partly | Profile router: classify analysis, design, planning, and content requests before execution. |
 | Small-change scope trip-wire | skills/fast-path/SKILL.md | `ANY extra changed file` | fast-path | code, git | no | Profile scope trip-wire: stop when output files exceed the declared deliverable set. |
@@ -18,9 +18,9 @@ This Phase 0 inventory records gates that assume code, git, or tests, so the mul
 | Clean tracked-baseline worktrees | skills/parallel-execution/SKILL.md | `its tracked baseline is clean` | 4 | git | partly | Keep for files in git; use isolated workspaces for concurrent deliverable work. |
 | Worktree branch point | skills/parallel-execution/SKILL.md | `branch from the CURRENT integration branch HEAD` | 4 | git | partly | Keep for files in git; branch deliverable work from the current approved baseline. |
 | Checkpoint task commits | skills/parallel-execution/SKILL.md | `MUST commit its task changes on the worktree branch` | 4 | git | partly | Keep for files in git; skip when the deliverable lives outside the repository. |
-| Scope-check trip-wire | commands/codex-flow.md | `Scope trip-wire (mechanical, not judgment)` | 5 | code, git | no | Profile scope check: compare every produced file with the declared deliverable list. |
+| Scope-check trip-wire | skills/task-loop/SKILL.md | `Scope trip-wire (mechanical, not judgment)` | 5 | code, git | no | Profile scope check: compare every produced file with the declared deliverable list. |
 | Codex review git diff | src/server.ts | `for committed changes AND` | 5 | git | partly | Review the deliverable files and the manifest, not a code diff. |
-| Full-suite final review | commands/codex-flow.md | `Run the full test suite, AND verify the feature end-to-end` | 5 | test | yes | Re-run the manifest checker on the whole deliverable plus rubric review. |
+| Full-suite final review | skills/final-review/SKILL.md | `Run the full test suite, AND verify the feature end-to-end` | 5 | test | yes | Re-run the manifest checker on the whole deliverable plus rubric review. |
 | Squash offer | skills/parallel-execution/SKILL.md | `Offer to squash the per-task/per-wave commits` | 5 | git | partly | Keep as-is for repository artifacts; package external deliverables separately. |
 | Small-change lane test run | skills/fast-path/SKILL.md | `first run the project's test command once` | fast-path | test | no | Run the profile's relevant checker once and record pre-existing findings. |
 | Conformance scope check | skills/review-conformance/SKILL.md | `Check scope both ways` | 5 | code, git, test | partly | Profile review checks requirements, declared outputs, sources, and rubric coverage. |

@@ -1,0 +1,2 @@
+scope,potential_buyers,actual_buyers,cr_pct,retained_users,payers,benchmark_actual_buyers,target_actual_buyers,target_retention_gap
+all,1250,360,28.80,810,360,60,320,4.8

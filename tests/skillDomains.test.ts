@@ -15,6 +15,14 @@ const allScenarios = scenarioFiles.flatMap((file) => JSON.parse(
   fs.readFileSync(path.join(fixtureDir, file), 'utf8'),
 ).scenarios)
 
+const WORKFLOW_SKILLS = Object.freeze([
+  'interview-ask-back', 'interview-elicitation', 'agent-context-persistence', 'context-discipline',
+  'exec-deliverable', 'fast-path', 'executor-fallback', 'parallel-execution', 'preflight', 'profile-pilot',
+  'review-conformance', 'review-dual', 'review-feedback', 'review-quality', 'review-security',
+  'run-ledger', 'session-report', 'jev-assist', 'skill-selection', 'plan-architecture', 'plan-backlog',
+  'plan-research-first', 'brainstorm-argumentation', 'brainstorm-debate', 'brainstorm-lenses',
+])
+
 describe('domain-tag skill selection', () => {
   it('tag map covers every expectAny skill and every plugin skill', () => {
     // Arrange
@@ -41,7 +49,8 @@ describe('domain-tag skill selection', () => {
       if (!fs.existsSync(file)) return []
       const frontmatter = fs.readFileSync(file, 'utf8').split(/\r?\n/)
         .filter((line) => line.startsWith('name:') || line.startsWith('description:')).join(' ').toLowerCase()
-      return SKILL_DOMAINS[name].filter((domain) => !DOMAIN_KEYWORDS[domain].some((keyword) => frontmatter.includes(keyword.toLowerCase())))
+      return SKILL_DOMAINS[name].filter((domain) => domain !== 'workflow'
+        && !DOMAIN_KEYWORDS[domain].some((keyword) => frontmatter.includes(keyword.toLowerCase())))
         .map((domain) => `${name}:${domain}`)
     })
 
@@ -60,6 +69,30 @@ describe('domain-tag skill selection', () => {
 
     // Assert
     for (const [request, expected] of cases) expect(requestDomains(request)).toEqual(expected)
+  })
+
+  it('maps codex-flow workflow skills to the untagged workflow domain', () => {
+    // Act / Assert
+    for (const name of WORKFLOW_SKILLS) expect(SKILL_DOMAINS[name]).toEqual(['workflow'])
+  })
+
+  it('does not detect workflow as a request domain', () => {
+    // Act / Assert
+    expect(requestDomains('codex-flow preflight review')).not.toContain('workflow')
+  })
+
+  it('does not boost workflow skills when domain tags are on', () => {
+    // Arrange
+    const entries = [
+      { name: 'preflight', description: 'codex-flow preflight review', tokens: 1 },
+      { name: 'product-manager', description: 'codex-flow preflight review', tokens: 1 },
+    ]
+
+    // Act
+    const selected = selectSkills(entries, ['codex-flow', 'preflight', 'review'], { domainTags: true, tokenBudget: 2 })
+
+    // Assert
+    expect(selected[0].score).toBe(matchDetail(entries[0], ['codex-flow', 'preflight', 'review'], buildDocFrequency(entries)).score)
   })
 
   it('the boost changes ranking only when domain tags are on', () => {

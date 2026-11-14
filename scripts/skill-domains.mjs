@@ -6,7 +6,7 @@ const PASS_DELTA = 0
 export const DOMAINS = Object.freeze([
   'data', 'engineering', 'viz', 'marketing', 'growth', 'research', 'product', 'finance', 'accounting',
   'personal', 'operations', 'crm', 'people', 'legal', 'design', 'education', 'logistics',
-  'localization',
+  'localization', 'workflow',
 ])
 
 const GLOSSARY_ENGLISH = Object.freeze({
@@ -33,10 +33,10 @@ const GLOSSARY_ENGLISH = Object.freeze({
 const DOMAIN_SYNONYMS = Object.freeze({
   data: ['analytics', 'etl', 'pipeline', 'query', 'causal'], engineering: ['api', 'software', 'coding', 'javascript', 'typescript', 'python', 'backend', 'frontend', 'container', 'kubernetes', 'redis', 'postgres', 'c++', 'c#', 'ruby', 'rust', 'swift', 'java', 'kotlin', 'target project', 'github actions', 'self-testing', 'php'], viz: ['plot', 'diagram', 'graph'],
   marketing: ['creative', 'seo audit'], growth: ['acquisition', 'cpi'], research: ['evidence', 'literature'],
-  product: ['requirements', 'feature', 'stakeholder', 'argumentation', 'debate', 'lenses', 'deliverable', 'codex-flow', 'small-change-lane', 'interview', 'typesafe', 'preflight', 'multiscope', 'codex and claude', 'verdict', 'run record', 'session report', 'skill index'], finance: ['financial', 'budgeting'],
+  product: ['requirements', 'feature', 'stakeholder'], finance: ['financial', 'budgeting'],
   accounting: ['ledger', 'tax'], personal: ['household'], operations: ['vendor'],
   crm: ['support'], people: ['human resources'], legal: ['privacy'], design: ['interface'],
-  education: ['learning'], logistics: ['shipping'], localization: ['i18n', 'l10n'],
+  education: ['learning'], logistics: ['shipping'], localization: ['i18n', 'l10n'], workflow: [],
 })
 
 export const DOMAIN_KEYWORDS = Object.freeze(Object.fromEntries(
@@ -51,8 +51,10 @@ const SKILL_GROUPS = [
   ...tag('marketing', 'aso', 'brand-discovery', 'brand-voice', 'creative-brief', 'marketing-campaign', 'content-engine', 'influencer-strategy', 'social-publisher', 'crisis-communication', 'crosspost', 'email-ops'),
   ...tag('growth', 'funnel-analytics', 'ltv-cohort-modeling', 'marketing-attribution', 'media-planning', 'performance-marketing', 'unit-economics', 'growth-log'),
   ...tag('data', 'causal-inference'),
+  ...tag('data', 'pack-game-analytics'),
   ...tag('research', 'market-research', 'market-research-reports', 'competitive-platform-analysis', 'competitive-report-structure', 'benchmark-methodology', 'literature-review', 'peer-review', 'scholar-evaluation', 'research-grants', 'survey-design', 'interpreting-culture-index', 'lead-intelligence'),
-  ...tag('product', 'product-capability', 'product-lens', 'product-manager', 'project-manager', 'okr-planning', 'intent-driven-development', 'blueprint', 'council', 'update-docs', 'interview-ask-back', 'interview-elicitation', 'agent-context-persistence', 'context-discipline', 'exec-deliverable', 'fast-path', 'executor-fallback', 'parallel-execution', 'preflight', 'profile-pilot', 'review-conformance', 'review-dual', 'review-feedback', 'review-quality', 'review-security', 'run-ledger', 'session-report', 'jev-assist', 'skill-selection', 'plan-architecture', 'plan-backlog', 'plan-research-first', 'brainstorm-argumentation', 'brainstorm-debate', 'brainstorm-lenses'),
+  ...tag('product', 'product-capability', 'product-lens', 'product-manager', 'project-manager', 'okr-planning', 'intent-driven-development', 'blueprint', 'council', 'update-docs'),
+  ...tag('workflow', 'interview-ask-back', 'interview-elicitation', 'agent-context-persistence', 'context-discipline', 'exec-deliverable', 'fast-path', 'executor-fallback', 'parallel-execution', 'preflight', 'profile-pilot', 'review-conformance', 'review-dual', 'review-feedback', 'review-quality', 'review-security', 'run-ledger', 'session-report', 'jev-assist', 'skill-selection', 'plan-architecture', 'plan-backlog', 'plan-research-first', 'brainstorm-argumentation', 'brainstorm-debate', 'brainstorm-lenses', 'task-loop', 'final-review'),
   ...tag('finance', 'personal-finance', 'real-estate-analysis', 'investor-materials', 'what-if-oracle', 'usfiscaldata'),
   ...tag('operations', 'ecommerce-operations', 'manufacturing-ops-planning', 'inventory-demand-planning', 'production-scheduling', 'quality-nonconformance', 'sme-operations', 'sop-authoring', 'warehouse-operations', 'returns-reverse-logistics', 'logistics-exception-management', 'energy-procurement', 'carrier-relationship-management'),
   ...tag('crm', 'sales-pipeline-crm', 'customer-support-ops'),

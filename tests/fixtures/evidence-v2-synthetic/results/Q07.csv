@@ -1,0 +1,5 @@
+lifecycle_bucket,potential_buyers,actual_buyers,cr_pct
+new_day_0,500,120,24.00
+new_day_1_3,360,108,30.00
+new_day_4_7,240,84,35.00
+new_day_8_plus,150,48,32.00

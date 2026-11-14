@@ -1,11 +1,15 @@
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { detectLanguage } from './run-ledger.mjs'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { detectLanguage } from './language-detect.mjs'
+import { requestDomains } from './skill-domains.mjs'
 
 const PROFILES = ['code', 'data', 'design', 'plan', 'content', 'mixed']
 const PROFILE_MODES = ['off', 'shadow', 'enforce']
 const LANGUAGE_MODES = ['off', 'on']
+const PACK_MODES = ['off', 'on']
+export const PACKS_DEFAULT = 'off'
+const PACKS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'packs')
 export const NON_CODE_PROFILES = Object.freeze(['data', 'design', 'plan', 'content'])
 export const DATA_PROFILE_GATES = Object.freeze([
   'Known-red test baseline',
@@ -33,9 +37,20 @@ export function resolveSwitches(env = process.env) {
     profileMode: resolveValue(env, 'CODEX_FLOW_PROFILE_MODE', PROFILE_MODES, 'shadow', warnings),
     evidenceMode: resolveValue(env, 'CODEX_FLOW_EVIDENCE', PROFILE_MODES, 'off', warnings),
     languageMode: resolveValue(env, 'CODEX_FLOW_RUN_LANGUAGE', LANGUAGE_MODES, 'off', warnings),
+    packs: resolveValue(env, 'CODEX_FLOW_PACKS', PACK_MODES, PACKS_DEFAULT, warnings),
     warnings,
   }
 }
+
+export const loadPackMetadata = (packsDir = PACKS_DIR) => readdirSync(packsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => {
+  const file = path.join(packsDir, entry.name, 'pack.json')
+  const pack = JSON.parse(readFileSync(file, 'utf8'))
+  if (pack.name !== entry.name || typeof pack.skill !== 'string' || !Array.isArray(pack.domains)) throw new Error(`invalid pack metadata: ${file}`)
+  return pack
+})
+const routedPacks = ({ mode, profile, request }) => mode === 'on' && profile === 'data'
+  ? loadPackMetadata().filter((pack) => pack.domains.some((domain) => requestDomains(request ?? '').includes(domain))).map((pack) => pack.name)
+  : []
 
 /** @param {{profile: string, profileMode: string}} input @returns {{skip: string[], wouldSkip: string[]}} */
 export function routeGates({ profile, profileMode }) {
@@ -107,6 +122,7 @@ export function main(argv = process.argv.slice(2)) {
       runLanguage: language,
       languageSource: language === '-' ? '-' : 'detected',
       ...route,
+      packs: routedPacks({ mode: switches.packs, profile: args.profile, request }),
       initFlags: [
         `--profile ${routedProfile}`,
         `--profile-mode ${switches.profileMode}`,

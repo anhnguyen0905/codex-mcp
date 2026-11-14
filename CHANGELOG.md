@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `npm run data:guard` (T1) and a fully synthetic evidence-v2 fixture replacing real-report data (T2).
+- `quality:eval` with rubric, case schema, holdout hash freeze, mechanical grader and aggregate report (T3–T4); blind Codex grader `quality:grade`, calibration and offline emit/ingest (T5, with kebab-case flags fixed in T17).
+- 32 synthetic dev cases (T6); a local holdout manifest (hashes only) and baseline in `docs/quality-eval-report.md` (T7).
+- `scripts/language-detect.mjs` with the short-English fix (T8); language-check table-header and mixed-EOL fixes plus `languageGateAction` (T9).
+- An untagged `workflow` domain (T10).
+- The opt-in `pack-game-analytics` skill and `packs/game-analytics` behind `CODEX_FLOW_PACKS` (T11). The pack gate FAILED (+5.0 pp vs +10 required, language pass unchanged, owner preferred pack-off in both blind pairs), so `PACKS_DEFAULT` stays `off` (T12).
+
+### Changed
+
+- The task loop and final review moved into the `task-loop` and `final-review` skills (T13–T14); Phase 0/3 were slimmed, with preflight owning the router, PROJECT.md and report dir and loading only after the fast-path gate (T15).
+- The command diet reduced the command from 43 020 to 14 704 bytes and the fast-path lane to 4 903 tokens (T15).
+
+### Fixed
+
+- The per-phase loaded guard replaces the skills-only guard, and all budgets are locked (T16).
+
 ## [0.36.1] - 2026-11-14
 
 ### Fixed

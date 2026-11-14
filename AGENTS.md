@@ -12,6 +12,14 @@ behavior is defined in **markdown instruction files**, not runtime code.
 - In the Codex sandbox, if vitest fails with EPERM writing `node_modules/.vite-temp`, use
   `npx vitest run <file> --configLoader runner`; host-run results remain the source of truth.
 
+## No real data (public repository)
+
+- This repository is PUBLIC. Never commit text, numbers, ids, SKUs, country splits, CSVs or
+  reports taken from real analysis work (game data, BigQuery/AppsFlyer exports, pilot reports).
+  Fixtures, examples and docs use invented data only. Real evaluation holdouts live outside the
+  git tree (`~/.codex-mcp/quality-holdout/`); the repo may hold only their hashes.
+- Run `npm run data:guard` before every commit once it exists (multiscope Phase 3, T1).
+
 ## Hard conventions (CI-gated — violating these red-fails tests)
 
 - **Command mirror**: every `commands/<name>.md` (`codex-flow.md`, `brainstorm.md`) has a
@@ -55,8 +63,10 @@ behavior is defined in **markdown instruction files**, not runtime code.
   default `shadow`), `CODEX_FLOW_EVIDENCE` (`off|shadow|enforce`, default `off`),
   `CODEX_FLOW_RUN_LANGUAGE` (`off|on`, default `off`); defaults must keep today's behaviour. The
   behaviour-changing rules live in the conditional skill `skills/profile-pilot` (not in
-  `PHASE_SKILL_MAP`). Byte guards: `commands/codex-flow.md` ≤ 43 150 and the code-run flow total
-  ≤ 162 943 — pay for new command text by trimming unpinned duplicates; never touch Phase 2 skills.
+  `PHASE_SKILL_MAP`). Byte guards: command ≤ 15 000 B and the code-run flow total
+  ≤ 158 686 B, with a fast-path lane ≤ 5 000 tokens (chars/4) and per-phase loaded ceilings
+  pinned in `tests/flowDocs.test.ts` — pay for new command text by trimming unpinned duplicates;
+  never touch Phase 2 skills.
 
 ## Style
 

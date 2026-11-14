@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "data": [
+      { "id": "data.reproducible", "criterion": "pass when the analysis can be reproduced", "evidence": "inputs, method, and calculations" },
+      { "id": "data.sourced", "criterion": "pass when claims identify their source", "evidence": "source notes and provenance" },
+      { "id": "data.answers-the-question", "criterion": "pass when the response answers the request", "evidence": "request-to-result mapping" },
+      { "id": "data.decision-useful", "criterion": "pass when results support a decision", "evidence": "recommendation and supporting measures" },
+      { "id": "data.language-consistent", "criterion": "pass when the response uses the run language consistently", "evidence": "headings, prose, and labels" }
+    ],
+    "design": [
+      { "id": "design.goal-and-fantasy", "criterion": "pass when goal, target player, and player fantasy are stated", "evidence": "goal and audience lines" },
+      { "id": "design.core-loop", "criterion": "pass when the loop is ordered and gives time per loop", "evidence": "loop table" },
+      { "id": "design.systems-and-dependencies", "criterion": "pass when every system has inputs, outputs, unlocks/dependencies, and no orphan remains", "evidence": "system/dependency matrix" },
+      { "id": "design.economy-balance", "criterion": "pass when every currency/resource has named sources and sinks, numeric rates, and a pacing target", "evidence": "economy table and parameters file" },
+      { "id": "design.risks", "criterion": "pass when at least three risks have impact and mitigation or kill criterion", "evidence": "risk register" },
+      { "id": "design.kpis", "criterion": "pass when KPIs have definition, baseline/target, and an event used to measure them", "evidence": "KPI table and event names" },
+      { "id": "design.numbers-consistent", "criterion": "pass when a number reused across sections has one value", "evidence": "cross-section comparison" }
+    ],
+    "plan": [
+      { "id": "plan.objective", "criterion": "pass when the objective is measurable and has success criteria", "evidence": "objective and acceptance lines" },
+      { "id": "plan.milestones-and-dependencies", "criterion": "pass when milestones are dated, predecessors are shown, and the critical path is named", "evidence": "schedule and dependency graph" },
+      { "id": "plan.owners-and-capacity", "criterion": "pass when every workstream has an owner and demand versus capacity per person has no unflagged over-allocation", "evidence": "capacity table" },
+      { "id": "plan.risks", "criterion": "pass when each risk has an owner, trigger, and mitigation", "evidence": "risk register" }
+    ],
+    "content": [
+      { "id": "content.audience", "criterion": "pass when a named segment and insight are present", "evidence": "audience and insight lines with source" },
+      { "id": "content.message", "criterion": "pass when one proposition has no more than three supports with proof", "evidence": "message and proof table" },
+      { "id": "content.voice", "criterion": "pass when brand voice and the register for the run language are stated", "evidence": "voice guide and language note" },
+      { "id": "content.cta", "criterion": "pass when one primary CTA has a destination and measurement method", "evidence": "CTA line and event definition" }
+    ]
+  }
+}

@@ -1,6 +1,8 @@
 # Evidence v2 validation
 
-Evidence v2 was validated on a real pilot purchase-funnel report and its Q01–Q10 result CSVs (46 figures, 8 tables, 10 claims, 7 structural `ignoreNumbers` literals; figure commands derived from cited CSV cells or arithmetic over those cells). The real report and its data are not kept in this public repository; an anonymized fixture replaces them (multiscope Phase 3, R5.1).
+Evidence v2 is validated with a fully synthetic Vietnamese purchase-funnel fixture for the fictional game Sky Courier by fictional studio Cloud Kite. It uses the invented app id `com.example.skycourier`, regions R01–R10, and bundle_a through bundle_h; all dates, counts, reasons, and rates are invented. The fixture has 47 figures, 8 tables, 10 claims, and no ignored measured numbers. Figure commands derive from Q01–Q10 CSV cells or arithmetic over those cells, and breakdown reconciliation is tested against Q02 totals.
+
+The clean and mutation/seed coverage is implemented in [`tests/evidenceSyntheticReport.test.ts`](../tests/evidenceSyntheticReport.test.ts).
 
 | Seed | Change | v1 pilot outcome | v2 expected check | v2 observed |
 |---|---|---|---|---|
@@ -14,4 +16,4 @@ Evidence v2 was validated on a real pilot purchase-funnel report and its Q01–Q
 | mutation | Transform every numeric CSV cell with `round(x*1.5+1, 4)` | n/a | every figure mismatches | caught |
 | g | Change one source CSV cell | n/a | figure-mismatch and table-mismatch | caught |
 
-The unit-level regressions for seeds b and e live in `tests/evidenceCheck.test.ts` with synthetic values.
+The seed table is intentionally generic so it documents checker behavior without preserving report-specific data.

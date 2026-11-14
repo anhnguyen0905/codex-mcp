@@ -56,4 +56,4 @@ If `tolerance` is omitted, `defaultTolerance(value)` derives it from the figure 
 1. Record the baseline with all defaults using the [baseline procedure](gate-inventory.md#baseline-procedure).
 2. Run pilot variants that change **one switch at a time**.
 3. Compare runs with `node scripts/run-ledger.mjs summary --filter profileMode=enforce`, and use the analogous `evidenceMode=enforce` and `languageMode=on` filters. Filters are repeatable and ANDed; an absent mode field counts as `off`.
-4. Pass only when always-loaded bytes do not increase (the pinned limits are command ≤ 43 150 bytes and flow total ≤ 162 943 bytes), `tests/evidenceCheck.test.ts` is green, and median `fixRounds`, `ownerGates`, and `wallClockMinutes` are no worse than baseline.
+4. Pass only when always-loaded bytes do not increase (command ≤ 15 000 B, fast-path lane ≤ 5 000 tokens at chars/4, flow total ≤ 158 686 B, with per-phase loaded ceilings pinned in `tests/flowDocs.test.ts`), `tests/evidenceCheck.test.ts` is green, and median `fixRounds`, `ownerGates`, and `wallClockMinutes` are no worse than baseline.

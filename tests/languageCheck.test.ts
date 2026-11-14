@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest'
 // @ts-expect-error — plain .mjs script, not part of the tsc build
 import { LANGUAGE_TERMS } from '../scripts/language-terms.mjs'
 // @ts-expect-error — plain .mjs script, not part of the tsc build
-import { checkLanguage, main } from '../scripts/language-check.mjs'
+import { checkLanguage, languageGateAction, main } from '../scripts/language-check.mjs'
+
+const syntheticReport = new URL('./fixtures/evidence-v2-synthetic/REPORT.md', import.meta.url)
 
 const tempFile = (contents: string) => {
   const directory = mkdtempSync(path.join(os.tmpdir(), 'language-check-'))
@@ -67,6 +69,57 @@ describe('language check', () => {
     ])
   })
 
+  it('checks prose containing a pipe above a horizontal rule', () => {
+    // Arrange
+    const text = 'potential buyer | narrative\n---\n'
+
+    // Act
+    const findings = checkLanguage(text, 'vi')
+
+    // Assert
+    expect(findings).toEqual([{ check: 'untranslated-term', term: 'potential buyer', line: 1 }])
+  })
+
+  it('masks a real table header with a matching separator', () => {
+    // Arrange
+    const text = '| potential buyer | country |\n| --- | :---: |\n'
+
+    // Act
+    const findings = checkLanguage(text, 'vi')
+
+    // Assert
+    expect(findings).toEqual([])
+  })
+
+  it('checks a header when its cell count differs from the separator', () => {
+    // Arrange
+    const text = '| potential buyer | country |\n| --- |\n'
+
+    // Act
+    const findings = checkLanguage(text, 'vi')
+
+    // Assert
+    expect(findings).toEqual([
+      { check: 'untranslated-term', term: 'country', line: 1 },
+      { check: 'untranslated-term', term: 'potential buyer', line: 1 },
+    ])
+  })
+
+  it('every finding on the synthetic report points at a line containing its term', () => {
+    // Arrange
+    const report = readFileSync(syntheticReport, 'utf8')
+
+    // Act
+    const findings = checkLanguage(report, 'vi')
+
+    // Assert
+    expect(findings.length).toBeGreaterThanOrEqual(5)
+    expect(findings.some((finding) => finding.term === 'potential buyer')).toBe(true)
+    expect(new Set(findings.map((finding) => `${finding.term}@${finding.line}`)).size).toBe(findings.length)
+    const lines = report.split(/\r?\n/)
+    for (const finding of findings) expect(lines[finding.line - 1].toLowerCase()).toContain(finding.term.toLowerCase())
+  })
+
   it('reports a Vietnamese term in an English deliverable', () => {
     // Arrange
     const text = 'The doanh thu increased this quarter.\n'
@@ -125,6 +178,52 @@ describe('language check', () => {
     expect(lfFindings).toEqual([{ check: 'untranslated-term', term: 'potential buyer', line: 40 }])
     expect(crlfFindings).toEqual(lfFindings)
     expect(glossFindings).toEqual([])
+  })
+
+  it('reports exact lines in a mixed LF and CRLF document', () => {
+    // Arrange
+    const text = 'Dòng nội dung\r\npotential buyer\nDòng nội dung\r\ncountry\n'
+
+    // Act
+    const findings = checkLanguage(text, 'vi')
+
+    // Assert
+    expect(findings).toEqual([
+      { check: 'untranslated-term', term: 'potential buyer', line: 2 },
+      { check: 'untranslated-term', term: 'country', line: 4 },
+    ])
+  })
+
+  it.each([
+    ['off', 'off', 0, 'skip'], ['off', 'off', 1, 'skip'], ['off', 'off', 2, 'skip'],
+    ['off', 'shadow', 0, 'skip'], ['off', 'shadow', 1, 'skip'], ['off', 'shadow', 2, 'skip'],
+    ['off', 'enforce', 0, 'skip'], ['off', 'enforce', 1, 'skip'], ['off', 'enforce', 2, 'skip'],
+    ['on', 'off', 0, 'record'], ['on', 'off', 1, 'record'], ['on', 'off', 2, 'stop'],
+    ['on', 'shadow', 0, 'record'], ['on', 'shadow', 1, 'record'], ['on', 'shadow', 2, 'stop'],
+    ['on', 'enforce', 0, 'record'], ['on', 'enforce', 1, 'finding'], ['on', 'enforce', 2, 'stop'],
+  ])('returns the gate action for %s mode, %s profile, and exit %s', (languageMode, profileMode, exitCode, expected) => {
+    // Arrange
+
+    // Act
+    const action = languageGateAction({ languageMode, profileMode, exitCode })
+
+    // Assert
+    expect(action).toBe(expected)
+  })
+
+  it.each([
+    [{ languageMode: 'mystery', profileMode: 'off', exitCode: 0 }],
+    [{ languageMode: 'shadow', profileMode: 'off', exitCode: 0 }],
+    [{ languageMode: 'shadow', profileMode: 'mystery', exitCode: 0 }],
+    [{ languageMode: 'shadow', profileMode: 'off', exitCode: 3 }],
+  ])('throws TypeError for invalid gate input', (input) => {
+    // Arrange
+
+    // Act
+    const action = () => languageGateAction(input)
+
+    // Assert
+    expect(action).toThrow(TypeError)
   })
 
   it('text after a URL on the same line is still checked', () => {

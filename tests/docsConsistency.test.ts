@@ -7,6 +7,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const PROFILE_PILOT_PATH = path.join(REPO_ROOT, 'skills', 'profile-pilot', 'SKILL.md')
 const FAST_PATH_PATH = path.join(REPO_ROOT, 'skills', 'fast-path', 'SKILL.md')
 const COMMAND_PATH = path.join(REPO_ROOT, 'commands', 'codex-flow.md')
+const TASK_LOOP_PATH = path.join(REPO_ROOT, 'skills', 'task-loop', 'SKILL.md')
 const CLAUDE_COMMAND_PATH = path.join(REPO_ROOT, '.claude', 'commands', 'codex-flow.md')
 const EVIDENCE_CHECK_PATH = path.join(REPO_ROOT, 'scripts', 'evidence-check.mjs')
 const LANGUAGE_CHECK_PATH = path.join(REPO_ROOT, 'scripts', 'language-check.mjs')
@@ -115,8 +116,7 @@ describe('documentation consistency', () => {
 
   test('Phase 4 uses a snapshot base when checkpoint commits are off', () => {
     // Arrange
-    const command = readText(COMMAND_PATH)
-    const phaseFour = command.match(/## Phase 4[\s\S]*?(?=\n## |$)/)?.[0] ?? ''
+    const phaseFour = readText(TASK_LOOP_PATH).match(/## Phase 4[\s\S]*?(?=\n## |$)/)?.[0] ?? ''
     const stepOne = phaseFour.match(/\n1\. Before[\s\S]*?(?=\n\s*- `prompt`)/)?.[0] ?? ''
 
     // Act

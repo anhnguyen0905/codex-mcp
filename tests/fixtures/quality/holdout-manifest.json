@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "count": 22,
+  "cases": [
+    {
+      "id": "h01",
+      "sha256": "4b020c480c91f7e7a61c039d57cf3b998ef1b452ea884a1fbb5ddeddf8f94876"
+    },
+    {
+      "id": "h02",
+      "sha256": "a23a27ca32a3b6c693414a032c2f56bb4d22ab5fc860feae8b512ed7b292daec"
+    },
+    {
+      "id": "h03",
+      "sha256": "4b2e77d2b02f555eff8b2da2ac5d71add0358f8469e3632b2381b6fe8aebc32e"
+    },
+    {
+      "id": "h04",
+      "sha256": "1482836ae7774fc1a5a2d9b02c1cddca8b0e94ab326c31b35d60b88545a4a9b1"
+    },
+    {
+      "id": "h05",
+      "sha256": "de698273c9894a8f140827760daf01d23e7cf63f9d5c44fb6eda350d74e22f94"
+    },
+    {
+      "id": "h06",
+      "sha256": "4221263ca2bcdeac9934aa4f7b07933c36ce94d5a2d1451aecb0fa885784834a"
+    },
+    {
+      "id": "h07",
+      "sha256": "05e61a24c982250e2d559e69a6c9ce87f66d3d7f9f12a05528253c9ab382c5dc"
+    },
+    {
+      "id": "h08",
+      "sha256": "498e43c845139407856e0563e0739011aa5668db6f86473fa3a22dc9832da66d"
+    },
+    {
+      "id": "h09",
+      "sha256": "7b72f8a6beaca67d0910df7465de84a215ed22624e2c35639e293639544fc352"
+    },
+    {
+      "id": "h10",
+      "sha256": "2fe2b49889b21d015bb94bc4a2135c866142d5017452c1fbbcbef1a0c5242075"
+    },
+    {
+      "id": "h11",
+      "sha256": "3ac39f0b451ffbe36159446cafeb9a4684e43d0ee847f242147bc1d2ac66affc"
+    },
+    {
+      "id": "h12",
+      "sha256": "a7409f8b50e5160fa791e6dfffb5e729f9b2284c5b1a9a3fa41bf4091208295c"
+    },
+    {
+      "id": "h13",
+      "sha256": "203dcbe264db08823c22c4763eeb4df3a1f13fbc7c8c163cadc5bc8f7320e089"
+    },
+    {
+      "id": "h14",
+      "sha256": "ce4ed02168cad381222b21e904412f2618f7fd49af9d628f5eb596191d85199a"
+    },
+    {
+      "id": "h15",
+      "sha256": "bafbca80945721adf1681447236d6df269fe66a3f0d62cd27ee87b6e604de060"
+    },
+    {
+      "id": "h16",
+      "sha256": "938b582de08b6603695aaee67bd150a6bdf81aa41a8d08014f1a965fec1c7da4"
+    },
+    {
+      "id": "h17",
+      "sha256": "a3669ab9f736e81fb3a9eddab9d4182b97211e99e4da3d9a9b4d388a2fd2a54c"
+    },
+    {
+      "id": "h18",
+      "sha256": "7b75f6c506d81421fdfae29f5b59ec90b205c7b3d582035070935192b4c3d5e0"
+    },
+    {
+      "id": "h19",
+      "sha256": "9223bb3e05eba139e3ef3ec786d9b04fb71bf801b5c5b2742bd51dec7c4e28b0"
+    },
+    {
+      "id": "h20",
+      "sha256": "4878fdcf3b3c5b900f992edf5df8258f9218e2dce5246452e13e55451dc5e27d"
+    },
+    {
+      "id": "h21",
+      "sha256": "258af89b4e44553d3fce3edf75309d118913a90a99de7b4918316a8f10b109f2"
+    },
+    {
+      "id": "h22",
+      "sha256": "f22ef8818c6d738859bea9a871f1120292cb74a79c72aadbe6105c07dbef7b36"
+    }
+  ],
+  "approvals": [
+    {
+      "ts": "2026-11-14T14:39:26.175Z",
+      "note": "Owner approved 22 holdout cases 2026-11-14 (T7)",
+      "ids": [
+        "h01",
+        "h02",
+        "h03",
+        "h04",
+        "h05",
+        "h06",
+        "h07",
+        "h08",
+        "h09",
+        "h10",
+        "h11",
+        "h12",
+        "h13",
+        "h14",
+        "h15",
+        "h16",
+        "h17",
+        "h18",
+        "h19",
+        "h20",
+        "h21",
+        "h22"
+      ]
+    }
+  ]
+}

@@ -5,7 +5,7 @@ description: Phase 0 preflight for codex-flow — gate on Codex login/health, de
 
 # Preflight (Phase 0 — run FIRST, it is a gate)
 
-**Helpers**: required — doctor.mjs, context-slice.mjs, flow-state.mjs (helper rule: missing → STOP and tell the user to reinstall the codex-flow plugin; non-zero exit → surface the error and STOP).
+**Helpers**: required — doctor.mjs, context-slice.mjs, flow-state.mjs, project-context.mjs, profile-router.mjs (helper rule: missing → STOP and tell the user to reinstall the codex-flow plugin; non-zero exit → surface the error and STOP).
 
 Nothing downstream is safe until these pass. Do not interview, plan, or execute until the gate is green.
 
@@ -169,3 +169,33 @@ fresh run.
    outside `execution`, it resets `currentTask`, `taskStage`, and `wave` (apart from the legacy-key
    backfill); later approval or execution transitions update only their corresponding mutable
    fields.
+
+## Command-routed details
+
+If `.codex-flow/STATE.md`, `PLAN.md`, `TASKS.md` or `EVENTS.jsonl` exists, load this skill and run
+Step 2 resume check FIRST; otherwise evaluate the Fast-path gate first and load preflight only after
+it selects the small-change lane or the full flow. The analysis lane never loads preflight.
+Orphaned control files are `PLAN.md`, `TASKS.md` or journal files named by the archive-paths helper
+when STATE.md does not exist.
+
+On a fresh run, before baselining, when `.codex-flow/PROJECT.md` is absent generate it with
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/project-context.mjs" --generate`, and ask the user to confirm or edit it in
+the Phase 1 interview. PROJECT.md is tracked, not run state: include it in checkpoint and final
+commits and never archive it with the run; when created before baselining, list it as pre-existing
+in the `baseline-dirty.patch` manifest.
+
+On a fresh run, create `.codex-flow/reports/<YYYYMMDD-HHMMSS>/` using the session-start local-time
+timestamp. On resume, reuse the report dir recorded under `## Session report` in PLAN.md; it is the
+single report dir later phases write into per `codex-flow:session-report`.
+
+**Profile router**: Full flow only (not fast-path lanes): after the Fast-path gate selects full flow
+and before baselining, classify the deliverable (`code|data|design|plan|content|mixed`) and run
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/profile-router.mjs" resolve --profile <p> --request-file <path> --run-id <report dir name>`.
+`<path>` is a temp file outside the workspace holding the user's task (e.g. via `mktemp`);
+`<report dir name>` is the session-start `<YYYYMMDD-HHMMSS>` used for the report dir. Add its
+`initFlags` to flow-state's `init`. Load `codex-flow:profile-pilot` when `profileMode` is `enforce`,
+`evidenceMode` is not `off`, or `languageMode` is `on`; its rules replace the gates it names.
+Load `codex-flow:pack-game-analytics` per `packs`.
+On resume, do not re-run the router: read `profile`, `profileMode`, `evidenceMode`, `languageMode`,
+`runLanguage` from STATE.md (missing legacy keys mean `off` modes and `-` profile/runLanguage) and
+apply the same load rule.

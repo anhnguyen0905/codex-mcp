@@ -1,0 +1,10 @@
+{
+  "name": "game-analytics",
+  "version": "0.1.0",
+  "skill": "pack-game-analytics",
+  "domains": ["data", "growth"],
+  "rubricIds": ["data.reproducible", "data.sourced", "data.answers-the-question", "data.decision-useful", "data.language-consistent"],
+  "termIds": ["potential buyer", "funnel", "conversion rate", "retention", "payer", "revenue", "in-app purchase", "purchase", "order", "failure reason", "cohort", "metric", "sample size", "confidence interval", "variant", "CR", "ARPPU", "ARPU", "LTV", "IAP"],
+  "devCaseIds": ["dev-data-01", "dev-data-02", "dev-data-03", "dev-data-04", "dev-data-05", "dev-data-06", "dev-data-07", "dev-data-08", "dev-data-09", "dev-data-10", "dev-data-11", "dev-data-12", "dev-data-13", "dev-data-14"],
+  "holdoutCaseIds": ["h01", "h02", "h03", "h04", "h05", "h06", "h07", "h08", "h09", "h10", "h11", "h12", "h13", "h14", "h15", "h16", "h17", "h22"]
+}

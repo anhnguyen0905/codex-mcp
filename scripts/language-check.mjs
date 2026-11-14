@@ -8,17 +8,38 @@ const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const boundary = (value) => `(?<!${LETTER})${value}(?!${LETTER})`
 const mask = (text, regex) => text.replace(regex, (match) => match.replace(/[^\r\n]/g, ' '))
 const lineNumber = (text, index) => text.slice(0, index).split(/\r?\n/).length
+const TABLE_SEPARATOR_CELL = /^\s*:?-{3,}:?\s*$/
+
+const tableCells = (line) => {
+  if (!line.includes('|')) return []
+  const trimmed = line.trim()
+  const content = trimmed.replace(/^\|/, '').replace(/\|$/, '')
+  return content.split('|')
+}
+
+const isTableSeparator = (line) => {
+  const cells = tableCells(line)
+  return cells.length > 0 && cells.every((cell) => TABLE_SEPARATOR_CELL.test(cell))
+}
+
+const isTableHeader = (line, separator) => {
+  const headerCells = tableCells(line)
+  const separatorCells = tableCells(separator)
+  return isTableSeparator(separator) && headerCells.length === separatorCells.length
+}
 
 const ignoredText = (text) => {
   let clean = text.replace(/<!--[\s\S]*?-->/g, (match) => match.replace(/[^\r\n]/g, ' '))
   clean = mask(clean, /```[\s\S]*?```/g)
   clean = mask(clean, /`[^`\r\n]*`/g)
   clean = mask(clean, /https?:\/\/[^\s)>]+/gi)
-  const lines = clean.split(/\r?\n/)
+  const parts = clean.split(/(\r?\n)/)
+  const lines = parts.filter((_part, index) => index % 2 === 0)
   for (let index = 0; index < lines.length - 1; index += 1) {
-    if (/^\s*\|?\s*:?-{3,}/.test(lines[index + 1]) && lines[index].includes('|')) lines[index] = lines[index].replace(/./g, ' ')
+    if (isTableHeader(lines[index], lines[index + 1])) lines[index] = lines[index].replace(/[^\r\n]/g, ' ')
   }
-  clean = lines.join(text.includes('\r\n') ? '\r\n' : '\n')
+  for (let index = 0; index < lines.length; index += 1) parts[index * 2] = lines[index]
+  clean = parts.join('')
   clean = mask(clean, /\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b|\b[A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*\b|\b[A-Z][a-z]+[A-Z][A-Za-z0-9]*\b/g)
   return clean
 }
@@ -62,6 +83,15 @@ export function checkLanguage(text, language, terms = LANGUAGE_TERMS) {
   if (typeof text !== 'string') throw new Error('text must be a string')
   if (!['en', 'vi'].includes(language)) throw new Error('language must be en or vi')
   return findingsFor(text.normalize('NFC'), language, terms)
+}
+
+export function languageGateAction({ languageMode, profileMode, exitCode }) {
+  if (!['off', 'on'].includes(languageMode) || !['off', 'shadow', 'enforce'].includes(profileMode)) throw new TypeError('unknown language or profile mode')
+  if (![0, 1, 2].includes(exitCode)) throw new TypeError('unknown language gate exit code')
+  if (languageMode === 'off') return 'skip'
+  if (exitCode === 0) return 'record'
+  if (exitCode === 2) return 'stop'
+  return profileMode === 'enforce' ? 'finding' : 'record'
 }
 
 const parseArgs = (argv) => {

@@ -13,6 +13,7 @@ const cleanEnv = (): NodeJS.ProcessEnv => {
   delete env.CODEX_FLOW_PROFILE_MODE
   delete env.CODEX_FLOW_EVIDENCE
   delete env.CODEX_FLOW_RUN_LANGUAGE
+  delete env.CODEX_FLOW_PACKS
   return env
 }
 const run = (cwd: string, args: string[], values: NodeJS.ProcessEnv = {}) => spawnSync(
@@ -27,24 +28,39 @@ describe('profile router', () => {
     // Act
     const actual = resolveSwitches(env)
     // Assert
-    expect(actual).toEqual({ profileMode: 'shadow', evidenceMode: 'off', languageMode: 'off', warnings: [] })
+    expect(actual).toEqual({ profileMode: 'shadow', evidenceMode: 'off', languageMode: 'off', packs: 'off', warnings: [] })
   })
 
   it('resolves explicit switches and warns for unknown values', () => {
     // Arrange
-    const env = { CODEX_FLOW_PROFILE_MODE: ' enforce ', CODEX_FLOW_EVIDENCE: 'shadow', CODEX_FLOW_RUN_LANGUAGE: 'on' }
+    const env = { CODEX_FLOW_PROFILE_MODE: ' enforce ', CODEX_FLOW_EVIDENCE: 'shadow', CODEX_FLOW_RUN_LANGUAGE: 'on', CODEX_FLOW_PACKS: 'on' }
     // Act
     const actual = resolveSwitches(env)
     const unknown = resolveSwitches({
-      CODEX_FLOW_PROFILE_MODE: 'bad', CODEX_FLOW_EVIDENCE: 'nope', CODEX_FLOW_RUN_LANGUAGE: 'x',
+      CODEX_FLOW_PROFILE_MODE: 'bad', CODEX_FLOW_EVIDENCE: 'nope', CODEX_FLOW_RUN_LANGUAGE: 'x', CODEX_FLOW_PACKS: 'x',
     })
     // Assert
-    expect(actual).toMatchObject({ profileMode: 'enforce', evidenceMode: 'shadow', languageMode: 'on' })
+    expect(actual).toMatchObject({ profileMode: 'enforce', evidenceMode: 'shadow', languageMode: 'on', packs: 'on' })
     expect(unknown.warnings).toEqual([
       'CODEX_FLOW_PROFILE_MODE=bad is not one of <off|shadow|enforce>; using shadow',
       'CODEX_FLOW_EVIDENCE=nope is not one of <off|shadow|enforce>; using off',
       'CODEX_FLOW_RUN_LANGUAGE=x is not one of <off|on>; using off',
+      'CODEX_FLOW_PACKS=x is not one of <off|on>; using off',
     ])
+  })
+
+  it.each([
+    ['English analytics', 'data', 'Analyze IAP payer conversion and retention', ['game-analytics']],
+    ['Vietnamese analytics', 'data', 'Phân tích doanh thu mua hàng và tỷ lệ giữ chân', ['game-analytics']],
+    ['design', 'design', 'Design a landing page', []],
+    ['legal', 'data', 'Review this legal contract', []],
+  ])('routes packs for %s', (_name, profile, request, expected) => {
+    // Arrange
+    const cwd = tempCwd()
+    // Act
+    const result = run(cwd, ['resolve', '--profile', profile, '--request', request], { CODEX_FLOW_PACKS: 'on' })
+    // Assert
+    expect(JSON.parse(result.stdout).packs).toEqual(expected)
   })
 
   it('routes data gates for off, shadow, and enforce', () => {
