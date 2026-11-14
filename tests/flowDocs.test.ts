@@ -195,6 +195,9 @@ const EXACT_FRONTMATTER_SKILLS = [
   'agent-context-persistence',
   'jev-assist',
   'profile-pilot',
+  'profile-design',
+  'profile-plan',
+  'profile-content',
 ] as const
 
 function readText(filePath: string): string {
@@ -718,7 +721,7 @@ describe('run-ledger wiring', () => {
 
 describe('T7 helper call-site inventory', () => {
   const flowSkillNames = [...new Set(PHASE_SKILL_MAP.flatMap(({ skills }) => skills))]
-  const OPT_IN_SKILLS = ['jev-assist', 'profile-pilot'] as const
+  const OPT_IN_SKILLS = ['jev-assist', 'profile-pilot', 'profile-design', 'profile-plan', 'profile-content'] as const
   const scope = [
     COMMAND_PATH,
     ...flowSkillNames.map((name) => path.join(SKILLS_DIR, name, 'SKILL.md')),
@@ -858,6 +861,7 @@ describe('profile-pilot skill', () => {
     expect(fields.every(({ value }) => value.trim().length > 0)).toBe(true)
     expect(fields.every(({ value }) => !/^['"]/.test(value.trim()))).toBe(true)
     expect(Buffer.byteLength(skill)).toBeLessThanOrEqual(6000)
+    expect(Buffer.byteLength(skill)).toBeLessThanOrEqual(5850)
     expect(skill.match(/^\*\*Helpers\*\*:/gm)).toHaveLength(1)
     for (const gate of DATA_PROFILE_GATES) expect(routerTable).toContain(gate)
     expect(skill).toMatch(/```\nEvidence block\n/)
@@ -873,16 +877,68 @@ describe('profile-pilot skill', () => {
     ]) expect(skill).toContain(`\`${item}\``)
     expect(skill).toContain('--sample 3')
     expect(skill).toContain('Deliverable language: <vi|en>')
-    expect(skill).toContain('the first interview question confirms the profile')
+    expect(skill).toContain('first interview question confirms profile')
+    expect(skill).toContain('immediately after the `Run position:` line')
+    expect(skill).toContain('optional `tables[]` and `ignoreNumbers`')
     expect(skill).toContain('flow-state set knownRed')
     expect(skill).toContain('Embed the Evidence block and use the checker only when `evidenceMode` is not `off`')
-    expect(skill).toContain('with evidence `off`, data tasks use the `exec-deliverable` Verification block alone')
-    expect(skill).toContain('The Router table applies only when the confirmed profile is `data`')
-    expect(skill).toContain('If the confirmed profile is corrected to `data` while enforcing')
-    expect(skill).toContain('flow-state set profile data')
-    expect(skill).toContain('these replacements take precedence over the command\'s generic steps')
-    expect(skill).toContain('Missing optional keys in an older STATE.md mean `off` for modes and `-` for `profile` and `runLanguage`')
+    expect(skill).toContain('with evidence `off`, non-code tasks use the `exec-deliverable` Verification block alone')
+    expect(skill).toContain('Router applies to confirmed `data`, `design`, `plan` or `content` profiles')
+    expect(skill).toContain('If confirmed profile is `code` or `mixed` while enforcing')
+    expect(skill).toContain('If corrected to a non-code profile while enforcing')
+    expect(skill).toContain('flow-state set profile <p>')
+    expect(skill).toContain('data`, `design`, `plan` or `content`')
+    expect(skill).toContain('these replacements take precedence over generic command steps')
+    expect(skill).toContain('Missing optional keys in older STATE.md mean `off` for modes and `-` for `profile` and `runLanguage`')
     expect(PHASE_SKILL_MAP.flatMap(({ skills }) => skills)).not.toContain('profile-pilot')
+  })
+})
+
+describe('profile skills', () => {
+  const profiles = [
+    {
+      name: 'profile-design',
+      minRubric: 6,
+      ids: ['goal-and-fantasy', 'core-loop', 'systems-and-dependencies', 'economy-balance', 'risks', 'kpis', 'numbers-consistent'],
+      defaults: ['game-designer-systems', 'game-designer-balance', 'game-director'],
+    },
+    {
+      name: 'profile-plan',
+      minRubric: 4,
+      ids: ['objective', 'milestones-and-dependencies', 'owners-and-capacity', 'risks'],
+      defaults: ['project-manager'],
+    },
+    {
+      name: 'profile-content',
+      minRubric: 4,
+      ids: ['audience', 'message', 'voice', 'cta'],
+      defaults: ['creative-brief'],
+    },
+  ] as const
+  const EXTERNAL_DEFAULT_SKILLS = new Set([
+    'game-designer-systems', 'game-designer-balance', 'game-director', 'project-manager',
+  ])
+  const c2Headings = ['## Definition of done', '## Rubric', '## Default skills', '## Evidence', '## Sampling']
+  const lintHeadings = ['## Core method', '## Failure modes', '## Reviewer checklist', '## Provenance']
+
+  test.each(profiles)('$name satisfies C2 and lint contracts', ({ name, minRubric, ids, defaults }) => {
+    const skill = readText(path.join(SKILLS_DIR, name, 'SKILL.md'))
+    const rubric = skill.slice(skill.indexOf('## Rubric'), skill.indexOf('## Default skills'))
+    const rubricIds = [...rubric.matchAll(/^- `([^`]+)` —/gm)].map((match) => match[1])
+
+    for (const heading of [...c2Headings, ...lintHeadings]) expect(skill).toContain(heading)
+    expect(rubricIds.length).toBeGreaterThanOrEqual(minRubric)
+    for (const id of ids) expect(rubricIds).toContain(id)
+    expect(Buffer.byteLength(skill)).toBeLessThanOrEqual(6_000)
+    expect(skill).toContain('A command that echoes its own constant is forbidden')
+    expect(skill).toContain('params.csv')
+    expect(PHASE_SKILL_MAP.flatMap(({ skills }) => skills)).not.toContain(name)
+    for (const defaultSkill of defaults) {
+      expect(
+        existsSync(path.join(SKILLS_DIR, defaultSkill, 'SKILL.md'))
+          || EXTERNAL_DEFAULT_SKILLS.has(defaultSkill),
+      ).toBe(true)
+    }
   })
 })
 
@@ -3871,6 +3927,45 @@ describe('brainstorm command contract (five thinking phases)', () => {
     const { SYNC_PAIRS } = await import('../scripts/check-command-sync.mjs')
 
     expect(SYNC_PAIRS).toContainEqual(['commands/brainstorm.md', '.claude/commands/brainstorm.md'])
+  })
+})
+
+describe('thin entry commands', () => {
+  const entries = [
+    ['analyze', 'data'],
+    ['design', 'design'],
+    ['plan', 'plan'],
+  ] as const
+
+  test.each(entries)('%s satisfies the thin entry command contract', async (name, profile) => {
+    const sourcePath = path.join(REPO_ROOT, 'commands', `${name}.md`)
+    const mirrorPath = path.join(REPO_ROOT, '.claude', 'commands', `${name}.md`)
+    const source = readFileSync(sourcePath)
+    const mirror = readFileSync(mirrorPath)
+    const command = source.toString('utf8')
+    const fields = parseFrontmatterFields(command)
+
+    expect(source.equals(mirror)).toBe(true)
+
+    // @ts-expect-error — plain .mjs script
+    const { SYNC_PAIRS } = await import('../scripts/check-command-sync.mjs')
+    expect(SYNC_PAIRS).toContainEqual([
+      `commands/${name}.md`,
+      `.claude/commands/${name}.md`,
+    ])
+
+    expect(source.byteLength).toBeLessThanOrEqual(1_500)
+    expect(fields.map(({ key }) => key)).toEqual(['description', 'argument-hint'])
+    expect(command).toContain('$ARGUMENTS')
+    expect(command).toContain(`--profile ${profile}`)
+    expect(command).toContain('codex-flow:codex-flow')
+    expect(existsSync(COMMAND_PATH)).toBe(true)
+    expect(command).toMatch(/interview[^\n]*confirm[^\n]*preset profile/i)
+    expect(command).toMatch(/do not take a fast-path lane/i)
+    expect(command).toContain('CODEX_FLOW_PROFILE_MODE')
+    expect(command).toContain('CODEX_FLOW_EVIDENCE')
+    expect(command).toContain('CODEX_FLOW_RUN_LANGUAGE')
+    expect(command).not.toMatch(/scripts\/[^\s`]*\.mjs/)
   })
 })
 

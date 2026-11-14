@@ -3,6 +3,12 @@
 // testable part of skills/skill-selection/SKILL.md (Steps 4-5) — the LLM handles
 // role classification (Step 2) and final distillation/vetting.
 import { foldVietnamese, isVietnamese, translateVietnamese } from './skill-terms.mjs'
+import {
+  DOMAIN_TAG_BOOST,
+  DOMAIN_TAGS_DEFAULT,
+  requestDomains,
+  SKILL_DOMAINS,
+} from './skill-domains.mjs'
 
 const MIN_TERM_LEN = 3 // shorter terms are noise ("ts", "go" handled as explicit terms upstream)
 const NAME_WORD = 5
@@ -407,17 +413,25 @@ export function rankCandidates(entries, terms, stats = buildDocFrequency(entries
 export function selectSkills(
   entries,
   termsOrFacets,
-  { tokenBudget = DEFAULT_TOKEN_BUDGET, tokensOf, tuning = {} } = {},
+  { tokenBudget = DEFAULT_TOKEN_BUDGET, tokensOf, tuning = {}, domainTags = DOMAIN_TAGS_DEFAULT } = {},
 ) {
   const facets = normalizeFacets(termsOrFacets)
   const stats = buildDocFrequency(entries)
+  const requestDomainSet = domainTags
+    ? new Set(requestDomains(facets.flatMap((facet) => facet.terms).join(' ')))
+    : null
   const relativeScoreFloor = tuning.relativeScoreFloor ?? RELATIVE_SCORE_FLOOR
   if (!Number.isFinite(relativeScoreFloor) || relativeScoreFloor < 0 || relativeScoreFloor >= 1) {
     throw new RangeError('tuning.relativeScoreFloor must be finite and in [0, 1)')
   }
   const rankFor = (terms) => {
     const ranked = entries
-      .map((entry) => ({ ...entry, ...matchDetail(entry, terms, stats, tuning) }))
+      .map((entry) => {
+        const detail = matchDetail(entry, terms, stats, tuning)
+        const tagged = requestDomainSet && (SKILL_DOMAINS[entry.name] ?? [])
+          .some((domain) => requestDomainSet.has(domain))
+        return { ...entry, ...detail, score: tagged ? detail.score * (1 + DOMAIN_TAG_BOOST) : detail.score }
+      })
       .filter((entry) => entry.score > 0 && clearsFloor(entry))
       .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
     // The index can carry the same skill name from several roots (user copy +

@@ -9,6 +9,7 @@ const FAST_PATH_PATH = path.join(REPO_ROOT, 'skills', 'fast-path', 'SKILL.md')
 const COMMAND_PATH = path.join(REPO_ROOT, 'commands', 'codex-flow.md')
 const CLAUDE_COMMAND_PATH = path.join(REPO_ROOT, '.claude', 'commands', 'codex-flow.md')
 const EVIDENCE_CHECK_PATH = path.join(REPO_ROOT, 'scripts', 'evidence-check.mjs')
+const LANGUAGE_CHECK_PATH = path.join(REPO_ROOT, 'scripts', 'language-check.mjs')
 
 function readText(filePath: string): string {
   if (!existsSync(filePath)) {
@@ -62,6 +63,43 @@ describe('documentation consistency', () => {
     // Assert
     expect(hasBlockingFindingRule).toBe(true)
     expect(hasGenericNonZeroStopRule).toBe(false)
+  })
+
+  test('the Run language section wires language-check.mjs by mode', () => {
+    // Arrange
+    const profilePilot = readText(PROFILE_PILOT_PATH)
+    const runLanguage = profilePilot.match(/## Run language[\s\S]*?(?=\n## |$)/)?.[0] ?? ''
+
+    // Act
+    const hasLanguageCheck = runLanguage.includes('language-check.mjs')
+    const hasLanguageMode = runLanguage.includes('languageMode')
+    const reportsShadow = runLanguage.includes('shadow') && runLanguage.includes('reviews.md')
+    const routesEnforceFinding = runLanguage.includes('enforce') && runLanguage.includes('executor')
+    const offNeverRuns = runLanguage.includes('languageMode` `off`, never run it')
+
+    // Assert
+    expect(hasLanguageCheck).toBe(true)
+    expect(hasLanguageMode).toBe(true)
+    expect(reportsShadow).toBe(true)
+    expect(routesEnforceFinding).toBe(true)
+    expect(offNeverRuns).toBe(true)
+  })
+
+  test('every language finding named in profile-pilot exists in language-check.mjs', () => {
+    // Arrange
+    const profilePilot = readText(PROFILE_PILOT_PATH)
+    const languageCheck = readText(LANGUAGE_CHECK_PATH)
+    const runLanguage = profilePilot.match(/## Run language[\s\S]*?(?=\n## |$)/)?.[0] ?? ''
+    const findings = [...runLanguage.matchAll(/`([^`]+-term)`/g)].map((match) => match[1])
+
+    // Act
+    const missingFindings = findings.filter(
+      (finding) => !new RegExp(`(['"])${finding}\\1`).test(languageCheck),
+    )
+
+    // Assert
+    expect(findings).toEqual(['untranslated-term', 'wrong-language-term'])
+    expect(missingFindings).toEqual([])
   })
 
   test('fast-path log format carries the evidence result', () => {

@@ -13,6 +13,9 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 export const SYNC_PAIRS = [
   ['commands/codex-flow.md', '.claude/commands/codex-flow.md'],
   ['commands/brainstorm.md', '.claude/commands/brainstorm.md'],
+  ['commands/analyze.md', '.claude/commands/analyze.md'],
+  ['commands/design.md', '.claude/commands/design.md'],
+  ['commands/plan.md', '.claude/commands/plan.md'],
 ]
 
 // Pure: byte-equality of two buffers.

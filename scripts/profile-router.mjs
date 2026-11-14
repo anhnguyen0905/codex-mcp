@@ -6,6 +6,7 @@ import { detectLanguage } from './run-ledger.mjs'
 const PROFILES = ['code', 'data', 'design', 'plan', 'content', 'mixed']
 const PROFILE_MODES = ['off', 'shadow', 'enforce']
 const LANGUAGE_MODES = ['off', 'on']
+export const NON_CODE_PROFILES = Object.freeze(['data', 'design', 'plan', 'content'])
 export const DATA_PROFILE_GATES = Object.freeze([
   'Known-red test baseline',
   'Verify command',
@@ -38,7 +39,7 @@ export function resolveSwitches(env = process.env) {
 
 /** @param {{profile: string, profileMode: string}} input @returns {{skip: string[], wouldSkip: string[]}} */
 export function routeGates({ profile, profileMode }) {
-  if (profile !== 'data') return { skip: [], wouldSkip: [] }
+  if (!NON_CODE_PROFILES.includes(profile)) return { skip: [], wouldSkip: [] }
   if (profileMode === 'enforce') return { skip: [...DATA_PROFILE_GATES], wouldSkip: [] }
   if (profileMode === 'shadow') return { skip: [], wouldSkip: [...DATA_PROFILE_GATES] }
   return { skip: [], wouldSkip: [] }

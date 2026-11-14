@@ -22,6 +22,7 @@ import {
   selectSkills,
   DEFAULT_TOKEN_BUDGET,
 } from './skill-match.mjs'
+import { isVietnamese } from './skill-terms.mjs'
 export { tokensOf } from './skill-tokens.mjs'
 import { tokensOf } from './skill-tokens.mjs'
 
@@ -85,7 +86,7 @@ export function evaluateScenario(scenario, entries, options = {}) {
   const selected = selectSkills(
     entries,
     options.raw ? [{ name: 'request', terms }] : terms,
-    { tokenBudget, tokensOf: sizer },
+    { tokenBudget, tokensOf: sizer, domainTags: options.domainTags },
   )
   const names = selected.map((s) => s.name)
   const genericOnly = selected.map((s) => Boolean(s.genericOnly))
@@ -213,6 +214,24 @@ export function runScenarios(scenarios, entries, options = {}) {
     .flatMap((result) => result.facetCoverage ?? [])
     .filter((facet) => facet.expected)
   const facetCovered = facetChecks.filter((facet) => facet.covered).length
+  const perCell = results.reduce((acc, result) => {
+    const language = isVietnamese(result.request ?? '') ? 'vi' : 'en'
+    const key = `${result.scope ?? 'unscoped'}|${language}`
+    const bucket = acc[key] ?? { scope: result.scope ?? 'unscoped', language, passed: 0, total: 0, hits: 0 }
+    return {
+      ...acc,
+      [key]: {
+        ...bucket,
+        passed: bucket.passed + (result.pass ? 1 : 0),
+        total: bucket.total + 1,
+        hits: bucket.hits + (result.precisionAt1 ? 1 : 0),
+      },
+    }
+  }, {})
+  for (const cell of Object.values(perCell)) {
+    cell.hit1 = cell.total ? cell.hits / cell.total : null
+    cell.pass = cell.total ? cell.passed / cell.total : null
+  }
   return {
     results,
     passed: results.filter((result) => result.pass).length,
@@ -243,6 +262,7 @@ export function runScenarios(scenarios, entries, options = {}) {
     facetCoverageRate: facetChecks.length ? facetCovered / facetChecks.length : null,
     facetCoverageNumerator: facetCovered,
     facetCoverageDenominator: facetChecks.length,
+    perCell,
   }
 }
 
@@ -327,6 +347,16 @@ function renderPerScope(perScope) {
   for (const scope of scopes.sort()) {
     const { passed, total } = perScope[scope]
     lines.push(`| ${scope} | ${passed}/${total} | ${((passed / total) * 100).toFixed(1)}% |`)
+  }
+  return [...lines, '']
+}
+
+function renderPerCell(perCell) {
+  const cells = Object.values(perCell ?? {})
+  if (!cells.length) return []
+  const lines = ['## Scope × language', '', '| Scope | Language | n | Hit@1 | pass |', '|---|---|---:|---:|---:|']
+  for (const cell of cells.sort((a, b) => `${a.scope}${a.language}`.localeCompare(`${b.scope}${b.language}`))) {
+    lines.push(`| ${cell.scope} | ${cell.language} | ${cell.total} | ${(cell.hit1 * 100).toFixed(1)}% | ${(cell.pass * 100).toFixed(1)}% |`)
   }
   return [...lines, '']
 }
@@ -427,6 +457,7 @@ export function renderReport(summary, meta, negativeViolations = null) {
   return [
     ...renderHeader(summary, meta),
     ...renderPerScope(summary.perScope),
+    ...renderPerCell(summary.perCell),
     ...renderNoiseDetail(summary.results),
     ...renderResults(summary.results),
     ...renderFacetDetail(summary.results),
@@ -443,7 +474,11 @@ const CLI_FILE_FLAGS = new Map([
   ['--report', 'reportFile'],
   ['--negatives', 'negativesFile'],
 ])
-const CLI_TEXT_FLAGS = new Map([['--split', 'split']])
+const CLI_TEXT_FLAGS = new Map([
+  ['--split', 'split'],
+  ['--language', 'language'],
+  ['--domain-tags', 'domainTags'],
+])
 const CLI_NUMBER_FLAGS = new Map([
   ['--max-avg-selection', 'maxAvgSelection'],
   ['--max-noise', 'maxNoise'],
@@ -501,6 +536,19 @@ export function validateScenarios(scenarios) {
   }
 }
 
+export function filterScenarios(scenarios, { split = null, language = null } = {}) {
+  if (!Array.isArray(scenarios)) throw new TypeError('scenarios must be an array')
+  if (split !== null && !scenarios.some((scenario) => scenario.split === split)) {
+    throw new Error(`unknown split: ${split}`)
+  }
+  return scenarios.filter((scenario) => {
+    const splitMatches = split === null || !Object.hasOwn(scenario, 'split') || scenario.split === split
+    const languageMatches = language === null
+      || (isVietnamese(scenario.request ?? '') ? 'vi' : 'en') === language
+    return splitMatches && languageMatches
+  })
+}
+
 function parseCliArgs(argv) {
   let parsed = {
     indexFile: null,
@@ -513,6 +561,8 @@ function parseCliArgs(argv) {
     minFacetCoverage: null,
     raw: false,
     split: null,
+    language: null,
+    domainTags: false,
   }
   for (let index = 0; index < argv.length; index++) {
     const flag = argv[index]
@@ -535,7 +585,14 @@ function parseCliArgs(argv) {
         throw new Error(`${flag} requires a valid ${kind}`)
       }
       parsed = { ...parsed, [key]: number }
-    } else parsed = { ...parsed, [key]: value }
+    } else if (flag === '--language' && !['en', 'vi'].includes(value)) {
+      throw new Error('--language requires en or vi')
+    } else if (flag === '--domain-tags' && !['on', 'off'].includes(value)) {
+      throw new Error('--domain-tags requires on or off')
+    } else parsed = {
+      ...parsed,
+      [key]: flag === '--domain-tags' ? value === 'on' : value,
+    }
     index++
   }
   return parsed
@@ -554,24 +611,25 @@ export async function runCli(argv) {
     minFacetCoverage,
     raw,
     split,
+    language,
+    domainTags,
   } = parsed
   const idx = path.resolve(indexFile ?? defaultIndex())
-  const scen = path.resolve(scenariosFile ?? defaultScenarios())
   const indexContent = await fs.readFile(idx, 'utf8')
   const entries = parseCatalog(indexContent)
   // Pin the exact index the numbers were measured against (dual-review IMP-D):
   // the file is mutable, so a report without its hash is not reproducible.
   const indexSha256 = createHash('sha256').update(indexContent).digest('hex')
-  let { scenarios } = JSON.parse(await fs.readFile(scen, 'utf8'))
-  validateScenarios(scenarios)
-  if (split !== null) {
-    if (!scenarios.some((scenario) => scenario.split === split)) {
-      throw new Error(`unknown split: ${split}`)
-    }
-    scenarios = scenarios.filter((scenario) => scenario.split === split)
+  const scenarioPaths = (scenariosFile ?? defaultScenarios()).split(',').map((file) => path.resolve(file))
+  let scenarios = []
+  for (const scenarioPath of scenarioPaths) {
+    const loaded = JSON.parse(await fs.readFile(scenarioPath, 'utf8'))
+    validateScenarios(loaded.scenarios)
+    scenarios = [...scenarios, ...loaded.scenarios]
   }
+  scenarios = filterScenarios(scenarios, { split, language })
 
-  const summary = runScenarios(scenarios, entries, { raw })
+  const summary = runScenarios(scenarios, entries, { raw, domainTags })
   let negativeViolations = null
   if (negativesFile) {
     const negativesPath = path.resolve(negativesFile)
@@ -581,7 +639,7 @@ export async function runCli(argv) {
   }
   const report = renderReport(
     summary,
-    { index: idx, indexCount: entries.length, indexSha256, raw, split },
+    { index: idx, indexCount: entries.length, indexSha256, raw, split, language, domainTags },
     negativeViolations,
   )
 

@@ -13,6 +13,8 @@ import {
   redactRequest,
   summarize,
 } from '../scripts/run-ledger.mjs'
+// @ts-expect-error — plain .mjs script, not part of the tsc build
+import { foldVietnamese } from '../scripts/skill-terms.mjs'
 
 const base = (request: string) => ({
   lane: 'full', project: '/tmp/project', runId: 'r1', profile: 'code', domain: 'testing', request,
@@ -54,6 +56,162 @@ describe('run ledger', () => {
 
     // Assert
     expect(actual).toBe(expected)
+  })
+
+  it('folded Vietnamese holdout requests are detected as vi', () => {
+    // Arrange
+    const fixture = JSON.parse(readFileSync('tests/fixtures/scenarios-vi.json', 'utf8'))
+    const requests = fixture.scenarios.filter(({ split }) => split === 'holdout')
+      .map(({ request }) => foldVietnamese(request))
+
+    // Act
+    const actual = requests.map(detectLanguage)
+
+    // Assert
+    expect(requests).toHaveLength(52)
+    expect(actual.filter((language) => language === 'vi').length).toBeGreaterThanOrEqual(47)
+  })
+
+  it('English holdout requests stay en', () => {
+    // Arrange
+    const fixture = JSON.parse(readFileSync('tests/fixtures/scenarios-holdout.json', 'utf8'))
+    const requests = fixture.scenarios.map(({ request }) => request)
+      .filter((request) => !/[ăâđêôơưà-ỹĂÂĐÊÔƠƯÀ-Ỹ]/u.test(request))
+
+    // Act
+    const actual = requests.map(detectLanguage)
+
+    // Assert
+    expect(requests).toHaveLength(70)
+    expect(actual.filter((language) => language === 'vi')).toHaveLength(0)
+    expect(actual.filter((language) => language === 'en').length).toBeGreaterThanOrEqual(67)
+  })
+
+  it('folded Vietnamese dev requests are detected as vi', () => {
+    // Arrange
+    const fixture = JSON.parse(readFileSync('tests/fixtures/scenarios-vi.json', 'utf8'))
+    const requests = fixture.scenarios.filter(({ split }) => split !== 'holdout')
+      .map(({ request }) => foldVietnamese(request))
+
+    // Act
+    const actual = requests.map(detectLanguage)
+
+    // Assert
+    expect(requests).toHaveLength(105)
+    expect(actual.filter((language) => language === 'vi').length).toBeGreaterThanOrEqual(100)
+  })
+
+  it('scenarios-500 English requests stay en', () => {
+    // Arrange
+    const fixture = JSON.parse(readFileSync('tests/fixtures/scenarios-500.json', 'utf8'))
+    const requests = fixture.scenarios.map(({ request }) => request)
+      .filter((request) => !/[ăâđêôơưà-ỹĂÂĐÊÔƠƯÀ-Ỹ]/u.test(request))
+
+    // Act
+    const actual = requests.map(detectLanguage)
+
+    // Assert
+    expect(actual.filter((language) => language === 'en').length).toBeGreaterThanOrEqual(
+      Math.ceil(requests.length * 0.99),
+    )
+  })
+
+  it.each([
+    'Improve I/O throughput of the export job',
+    'Add a ban button for abusive players',
+    'Analyze the Hay Day economy loop',
+    'Write a de-dupe step for purchase events',
+    'Fix the rat enemy pathing bug',
+    'Localize the store page for the Viet market',
+    'How many participants do I need for this test',
+  ])('a single coincidental Vietnamese stop word keeps English as en: %s', (request) => {
+    // Arrange / Act
+    const actual = detectLanguage(request)
+
+    // Assert
+    expect(actual).toBe('en')
+  })
+
+  it('detects unaccented Vietnamese requests', () => {
+    // Arrange
+    const requests = [
+      'phan tich pheu mua hang tu dau thang 11',
+      'chay lai voi data tren bigquery tu dau thang 11',
+    ]
+
+    // Act
+    const actual = requests.map(detectLanguage)
+
+    // Assert
+    expect(actual).toEqual(['vi', 'vi'])
+  })
+
+  it('numbers do not shift word classification', () => {
+    // Arrange
+    const requests = [
+      ['Top 10 phan tich pheu mua hang cho game', 'vi'],
+      ['Top 10 funnel metrics for the game', 'en'],
+    ]
+
+    // Act / Assert
+    for (const [request, expected] of requests) expect(detectLanguage(request)).toBe(expected)
+  })
+
+  it('tokens outside Vietnamese letters do not shift classification', () => {
+    // Arrange
+    const requests = [
+      ['Đo × tỷ lệ chuyển đổi cho game', 'vi'],
+      ['Score × weight for the game', 'en'],
+    ]
+
+    // Act / Assert
+    for (const [request, expected] of requests) expect(detectLanguage(request)).toBe(expected)
+  })
+
+  it('keeps English with one borrowed term as en', () => {
+    // Arrange
+    const request = 'Analyze the purchase funnel for the pho shop in November'
+
+    // Act
+    const actual = detectLanguage(request)
+
+    // Assert
+    expect(actual).toBe('en')
+  })
+
+  it('keeps accented detection unchanged', () => {
+    // Arrange
+    const cases = [
+      ['hello world', 'en'],
+      ['xin chào tiếng Việt', 'vi'],
+      ['hello world tiếng code', 'mixed'],
+    ]
+
+    // Act / Assert
+    for (const [text, expected] of cases) expect(detectLanguage(text)).toBe(expected)
+  })
+
+  it('returns mixed for a balanced sentence', () => {
+    // Arrange
+    const request = 'Analyze the phan tich report carefully today'
+
+    // Act
+    const actual = detectLanguage(request)
+
+    // Assert
+    // The glossary phrase contributes 2 of 7 words, so the computed share is 0 < share < 0.3.
+    expect(actual).toBe('mixed')
+  })
+
+  it('keeps pure English as en', () => {
+    // Arrange
+    const request = 'Write a weekly retention dashboard in English'
+
+    // Act
+    const actual = detectLanguage(request)
+
+    // Assert
+    expect(actual).toBe('en')
   })
 
   it.each([

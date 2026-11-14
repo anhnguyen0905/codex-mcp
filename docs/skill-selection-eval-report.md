@@ -274,6 +274,76 @@ Open examples, kept as ledger evidence rather than precision guards: `cohort ana
 `geomaster`, `mycology classification` → `loki-mode`. The prompt-level prune in skill-selection Step 5
 (wrong-domain removal) remains the control for these cases.
 
+## Domain tags gate (2026-11-14)
+
+- Formula: tagged candidates use `score * (1 + DOMAIN_TAG_BOOST)`; chosen boost: `DOMAIN_TAG_BOOST = 1.0`.
+- Tuning protocol: DEV only, raw requests, using `scenarios-500.json` and `scenarios-vi.json --split dev`. The second holdout look was run only after this grid and tag cleanup were complete.
+
+| Boost | EN-dev Hit@1 | EN-dev pass | VI-dev Hit@1 | VI-dev pass |
+|---:|---:|---:|---:|---:|
+| 0.10 | 64.0% (+0.6 pp) | 402/500 | 55.2% (+1.9 pp) | 70/105 |
+| 0.25 | 65.3% (+1.9 pp) | 403/500 | 56.2% (+2.9 pp) | 70/105 |
+| 0.50 | 66.4% (+3.0 pp) | 403/500 | 56.2% (+2.9 pp) | 70/105 |
+| 1.00 | 66.8% (+3.4 pp) | 404/500 | 57.1% (+3.8 pp) | 71/105 |
+
+DEV off baselines: EN `294/464 Hit@1 (63.4%)`, `400/500 pass`; VI `56/105 Hit@1 (53.3%)`, `70/105 pass`. The chosen value maximized mean Hit@1 lift and did not lower pass on either language.
+
+### First look (boost 1, original tags)
+
+- EN holdout (70): off `69/70 pass`, Hit@1 `64/70 (91.4%)`; on `69/70 pass`, Hit@1 `64/70 (91.4%)`.
+- VI holdout (82): off `62/82 pass`, Hit@1 `50/82 (61.0%)`; on `63/82 pass`, Hit@1 `50/82 (61.0%)`.
+
+### Second look (boost 1, corrected tags)
+
+- EN holdout (70): off `69/70 pass`, Hit@1 `64/70 (91.4%)`; on `69/70 pass`, Hit@1 `63/70 (90.0%)`.
+- VI holdout (82): off `62/82 pass`, Hit@1 `50/82 (61.0%)`; on `63/82 pass`, Hit@1 `52/82 (63.4%)`.
+
+| Scope | Language | n | Hit@1 | pass |
+|---|---|---:|---:|---:|
+| cross | en | 8 | 100.0% | 100.0% |
+| data | en | 6 | 83.3% | 100.0% |
+| design-ux | en | 8 | 75.0% | 100.0% |
+| education-research | en | 8 | 100.0% | 100.0% |
+| engineering-adjacent | en | 5 | 60.0% | 80.0% |
+| finance-accounting | en | 7 | 100.0% | 100.0% |
+| hr-legal | en | 7 | 85.7% | 100.0% |
+| marketing | en | 7 | 85.7% | 100.0% |
+| ops-logistics | en | 7 | 100.0% | 100.0% |
+| product | en | 7 | 100.0% | 100.0% |
+| accounting | vi | 4 | 100.0% | 100.0% |
+| cross-domain | vi | 1 | 100.0% | 100.0% |
+| cross | vi | 2 | 50.0% | 50.0% |
+| customer-support | vi | 3 | 66.7% | 100.0% |
+| data-advanced | vi | 1 | 0.0% | 100.0% |
+| data | vi | 4 | 75.0% | 75.0% |
+| design-ux | vi | 2 | 50.0% | 50.0% |
+| ecommerce | vi | 2 | 0.0% | 0.0% |
+| education-research | vi | 2 | 50.0% | 100.0% |
+| education-training | vi | 3 | 66.7% | 66.7% |
+| engineering-adjacent | vi | 5 | 60.0% | 100.0% |
+| finance-accounting | vi | 3 | 66.7% | 100.0% |
+| financial-audit | vi | 3 | 33.3% | 100.0% |
+| hr-legal | vi | 3 | 100.0% | 100.0% |
+| hr-recruiting | vi | 4 | 75.0% | 100.0% |
+| legal-compliance | vi | 3 | 100.0% | 100.0% |
+| logistics | vi | 2 | 50.0% | 50.0% |
+| marketing | vi | 3 | 100.0% | 100.0% |
+| operations | vi | 3 | 33.3% | 33.3% |
+| ops-logistics | vi | 3 | 33.3% | 33.3% |
+| performance-mkt | vi | 1 | 0.0% | 100.0% |
+| personal-finance | vi | 4 | 75.0% | 75.0% |
+| product | vi | 4 | 75.0% | 75.0% |
+| project-mgmt | vi | 3 | 66.7% | 100.0% |
+| real-estate | vi | 2 | 0.0% | 0.0% |
+| sales-crm | vi | 4 | 75.0% | 100.0% |
+| sme-ops | vi | 4 | 75.0% | 75.0% |
+| ui-ux | vi | 4 | 25.0% | 25.0% |
+
+- Tag changes from the first look: `dashboard-builder`, `d3-viz`, `matplotlib`, `seaborn`, `infographics`, `pptx`, `golden-pptx`, `scientific-slides`, and `exec-visualization` → `viz`; `docx`, `liteparse`, and `doc-coauthoring` → `product`; `exec-github-actions` → `engineering`; `security-review` → `engineering`; `causal-inference` → `data`. Duplicate skill names now throw at module load. Generic one-word tags were removed or replaced with specific phrases.
+- Gate: **failed**. Second-look EN Hit@1 lift was `-1.4 pp` (< `2.0 pp`); VI lift was `+2.4 pp`; EN pass was unchanged and VI pass improved. The combined gate therefore remains off.
+- Final decision: `DOMAIN_TAGS_DEFAULT = false`.
+- Unchecked: this eval does not prove LLM role classification, vetting/distillation quality, or behavior outside these frozen scenarios.
+
 ## Method & scope of this eval
 
 This harness tests the **deterministic retrieval core** of skill-selection

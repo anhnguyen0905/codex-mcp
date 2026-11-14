@@ -5,7 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error — plain .mjs script, not part of the tsc build
-import { DATA_PROFILE_GATES, resolveSwitches, routeGates } from '../scripts/profile-router.mjs'
+import { DATA_PROFILE_GATES, NON_CODE_PROFILES, resolveSwitches, routeGates } from '../scripts/profile-router.mjs'
 
 const script = fileURLToPath(new URL('../scripts/profile-router.mjs', import.meta.url))
 const cleanEnv = (): NodeJS.ProcessEnv => {
@@ -64,6 +64,36 @@ describe('profile router', () => {
     const actual = routeGates({ profile: 'code', profileMode: 'enforce' })
     // Assert
     expect(actual).toEqual({ skip: [], wouldSkip: [] })
+  })
+
+  it.each(['design', 'plan', 'content'])('%s routes all non-code gates by mode', (profile) => {
+    // Arrange
+    const expected = {
+      enforce: { skip: DATA_PROFILE_GATES, wouldSkip: [] },
+      shadow: { skip: [], wouldSkip: DATA_PROFILE_GATES },
+      off: { skip: [], wouldSkip: [] },
+    }
+    // Act
+    const actual = Object.fromEntries(Object.keys(expected).map((profileMode) => [
+      profileMode, routeGates({ profile, profileMode }),
+    ]))
+    // Assert
+    expect(actual).toEqual(expected)
+  })
+
+  it.each(['code', 'mixed'])('%s remains unrouted in every mode', (profile) => {
+    // Arrange
+    const modes = ['off', 'shadow', 'enforce']
+    // Act
+    const actual = modes.map((profileMode) => routeGates({ profile, profileMode }))
+    // Assert
+    expect(actual).toEqual(modes.map(() => ({ skip: [], wouldSkip: [] })))
+  })
+
+  it('freezes and lists exactly the non-code profiles', () => {
+    // Arrange / Act / Assert
+    expect(Object.isFrozen(NON_CODE_PROFILES)).toBe(true)
+    expect(NON_CODE_PROFILES).toEqual(['data', 'design', 'plan', 'content'])
   })
 
   it('writes a complete shadow record and detects Vietnamese request language', () => {

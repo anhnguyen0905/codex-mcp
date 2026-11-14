@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Evidence v2 was validated on a real report: T1 seeds a–f were caught; see `docs/evidence-v2-validation.md`.
+- `detectLanguage` now recognises unaccented Vietnamese (T2).
+- The EN/VI term list has 138 terms, with `language-check.mjs` (T3).
+- Domain tags and `skill-eval --domain-tags/--language` were added; the holdout gate FAILED (second look: EN −1.4 pp, VI +2.4 pp), so tags stay off by default (T4).
+- The profile router now covers design, plan, and content (T5).
+- The `profile-design`, `profile-plan`, and `profile-content` skills were added (T6).
+- Thin entry commands `analyze`, `design`, and `plan` were added; the repo-local mirror makes `/plan` available inside this repository (T7).
+- The language check is wired into the flow (T8).
+
 ## [0.35.0] - 2026-11-14
 
 ### Added

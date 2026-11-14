@@ -2,6 +2,8 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync 
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { foldVietnamese, translateVietnamese } from './skill-terms.mjs'
+import { ENGLISH_STOP_WORDS, VIETNAMESE_STOP_WORDS } from './skill-match.mjs'
 
 const DEFAULT_LEDGER = path.join(homedir(), '.codex-mcp', 'run-ledger.jsonl')
 const LANES = ['full', 'fast-path-analysis', 'fast-path-small', 'brainstorm']
@@ -27,7 +29,6 @@ const VIETNAMESE_LETTER_PATTERN = new RegExp([
   'ốổỗộ',
   'ờớởỡợùúủũụừứửữựỳýỷỹỵ]',
 ].join(''), 'i')
-
 const redactPatterns = [
   ['pem-private-key', /-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----[\s\S]{0,20000}?-----END [A-Z ]{0,40}PRIVATE KEY-----/g],
   ['jwt', /\beyJ[A-Za-z0-9_-]{4,4000}\.[A-Za-z0-9_-]{4,4000}\.[A-Za-z0-9_-]{4,4000}/g],
@@ -106,9 +107,34 @@ export function parseAppendArgs(argv) {
 
 /** Detect Vietnamese, English, or mixed language from alphabetic words. */
 export function detectLanguage(text) {
-  const words = text.match(/[A-Za-zÀ-ỹĐđ]+/g) ?? []
-  const vietnamese = words.filter((word) => VIETNAMESE_LETTER_PATTERN.test(word)).length
-  const share = words.length === 0 ? 0 : vietnamese / words.length
+  const tokens = [...text.matchAll(/\p{L}+/gu)].map((match) => ({
+    original: match[0], folded: foldVietnamese(match[0]),
+  }))
+  const folded = tokens.map(({ folded: token }) => token).join(' ')
+  const { consumed } = translateVietnamese(folded)
+  const offsets = []
+  let offset = 0
+  for (const token of tokens) {
+    const start = offset
+    offset += token.folded.length
+    offsets.push([start, offset])
+    offset += 1
+  }
+  const coveredByGlossary = (index) => consumed.some(([start, end]) => (
+    offsets[index][0] >= start && offsets[index][1] <= end
+  ))
+  const isVietnameseStopWord = (token) => VIETNAMESE_STOP_WORDS.has(token.folded)
+    && !ENGLISH_STOP_WORDS.has(token.folded)
+    && !(token.original.length >= 2 && token.original === token.original.toUpperCase())
+  const stopSignals = tokens.filter(isVietnameseStopWord).length
+  const signalIndexes = tokens.map((token, index) => (
+    VIETNAMESE_LETTER_PATTERN.test(token.original) || isVietnameseStopWord(token) || coveredByGlossary(index)
+      ? index : -1
+  )).filter((index) => index >= 0)
+  const hasAccentedVietnamese = tokens.some(({ original }) => VIETNAMESE_LETTER_PATTERN.test(original))
+  const signals = hasAccentedVietnamese || signalIndexes.length >= 2 ? signalIndexes : []
+  const vietnamese = stopSignals >= 1 && signals.length >= 2 ? tokens.length : signals.length
+  const share = tokens.length === 0 ? 0 : vietnamese / tokens.length
   return share === 0 ? 'en' : share >= 0.3 ? 'vi' : 'mixed'
 }
 
