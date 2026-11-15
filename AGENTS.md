@@ -19,6 +19,9 @@ behavior is defined in **markdown instruction files**, not runtime code.
   Fixtures, examples and docs use invented data only. Real evaluation holdouts live outside the
   git tree (`~/.codex-mcp/quality-holdout/`); the repo may hold only their hashes.
 - Run `npm run data:guard` before every commit once it exists (multiscope Phase 3, T1).
+- The STATE key `packs` is written only through `flow-state init --packs` from the router's `initFlags`; never hand-edit it.
+- `language-check` uses the first-use gloss rule: the first use of each English term in Vietnamese prose is `<Vietnamese term> (<English term>)`; later bare uses of that term are accepted.
+- `tests/holdoutLocal.test.ts` runs the real-holdout frozen check only when `~/.codex-mcp/quality-holdout/cases.json` exists; an approved holdout change needs `--freeze --approve` and the regenerated manifest, or the suite goes red locally.
 
 ## Hard conventions (CI-gated — violating these red-fails tests)
 
@@ -50,6 +53,8 @@ behavior is defined in **markdown instruction files**, not runtime code.
   `scripts/task-waves.mjs` idiom — Node stdlib only, pure named exports, CLI behind a
   `pathToFileURL` direct-run guard — and MUST be added to `package.json` `files[]` to reach the
   plugin cache. Tests import its exports with `// @ts-expect-error — plain .mjs script`.
+  Any script referenced by an npm script (dev tooling included) also belongs in `files[]`:
+  CI's `node scripts/pack-smoke.mjs` fails otherwise — run it locally before tagging.
 
 - **Jev (TypeSafe.ai) decision helper**: `scripts/jev-client.mjs` wraps `POST
   https://api.typesafe.ai/v1/systemone` for optional fast-classification assists (fast-path

@@ -21,7 +21,7 @@ Game analytics pack standards:
 - BigQuery: filter `_TABLE_SUFFIX` or partition date to the window; dry-run first; cap bytes billed read-only; never `SELECT *` on raw event tables.
 - Small samples: report n with every rate; below a stated threshold (e.g. n<100 users or <30 events/cell), mark “insufficient sample” instead of ranking. A/B: state variant sizes, test, CI, and SRM check.
 - Cohorts: never mix install-version and event-version cohorts; reconcile subtotals with totals.
-- Vietnamese: write Vietnamese terms and gloss jargon first use: người trả tiền (payer), nhóm người dùng (cohort), tỷ lệ giữ chân (retention), doanh thu (revenue). Never leave bare English jargon in Vietnamese prose.
+- Vietnamese: on first use, write each English term as Vietnamese term (English term): người trả tiền (payer), nhóm người dùng (cohort), tỷ lệ giữ chân (retention), doanh thu (revenue). After that gloss the bare English term is fine; a bare use before it is a finding. Glosses in code, table header rows, comments, or URLs do not count; English (Vietnamese) is not a gloss.
 ```
 
 ## Core method
@@ -41,7 +41,7 @@ Game analytics pack standards:
 
 - Confirm event, cohort, partition, and window definitions. derived, unverified
 - Check every rate has n, every total reconciles, and small cells are marked. derived, unverified
-- Confirm Vietnamese jargon is glossed and A/B results include CI and SRM. Source: codex-flow run-language check (glossed terms pass).
+- Confirm each English term in Vietnamese prose is glossed on first use, and A/B results include CI and SRM. Source: codex-flow run-language check (glossed terms pass).
 
 ## Provenance
 
@@ -55,4 +55,4 @@ Game analytics pack standards:
 - BigQuery: derived, unverified.
 - Small samples: derived, unverified.
 - Cohorts: derived, unverified.
-- Vietnamese: Source: codex-flow run-language check (glossed terms pass).
+- Vietnamese: Source: codex-flow run-language check (first-use gloss).

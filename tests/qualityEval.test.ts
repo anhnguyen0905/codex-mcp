@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error — plain .mjs script, not part of the tsc build
-import { buildGraderPrompt, caseHash, checkHoldoutFrozen, filterCases, freezeHoldout, holdoutManifest, ingestGradeLines, loadRubric, renderReport, rubricIds, runMechanical, scoreCase, summarize, UsageError, validateCases, validateManifest } from '../scripts/quality-eval.mjs'
+import { buildGraderPrompt, caseHash, checkHoldoutFrozen, filterCases, freezeHoldout, holdoutManifest, ingestGradeLines, loadRubric, renderReport, rubricIds, runMechanical, scoreCase, summarize, UsageError, validateCases, validateManifest, verifyQuotes } from '../scripts/quality-eval.mjs'
 
 const rubricFile = path.resolve('tests/fixtures/quality/rubrics.json')
 const rubric = loadRubric(rubricFile)
@@ -12,6 +12,28 @@ const goodCase = (overrides = {}) => ({ id: 'demo-one', profile: 'data', languag
 const temp = () => mkdtempSync(path.join(os.tmpdir(), 'quality-eval-'))
 
 describe('quality evaluation core', () => {
+  it('requires quote rules and a parseable JSON example', () => {
+    // Arrange
+    const { prompt } = buildGraderPrompt(goodCase(), rubric)
+    // Act
+    expect(prompt).toContain('ONE line, at most 200 characters, and copied verbatim')
+    const example = prompt.match(/complete example shape: (.+)$/)?.[1]
+    // Assert
+    expect(example).toBeDefined()
+    if (example === undefined) return
+    expect(() => JSON.parse(example)).not.toThrow()
+  })
+
+  it('verifies quotes with normalised whitespace and counts failures', () => {
+    // Arrange
+    const checked = verifyQuotes({ pass: { result: 'pass', quote: 'alpha beta' }, fail: { result: 'fail', quote: '' }, bad: { result: 'pass', quote: 'fabricated extra' } }, 'alpha\n beta')
+    // Act / Assert
+    expect(checked.verdict.pass.quoteVerified).toBe(true); expect(checked.verdict.fail.quoteVerified).toBe(true); expect(checked.verdict.bad.quoteVerified).toBe(false); expect(checked.unverified).toBe(1)
+    expect(verifyQuotes({ pass: { result: 'pass', quote: 'alpha' } }, '').unverified).toBe(1)
+    expect(verifyQuotes({ pass: { result: 'pass', quote: '   ' } }, 'alpha').verdict.pass.quoteVerified).toBe(false)
+    expect(verifyQuotes({ pass: { result: 'pass', quote: 'alpha' } }, '').verdict.pass.quoteVerified).toBe(false)
+    expect(verifyQuotes({ fail: { result: 'fail', quote: '   ' } }, '').verdict.fail.quoteVerified).toBe(true)
+  })
   it('rubric ids match the profile skills', () => {
     // Arrange
     const expected = { data: ['reproducible', 'sourced', 'answers-the-question', 'decision-useful', 'language-consistent'], design: [], plan: [], content: [] }
@@ -275,7 +297,8 @@ describe('quality evaluation core', () => {
       writeFileSync(grades, JSON.stringify({ index: 0, text: `\`\`\`json\n${JSON.stringify(verdict)}\n\`\`\`` }) + '\n')
       const result = spawnSync(process.execPath, [...base, '--report', gradedReport, '--ingest-grades', grades], { encoding: 'utf8' })
       // Assert
-      expect(result.status).toBe(0); expect(readFileSync(plainReport, 'utf8')).toContain('| data | en | 1 | 0.0% |')
+      expect(result.status).toBe(0); expect(result.stdout).toContain('unverified quotes: 5'); expect(readFileSync(plainReport, 'utf8')).toContain('| data | en | 1 | 0.0% |')
+      expect(readFileSync(gradedReport, 'utf8')).toContain('Unverified quotes: 5')
       expect(readFileSync(gradedReport, 'utf8')).toContain('| data | en | 1 | 20.0% |')
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
@@ -328,7 +351,7 @@ describe('quality evaluation core', () => {
     // Act / Assert
     expect(() => ingestGradeLines(invalid, cases, rubric, process.cwd())).toThrow(UsageError)
     const result = ingestGradeLines([{ index: 0, text: 'bad' }], cases, rubric, process.cwd())
-    expect(result).toEqual({ grades: {}, ingested: 0, ungraded: 1 })
+    expect(result).toEqual({ grades: {}, ingested: 0, ungraded: 1, unverified: 0 })
     expect(() => ingestGradeLines([{ index: 0, text: 'bad' }, { index: 0, text: 'bad' }], cases, rubric, process.cwd())).toThrow('duplicate grade index')
   })
 })

@@ -116,19 +116,21 @@ export function main(argv = process.argv.slice(2)) {
     const routedProfile = switches.profileMode === 'off' ? '-' : args.profile
     const language = switches.languageMode === 'on' ? detectLanguage(request) : '-'
     const route = routeGates({ profile: args.profile, profileMode: switches.profileMode })
+    const packs = routedPacks({ mode: switches.packs, profile: args.profile, request })
     const result = {
       profile: routedProfile,
       ...switches,
       runLanguage: language,
       languageSource: language === '-' ? '-' : 'detected',
       ...route,
-      packs: routedPacks({ mode: switches.packs, profile: args.profile, request }),
+      packs,
       initFlags: [
         `--profile ${routedProfile}`,
         `--profile-mode ${switches.profileMode}`,
         `--evidence-mode ${switches.evidenceMode}`,
         `--language-mode ${switches.languageMode}`,
         `--run-language ${language}`,
+        `--packs ${packs.length === 0 ? '-' : packs.join(',')}`,
       ].join(' '),
     }
     if (switches.profileMode === 'shadow') {

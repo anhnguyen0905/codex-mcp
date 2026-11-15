@@ -124,7 +124,7 @@ export function main(argv = process.argv.slice(2), cwd = process.cwd()) {
     try {
       const bytes = readFileSync(path.join(root, file))
       if (bytes.length > MAX_FILE_BYTES) { skipped.push(unchecked(file, 'oversize')); return false }
-      if (bytes.subarray(0, 8192).includes(0)) { skipped.push(unchecked(file, 'binary')); return false }
+      if (bytes.includes(0)) { skipped.push(unchecked(file, 'binary')); return false }
       return true
     } catch (error) {
       skipped.push(unchecked(file, error instanceof Error ? error.message : 'read failed'))

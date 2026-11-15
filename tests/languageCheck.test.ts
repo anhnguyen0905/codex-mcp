@@ -139,7 +139,6 @@ describe('language check', () => {
     ['table header row', '| potential buyer |\n| --- |'],
     ['identifier', 'potential_buyer and potentialBuyer'],
     ['allowEnglish term', 'CR'],
-    ['gloss in parentheses', 'người mua tiềm năng (potential buyer)'],
   ])('ignores %s', (_label, ignored) => {
     // Arrange
     const text = `${ignored}\npotential buyer\n`
@@ -149,6 +148,51 @@ describe('language check', () => {
 
     // Assert
     expect(findings).toEqual([{ check: 'untranslated-term', term: 'potential buyer', line: text.split(/\r?\n/).length - 1 }])
+  })
+
+  it('accepts a bare term after its gloss', () => {
+    // Arrange
+    const text = 'người mua tiềm năng (potential buyer)\npotential buyer\n'
+
+    // Act
+    const findings = checkLanguage(text, 'vi')
+
+    // Assert
+    expect(findings).toEqual([])
+  })
+
+  it.each([
+    ['fenced code', '```\nngười mua tiềm năng (potential buyer)\n```'],
+    ['inline code', '`người mua tiềm năng (potential buyer)`'],
+  ])('does not count a gloss in %s', (_label, ignoredGloss) => {
+    // Arrange
+    const text = `${ignoredGloss}\npotential buyer\n`
+
+    // Act
+    const findings = checkLanguage(text, 'vi')
+
+    // Assert
+    expect(findings).toEqual([{ check: 'untranslated-term', term: 'potential buyer', line: text.split(/\r?\n/).length - 1 }])
+  })
+
+  it('reports a bare term before its first gloss with its line', () => {
+    const findings = checkLanguage('potential buyer\nngười mua tiềm năng (potential buyer)\npotential buyer\n', 'vi')
+    expect(findings).toEqual([{ check: 'untranslated-term', term: 'potential buyer', line: 1 }])
+  })
+
+  it('tracks glosses independently for two terms', () => {
+    const findings = checkLanguage('người mua tiềm năng (potential buyer)\npotential buyer\ncountry\n', 'vi')
+    expect(findings).toEqual([{ check: 'untranslated-term', term: 'country', line: 3 }])
+  })
+
+  it('reports the correct line before a gloss in CRLF text', () => {
+    const findings = checkLanguage('potential buyer\r\nngười mua tiềm năng (potential buyer)\r\npotential buyer\r\n', 'vi')
+    expect(findings).toEqual([{ check: 'untranslated-term', term: 'potential buyer', line: 1 }])
+  })
+
+  it('keeps EN runs unchanged when Vietnamese text is glossed', () => {
+    const findings = checkLanguage('người mua tiềm năng (potential buyer)\npotential buyer\n', 'en')
+    expect(findings).toEqual([{ check: 'wrong-language-term', term: 'người mua tiềm năng', line: 1 }])
   })
 
   it('matches plural English forms', () => {

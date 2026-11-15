@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
@@ -124,7 +124,7 @@ describe('profile router', () => {
     // Assert
     expect(result.status).toBe(0)
     expect(output.initFlags).toBe(
-      '--profile data --profile-mode shadow --evidence-mode enforce --language-mode on --run-language vi',
+      '--profile data --profile-mode shadow --evidence-mode enforce --language-mode on --run-language vi --packs -',
     )
     expect(record).toMatchObject({
       runId: 'run-7', profile: 'data', wouldSkip: DATA_PROFILE_GATES,
@@ -156,9 +156,58 @@ describe('profile router', () => {
     // Assert
     expect(output).toMatchObject({
       profile: '-',
-      initFlags: '--profile - --profile-mode off --evidence-mode off --language-mode off --run-language -',
+      initFlags: '--profile - --profile-mode off --evidence-mode off --language-mode off --run-language - --packs -',
     })
     expect(() => readFileSync(path.join(cwd, '.codex-flow/notes/profile-shadow.log'))).toThrow()
+  })
+
+  it('forwards routed packs in init flags', () => {
+    // Arrange
+    const cwd = tempCwd()
+    // Act
+    const output = JSON.parse(run(
+      cwd, ['resolve', '--profile', 'data', '--request', 'Analyze IAP payer conversion'],
+      { CODEX_FLOW_PACKS: 'on' },
+    ).stdout)
+    // Assert
+    expect(output.initFlags).toContain('--packs game-analytics')
+  })
+
+  it('forwards a dash when no packs are routed', () => {
+    // Arrange
+    const cwd = tempCwd()
+    // Act
+    const output = JSON.parse(run(
+      cwd, ['resolve', '--profile', 'design', '--request', 'Design a landing page'],
+      { CODEX_FLOW_PACKS: 'on' },
+    ).stdout)
+    // Assert
+    expect(output.initFlags).toContain('--packs -')
+  })
+
+  it('persists routed packs through flow-state init', () => {
+    // Arrange
+    const cwd = tempCwd()
+    const stateDir = path.join(cwd, '.codex-flow')
+    mkdirSync(stateDir)
+    try {
+      const routerOutput = JSON.parse(run(
+        cwd, ['resolve', '--profile', 'data', '--request', 'Analyze IAP payer conversion'],
+        { CODEX_FLOW_PACKS: 'on' },
+      ).stdout)
+      const initFlags = routerOutput.initFlags.split(' ')
+      // Act
+      const result = spawnSync(
+        process.execPath,
+        [path.join(path.dirname(script), 'flow-state.mjs'), 'init', '--baseline', 'invented-baseline', '--known-red', 'none', ...initFlags],
+        { cwd, env: cleanEnv(), encoding: 'utf8' },
+      )
+      // Assert
+      expect(result.status).toBe(0)
+      expect(readFileSync(path.join(stateDir, 'STATE.md'), 'utf8')).toContain('- packs: game-analytics')
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
   })
 
   it('returns a warning and succeeds when the shadow log cannot be written', () => {

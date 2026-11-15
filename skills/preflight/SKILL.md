@@ -139,9 +139,10 @@ fresh run.
    - evidenceMode: off
    - languageMode: off
    - runLanguage: -
+   - packs: -
    ```
 
-   These five keys are optional and validated when present; `flow-state`'s `init` sets them from the
+   These six keys are optional and validated when present; `flow-state`'s `init` sets them from the
    router's `initFlags`.
 
    `executor` records who writes code: `codex` (default), `claude (fallback: <reason> <ISO 8601>)`
@@ -195,7 +196,7 @@ and before baselining, classify the deliverable (`code|data|design|plan|content|
 `<report dir name>` is the session-start `<YYYYMMDD-HHMMSS>` used for the report dir. Add its
 `initFlags` to flow-state's `init`. Load `codex-flow:profile-pilot` when `profileMode` is `enforce`,
 `evidenceMode` is not `off`, or `languageMode` is `on`; its rules replace the gates it names.
-Load `codex-flow:pack-game-analytics` per `packs`.
+Load `codex-flow:pack-game-analytics` per STATE `packs`.
 On resume, do not re-run the router: read `profile`, `profileMode`, `evidenceMode`, `languageMode`,
-`runLanguage` from STATE.md (missing legacy keys mean `off` modes and `-` profile/runLanguage) and
-apply the same load rule.
+`runLanguage`, and `packs` from STATE.md (missing legacy keys mean `off` modes, `-` profile/runLanguage,
+and `-` packs—no pack) and apply the same load rule.

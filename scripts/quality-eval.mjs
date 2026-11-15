@@ -41,7 +41,7 @@ export function isInsideDir(target, dir) {
     return realpathSync(current)
   }
   const relative = path.relative(realpathSync(dir), resolveNearest(target))
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
 }
 
 export function validateEvalPaths(options, repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')) {
@@ -225,7 +225,8 @@ export function summarize(caseResults) {
 export function renderReport(summary, meta) {
   const format = (value) => value === null ? 'n/a' : `${(value * 100).toFixed(1)}%`
   const rows = Object.values(summary).map((cell) => `| ${cell.profile} | ${cell.language} | ${cell.n} | ${format(cell.rubricPct)} | ${format(cell.evidencePassPct)} | ${format(cell.languagePassPct)} |`)
-  return `# Quality evaluation report\n\nGenerated: ${meta.generatedTs}\nSplit: ${meta.split}\nInput sha256: ${meta.inputSha256}\nCase count: ${meta.caseCount}\n\n| Profile | Language | n | Rubric % | Evidence pass % | Language pass % |\n| --- | --- | ---: | ---: | ---: | ---: |\n${rows.join('\n')}\n`
+  const quoteLine = meta.unverifiedQuotes === undefined ? '' : `\nUnverified quotes: ${meta.unverifiedQuotes}`
+  return `# Quality evaluation report\n\nGenerated: ${meta.generatedTs}\nSplit: ${meta.split}\nInput sha256: ${meta.inputSha256}\nCase count: ${meta.caseCount}${quoteLine}\n\n| Profile | Language | n | Rubric % | Evidence pass % | Language pass % |\n| --- | --- | ---: | ---: | ---: | ---: |\n${rows.join('\n')}\n`
 }
 
 const graderFence = /```json[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```/g
@@ -241,6 +242,7 @@ const seededRandom = (seed) => {
 }
 
 export function buildGraderPrompt(item, rubric, seed = 0) {
+  if (typeof item.deliverableText !== 'string') throw new Error('grader prompt requires deliverableText')
   const sourceItems = rubric?.profiles?.[item.profile]
   if (!Array.isArray(sourceItems)) throw new Error('grader prompt requires a known rubric profile')
   const random = seededRandom(seed)
@@ -255,7 +257,7 @@ export function buildGraderPrompt(item, rubric, seed = 0) {
     keyMap[key] = rubricItem.id
     return `${key}: criterion: ${rubricItem.criterion}\nevidence: ${rubricItem.evidence}`
   }).join('\n\n')
-  const prompt = `Assess the deliverable against each rubric item using only the request and deliverable. Return pass or fail and quote concise evidence from the deliverable.\n\nRequest:\n${item.request}\n\nDeliverable:\n${item.deliverableText ?? readFileSync(item.deliverable, 'utf8')}\n\nRubric items:\n${rubricText}\n\nPlace exactly one fenced json block LAST, with this shape: {"items":{"I1":{"result":"pass|fail","quote":"<≤200 chars quoted from the deliverable>"}, …}}}`
+  const prompt = `Assess the deliverable against each rubric item using only the request and deliverable. Return one entry per rubric key shown above. The result is exactly "pass" or "fail". Every quote must be ONE line, at most 200 characters, and copied verbatim from the deliverable; use an empty quote only for a fail item when there is nothing to cite.\n\nRequest:\n${item.request}\n\nDeliverable:\n${item.deliverableText}\n\nRubric items:\n${rubricText}\n\nPlace exactly one fenced json block LAST, with this complete example shape: {"items":{"I1":{"result":"pass","quote":"<copied line>"},"I2":{"result":"fail","quote":""}}}`
   return { prompt, keyMap }
 }
 
@@ -282,6 +284,58 @@ export function parseGraderVerdict(text, keyMap) {
   }))
 }
 
+const PAIR_CALIBRATION_THRESHOLD = 2 / 3
+
+export function buildPairPrompt({ request, textA, textB }) {
+  if (typeof request !== 'string' || !request.trim() || typeof textA !== 'string' || !textA.trim() || typeof textB !== 'string' || !textB.trim()) throw new UsageError('pair prompt requires non-empty request and deliverables')
+  return `Compare the two deliverables against the request. Decide which better satisfies the request using completeness, correctness, usefulness for a decision, and language consistency with the request.
+
+Request:
+${request}
+
+Deliverable A:
+${textA}
+
+Deliverable B:
+${textB}
+
+Choose exactly one winner: A, B, or tie. Place exactly one fenced json block LAST, with this complete valid JSON example:
+\`\`\`json
+{"winner":"A","reason":"<one line>"}
+\`\`\``
+}
+
+export function parsePairVerdict(text) {
+  const matches = [...String(text).matchAll(graderFence)]
+  if (matches.length !== 1) throw new UsageError('pair verdict must contain exactly one fenced json block')
+  if (String(text).slice(matches[0].index + matches[0][0].length).trim()) throw new UsageError('pair verdict has trailing content')
+  let parsed
+  try { parsed = JSON.parse(matches[0][1]) } catch { throw new UsageError('pair verdict JSON is invalid') }
+  if (!isObject(parsed) || !['A', 'B', 'tie'].includes(parsed.winner) || typeof parsed.reason !== 'string' || !parsed.reason.trim() || parsed.reason.includes('\n') || parsed.reason.includes('\r')) throw new UsageError('pair verdict requires a valid winner and single-line reason')
+  return parsed.winner
+}
+
+export function pairCalibration(ownerPicks, codexPicks) {
+  const choices = new Set(['A', 'B', 'tie'])
+  if (!Array.isArray(ownerPicks) || !Array.isArray(codexPicks) || ownerPicks.length === 0 || ownerPicks.length !== codexPicks.length || !Array.from(ownerPicks).every((pick) => choices.has(pick)) || !Array.from(codexPicks).every((pick) => choices.has(pick))) throw new UsageError('pair calibration requires equal-length non-empty choice arrays')
+  const matched = ownerPicks.filter((pick, index) => pick === codexPicks[index]).length
+  const total = ownerPicks.length
+  return { matched, total, rate: matched / total, status: matched / total >= PAIR_CALIBRATION_THRESHOLD ? 'calibrated' : 'uncalibrated' }
+}
+
+const normalizeQuoteText = (text) => text.replace(/\s+/g, ' ').trim()
+
+export function verifyQuotes(verdict, deliverableText) {
+  const normalizedDeliverable = normalizeQuoteText(deliverableText)
+  const checked = Object.fromEntries(Object.entries(verdict).map(([id, value]) => {
+    const quote = typeof value.quote === 'string' ? value.quote : ''
+    const normalizedQuote = normalizeQuoteText(quote)
+    const quoteVerified = value.result === 'fail' && normalizedQuote === '' ? true : normalizedQuote !== '' && normalizedDeliverable.includes(normalizedQuote)
+    return [id, { ...value, quoteVerified }]
+  }))
+  return { verdict: checked, unverified: Object.values(checked).filter((value) => !value.quoteVerified).length }
+}
+
 export function agreement(a, b) {
   const ids = [...new Set([...Object.keys(a), ...Object.keys(b)])]
   const comparable = ids.filter((id) => ['pass', 'fail'].includes(a[id]?.result ?? a[id]) && ['pass', 'fail'].includes(b[id]?.result ?? b[id]))
@@ -302,7 +356,7 @@ export function ingestGrades(caseResults, grades) {
     if (!grade) return entry
     const merged = entry.results.map((result) => {
       const grader = grade[result.id]
-      return result.result === 'n/a' && grader ? { ...result, result: grader.result, quote: grader.quote } : result
+      return result.result === 'n/a' && grader ? { ...result, result: grader.result, quote: grader.quote, ...(grader.quoteVerified === undefined ? {} : { quoteVerified: grader.quoteVerified }) } : result
     })
     return { ...entry, results: merged, score: scoreCase(merged) }
   })
@@ -344,16 +398,19 @@ export function ingestGradeLines(lines, cases, rubric, baseDir, seed = 0) {
     if (index >= cases.length) throw new UsageError(`grade index out of range: ${index}`)
     seen.add(index)
   }
-  let ingested = 0; let ungraded = 0
+  let ingested = 0; let ungraded = 0; let unverified = 0
   const grades = {}
   for (const line of lines) {
     const index = Number(line.index); const item = cases[index]
     try {
-      const built = buildGraderPrompt({ ...item, deliverableText: readDeliverable(item, baseDir) }, rubric, seed + index)
-      grades[index] = parseGraderVerdict(line.text, built.keyMap); ingested++
+      const deliverableText = readDeliverable(item, baseDir)
+      const built = buildGraderPrompt({ ...item, deliverableText }, rubric, seed + index)
+      const checked = verifyQuotes(parseGraderVerdict(line.text, built.keyMap), deliverableText)
+      grades[index] = checked.verdict; ingested++
+      unverified += checked.unverified
     } catch { ungraded++ }
   }
-  return { grades, ingested, ungraded }
+  return { grades, ingested, ungraded, unverified }
 }
 
 async function runCli(args) {
@@ -372,11 +429,12 @@ async function runCli(args) {
     }
     if (options.report) {
       let results = cases.map((item) => ({ case: item, results: runMechanical(item, { baseDir: dir }) }))
+      let unverifiedQuotes
       if (options.ingestGrades) {
         const lines = readFileSync(path.resolve(options.ingestGrades), 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
-        const ingested = ingestGradeLines(lines, cases, rubric, dir, Number(options.seed ?? 0)); results = ingestGrades(results, ingested.grades); process.stdout.write(`${ingested.ingested} verdicts ingested, ${ingested.ungraded} ungraded\n`)
+        const ingested = ingestGradeLines(lines, cases, rubric, dir, Number(options.seed ?? 0)); unverifiedQuotes = ingested.unverified; results = ingestGrades(results, ingested.grades); process.stdout.write(`${ingested.ingested} verdicts ingested, ${ingested.ungraded} ungraded, unverified quotes: ${ingested.unverified}\n`)
       }
-      const summary = summarize(results); const meta = { generatedTs: new Date().toISOString(), split: 'holdout', inputSha256: digest(readFileSync(casesFile)), caseCount: cases.length }
+      const summary = summarize(results); const meta = { generatedTs: new Date().toISOString(), split: 'holdout', inputSha256: digest(readFileSync(casesFile)), caseCount: cases.length, ...(options.ingestGrades ? { unverifiedQuotes } : {}) }
       writeFileSync(path.resolve(options.report), renderReport(summary, meta)); process.stdout.write(`quality-eval: wrote ${options.report} (${cases.length} cases)\n`)
     }
     return
@@ -396,11 +454,12 @@ async function runCli(args) {
   }
   if (options.report) {
     let results = selected.map((item) => ({ case: item, results: runMechanical(item, { baseDir }) }))
+    let unverifiedQuotes
     if (options.ingestGrades) {
       const lines = readFileSync(path.resolve(options.ingestGrades), 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
-      const ingested = ingestGradeLines(lines, selected, rubric, baseDir, Number(options.seed ?? 0)); results = ingestGrades(results, ingested.grades); process.stdout.write(`${ingested.ingested} verdicts ingested, ${ingested.ungraded} ungraded\n`)
+      const ingested = ingestGradeLines(lines, selected, rubric, baseDir, Number(options.seed ?? 0)); unverifiedQuotes = ingested.unverified; results = ingestGrades(results, ingested.grades); process.stdout.write(`${ingested.ingested} verdicts ingested, ${ingested.ungraded} ungraded, unverified quotes: ${ingested.unverified}\n`)
     }
-    const summary = summarize(results); const meta = { generatedTs: new Date().toISOString(), split: options.split ?? 'all', inputSha256: digest(source), caseCount: selected.length }
+    const summary = summarize(results); const meta = { generatedTs: new Date().toISOString(), split: options.split ?? 'all', inputSha256: digest(source), caseCount: selected.length, ...(options.ingestGrades ? { unverifiedQuotes } : {}) }
     writeFileSync(path.resolve(options.report), renderReport(summary, meta)); process.stdout.write(`quality-eval: wrote ${options.report} (${selected.length} cases)\n`)
   }
 }

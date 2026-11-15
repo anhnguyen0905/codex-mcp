@@ -3,6 +3,27 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `scripts/flow-state.mjs` adds optional `packs` STATE support and `flow-state init --packs`; `scripts/profile-router.mjs` forwards it through `initFlags`, and `skills/preflight/SKILL.md` reads it on resume.
+- `scripts/quality-eval.mjs` adds quote provenance through `verifyQuotes` (including `unverified quotes: n` in CLI output and reports) and pairwise calibration helpers `buildPairPrompt`, `parsePairVerdict`, and `pairCalibration` (at least 2/3 is calibrated).
+- `tests/holdoutLocal.test.ts` adds synthetic frozen-check coverage; the real-holdout check is local-only.
+
+### Changed
+
+- `scripts/language-check.mjs` accepts bare terms after their first `<Vietnamese> (<English>)` gloss; bare uses before that gloss remain findings.
+- `scripts/language-detect.mjs` uses one scored rule over the grammar layer with structural Vietnamese-syllable evidence; jargon is neutral, accented tokens are always Vietnamese, and no word lists are used.
+- `scripts/quality-eval.mjs` now requires single-line grader quotes of at most 200 characters and shows a valid JSON example; the game-analytics pack 0.2.0 (`skills/pack-game-analytics/SKILL.md`, `packs/game-analytics/pack.json`) teaches the first-use gloss rule.
+- Re-baselining under the first-use rule is unchanged; pack gate 2 FAILED (rubric −3.4 pp, owner preferred the pack in 1/3 pairs), so `PACKS_DEFAULT` stays `off` — details in `docs/quality-eval-report.md`.
+
+### Fixed
+
+- `scripts/quality-eval.mjs` `isInsideDir` accepts a `..name` child, and `gradeCases` resolves relative deliverables against `baseDir`.
+- `scripts/data-guard.mjs` detects NUL bytes anywhere in a file, not only the first 8 KB.
+- `tests/qualityGrade.test.ts` isolates the symlink test in its own temporary directory.
+
 ## [0.37.1] - 2026-11-15
 
 ### Fixed

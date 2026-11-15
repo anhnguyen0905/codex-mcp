@@ -1223,6 +1223,7 @@ describe('preflight resume protocol', () => {
       'evidenceMode',
       'languageMode',
       'runLanguage',
+      'packs',
     ])
     expect(skill).toContain('exactly one\n   `## Run state` section')
     expect(skill).toContain('The orchestrator is the only writer.')
@@ -1615,8 +1616,8 @@ describe('fast-path gate contract', () => {
     )
     expect(routerSection).toContain(
       'On resume, do not re-run the router: read `profile`, `profileMode`, `evidenceMode`, '
-        + '`languageMode`, `runLanguage` from STATE.md (missing legacy keys mean `off` modes and '
-        + '`-` profile/runLanguage) and apply the same load rule.',
+        + '`languageMode`, `runLanguage`, and `packs` from STATE.md (missing legacy keys mean `off` modes, '
+        + '`-` profile/runLanguage, and `-` packs—no pack) and apply the same load rule.',
     )
   })
 

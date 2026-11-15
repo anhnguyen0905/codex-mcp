@@ -77,6 +77,41 @@ describe('data guard CLI', () => {
     } finally { rmSync(cwd, { recursive: true, force: true }) }
   })
 
+  it('reports NUL bytes before and after 8 KiB as binary and fails', () => {
+    // Arrange
+    const cwd = mkdtempSync(path.join(os.tmpdir(), 'data-guard-binary-'))
+    try {
+      const denylist = path.join(cwd, 'guard.json'); writeFileSync(denylist, JSON.stringify({ sha256: [] }))
+      const lateNul = Buffer.alloc(9001, 97); lateNul[9000] = 0
+      const earlyNul = Buffer.alloc(11, 97); earlyNul[10] = 0
+      writeFileSync(path.join(cwd, 'late.bin'), lateNul); writeFileSync(path.join(cwd, 'early.bin'), earlyNul)
+      git(['init', '-q'], cwd); git(['add', '.'], cwd)
+      // Act
+      const result = run(['--json'], cwd, { CODEX_MCP_DATA_GUARD: denylist })
+      // Assert
+      expect(result.status).toBe(1)
+      expect(JSON.parse(result.stdout).unchecked).toEqual([
+        { file: 'early.bin', reason: 'binary' }, { file: 'late.bin', reason: 'binary' },
+      ])
+    } finally { rmSync(cwd, { recursive: true, force: true }) }
+  })
+
+  it('scans text beyond 8 KiB for denylisted tokens', () => {
+    // Arrange
+    const cwd = mkdtempSync(path.join(os.tmpdir(), 'data-guard-long-text-'))
+    try {
+      const denylist = path.join(cwd, 'guard.json'); writeFileSync(denylist, JSON.stringify({ sha256: [hash('invented-tail-token')] }))
+      writeFileSync(path.join(cwd, 'long.txt'), `${'a'.repeat(9000)}\ninvented-tail-token`)
+      git(['init', '-q'], cwd); git(['add', '.'], cwd)
+      // Act
+      const result = run(['--json'], cwd, { CODEX_MCP_DATA_GUARD: denylist })
+      // Assert
+      expect(result.status).toBe(1)
+      expect(JSON.parse(result.stdout).findings).toEqual([{ file: 'long.txt', line: 2, rule: 'denylisted-token' }])
+      expect(JSON.parse(result.stdout).unchecked).toEqual([])
+    } finally { rmSync(cwd, { recursive: true, force: true }) }
+  })
+
   it('reports malformed denylist, deleted and oversized tracked files', () => {
     // Arrange
     const cwd = mkdtempSync(path.join(os.tmpdir(), 'data-guard-edge-'))

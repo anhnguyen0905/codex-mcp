@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 // @ts-expect-error — plain .mjs script
-import { agreement, buildGraderPrompt, calibrationStatus, ingestGrades, isInsideDir, parseGraderVerdict, sampleForOwner, loadRubric, runMechanical, validateEvalPaths } from '../scripts/quality-eval.mjs'
+import { agreement, buildGraderPrompt, buildPairPrompt, calibrationStatus, ingestGrades, isInsideDir, pairCalibration, parseGraderVerdict, parsePairVerdict, sampleForOwner, loadRubric, runMechanical, validateEvalPaths } from '../scripts/quality-eval.mjs'
 // @ts-expect-error — plain .mjs script
-import { gradeCases, graderReportLine, gradingExitCode, gradingSummary, parseGradeArgs, validateGradePaths } from '../scripts/quality-grade.mjs'
+import { gradeCases, graderReportLine, gradingExitCode, gradingSummary, main, parseGradeArgs, validateGradePaths } from '../scripts/quality-grade.mjs'
 
 const rubric = loadRubric('tests/fixtures/quality/rubrics.json')
 const sampleCase = (overrides = {}) => ({ id: 'invented-case', profile: 'data', language: 'en', domain: 'invented-domain', request: 'Invent a useful answer', split: 'dev', source: 'synthetic', deliverableText: '# Answer\nInvented evidence', ...overrides })
@@ -13,6 +13,66 @@ const fence = (payload: unknown) => `${String.fromCharCode(96).repeat(3)}json\n$
 const verdict = (quote = 'Invented evidence') => ({ status: 'success', agentMessage: fence({ items: Object.fromEntries([1, 2, 3, 4, 5].map((index) => [`I${index}`, { result: 'pass', quote }])) }) })
 
 describe('blind Codex grader', () => {
+  it('builds a branch-blind pair prompt with a valid JSON example', () => {
+    // Arrange
+    const request = 'Invent a useful comparison'; const textA = 'Invented answer alpha'; const textB = 'Invented answer beta'
+    // Act
+    const prompt = buildPairPrompt({ request, textA, textB })
+    // Assert
+    expect(prompt).toContain(textA); expect(prompt).toContain(textB); expect(prompt).toMatch(/Deliverable A[\s\S]*Deliverable B/); expect(prompt).not.toMatch(/\b(pack|baseline|variant|on|off)\b/i)
+    const example = prompt.match(/```json\n([\s\S]*?)\n```$/)
+    expect(example).not.toBeNull(); expect(JSON.parse(example?.[1] ?? '')).toEqual({ winner: 'A', reason: '<one line>' })
+  })
+
+  it('rejects empty pair prompt inputs', () => {
+    // Arrange
+    const valid = { request: 'Invent a useful comparison', textA: 'Invented answer alpha', textB: 'Invented answer beta' }
+    // Act / Assert
+    for (const key of ['request', 'textA', 'textB']) expect(() => buildPairPrompt({ ...valid, [key]: '  ' })).toThrow()
+  })
+
+  it('parses pair verdicts fail-closed', () => {
+    // Arrange
+    const good = fence({ winner: 'tie', reason: 'Both are useful' })
+    // Act / Assert
+    expect(parsePairVerdict(good)).toBe('tie')
+    for (const text of [`${good}\nintro`, `${good}${good}`, fence({ winner: 'a', reason: 'x' }), fence({ winner: 'C', reason: 'x' }), fence({ winner: '', reason: 'x' }), fence({ winner: 'A', reason: 'two\nlines' }), fence({ winner: 'A', reason: '' }), fence({ winner: 'A', reason: '   ' }), '```json\n{bad}\n```']) expect(() => parsePairVerdict(text)).toThrow()
+  })
+
+  it('calibrates two of three pair choices', () => {
+    // Arrange
+    const ownerPicks = ['A', 'B', 'tie']; const codexPicks = ['A', 'tie', 'tie']
+    // Act / Assert
+    expect(pairCalibration(ownerPicks, codexPicks)).toEqual({ matched: 2, total: 3, rate: 2 / 3, status: 'calibrated' })
+  })
+
+  it('marks one of three pair choices uncalibrated', () => {
+    // Arrange
+    const ownerPicks = ['A', 'B', 'A']; const codexPicks = ['A', 'tie', 'tie']
+    // Act
+    const result = pairCalibration(ownerPicks, codexPicks)
+    // Assert
+    expect(result).toEqual({ matched: 1, total: 3, rate: 1 / 3, status: 'uncalibrated' })
+  })
+
+  it('matches ties only with ties', () => {
+    // Arrange
+    const ownerPicks = ['tie', 'tie']; const codexPicks = ['tie', 'tie']
+    // Act
+    const result = pairCalibration(ownerPicks, codexPicks)
+    // Assert
+    expect(result).toEqual({ matched: 2, total: 2, rate: 1, status: 'calibrated' })
+  })
+
+  it('rejects invalid pair calibration inputs', () => {
+    // Arrange
+    const sparseOwner = new Array(1) as string[]; const sparseCodex = new Array(1) as string[]
+    // Act / Assert
+    for (const [ownerPicks, codexPicks] of [
+      [[], []], [['A'], ['A', 'B']], [['C'], ['A']], [['A'], ['a']], [sparseOwner, ['A']], [['A'], sparseCodex],
+    ]) expect(() => pairCalibration(ownerPicks, codexPicks)).toThrow()
+  })
+
   it('grader prompt is blind', () => {
     // Arrange
     const item = sampleCase({ id: 'case-secret', split: 'holdout', expected: { rubric: { 'data.sourced': 'pass' } } })
@@ -73,6 +133,17 @@ describe('blind Codex grader', () => {
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
+  it('resolves relative deliverables against baseDir', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'grade-base-'))
+    const { writeFileSync } = await import('node:fs')
+    writeFileSync(path.join(dir, 'answer.md'), 'Invented base answer')
+    const calls: unknown[] = []; const client = { callTool: async (input: unknown) => { calls.push(input); return { content: [{ type: 'text', text: JSON.stringify(verdict('Invented base answer')) }] } } }
+    try {
+      const result = await gradeCases({ cases: [sampleCase({ deliverableText: undefined, deliverable: 'answer.md' })], rubric, client, baseDir: dir })
+      expect(result.results[0].fresh).toBe(true); expect(result.results[0].verdict).toBeDefined(); expect(result.results[0].error).toBeUndefined(); expect(JSON.stringify(calls[0])).toContain('Invented base answer')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
   it('ingest merges grader results into n/a mechanical items', () => {
     // Arrange
     const item = sampleCase(); const base = [{ case: item, results: runMechanical(item) }]
@@ -88,14 +159,25 @@ describe('blind Codex grader', () => {
     // Act
     const graded = await gradeCases({ cases: [sampleCase()], rubric, client })
     // Assert
-    expect(gradingSummary(graded)).toMatchObject({ graded: 0, skipped: 0 }); expect(graderReportLine(graded)).toBe('Grader: 0 graded, 1 errors, 0 skipped'); expect(gradingExitCode(graded)).toBe(1)
+    expect(gradingSummary(graded)).toMatchObject({ graded: 0, skipped: 0 }); expect(graderReportLine(graded)).toBe('Grader: 0 graded, 1 errors, 0 skipped, unverified quotes: 0'); expect(gradingExitCode(graded)).toBe(1)
+  })
+
+  it('prints the grading summary without a report', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'grade-main-')); const casesFile = path.join(dir, 'cases.json'); const cacheFile = path.join(dir, 'grades.jsonl')
+    writeFileSync(casesFile, JSON.stringify({ cases: [sampleCase()] }))
+    const client = { callTool: async () => ({ content: [{ type: 'text', text: JSON.stringify(verdict()) }] }), close: async () => {} }
+    const originalWrite = process.stdout.write; let output = ''; process.stdout.write = ((chunk: string) => { output += chunk; return true }) as typeof process.stdout.write
+    try {
+      await main(['--cases', casesFile, '--cache', cacheFile], { client })
+      expect(output).toContain('unverified quotes: ')
+    } finally { process.stdout.write = originalWrite; rmSync(dir, { recursive: true, force: true }) }
   })
 
   it('protects holdout outputs from the repository', () => {
     // Arrange
-    const base = mkdtempSync(path.join(os.tmpdir(), 'invented-quality-root-')); const nested = path.join(base, 'nested', 'future.txt'); const sibling = `${base}-bar`; const symlink = path.join(os.tmpdir(), 'invented-quality-link');
+    const base = mkdtempSync(path.join(os.tmpdir(), 'invented-quality-root-')); const nested = path.join(base, 'nested', 'future.txt'); const dotDirectory = path.join(base, '..name'); const dotName = path.join(dotDirectory, 'future.txt'); const sibling = `${base}-bar`; const symlink = path.join(base, 'invented-quality-link'); mkdirSync(dotDirectory)
     // Act / Assert
-    expect(isInsideDir(nested, base)).toBe(true); expect(isInsideDir(sibling, base)).toBe(false); expect(() => validateEvalPaths({ holdout: true, emitPrompts: path.resolve('prompt-out') })).toThrow(); expect(() => validateGradePaths({ holdout: true, cache: path.resolve('grade-cache.jsonl') })).toThrow(); expect(() => validateEvalPaths({ holdout: true, emitPrompts: os.tmpdir() })).not.toThrow()
+    expect(isInsideDir(nested, base)).toBe(true); expect(isInsideDir(dotDirectory, base)).toBe(true); expect(isInsideDir(dotName, base)).toBe(true); expect(isInsideDir(sibling, base)).toBe(false); expect(() => validateEvalPaths({ holdout: true, emitPrompts: path.resolve('prompt-out') })).toThrow(); expect(() => validateGradePaths({ holdout: true, cache: path.resolve('grade-cache.jsonl') })).toThrow(); expect(() => validateEvalPaths({ holdout: true, emitPrompts: os.tmpdir() })).not.toThrow()
     try { symlinkSync(base, symlink, 'junction'); expect(isInsideDir(path.join(symlink, 'file.txt'), base)).toBe(true); rmSync(symlink, { force: true }) } catch (error) { if (error instanceof Error && !error.message.includes('EPERM')) throw error } finally { rmSync(base, { recursive: true, force: true }) }
   })
 

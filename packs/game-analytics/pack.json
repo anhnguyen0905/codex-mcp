@@ -1,6 +1,6 @@
 {
   "name": "game-analytics",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "skill": "pack-game-analytics",
   "domains": ["data", "growth"],
   "rubricIds": ["data.reproducible", "data.sourced", "data.answers-the-question", "data.decision-useful", "data.language-consistent"],

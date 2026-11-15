@@ -866,6 +866,7 @@ describe('flow-state CLI', () => {
       '- evidenceMode: off',
       '- languageMode: off',
       '- runLanguage: -',
+      '- packs: -',
       '',
     ].join('\n'))
     expect(Object.keys(parseState(state))).toEqual(STATE_KEYS)
@@ -888,7 +889,24 @@ describe('flow-state CLI', () => {
     expect(exitCode).toBe(0)
     expect(parseState(readFileSync(join(directory, '.codex-flow/STATE.md'), 'utf8'))).toMatchObject({
       profile: 'data', profileMode: 'shadow', evidenceMode: 'enforce', languageMode: 'on', runLanguage: 'vi',
+      packs: '-',
     })
+  })
+
+  test('preserves packs from init through resume', async () => {
+    // Arrange
+    const directory = makeTempDirectory('flow-state-packs-resume-')
+    mkdirSync(join(directory, '.codex-flow'))
+
+    // Act
+    expect(await main([
+      'init', '--baseline', 'base', '--known-red', 'none', '--packs', 'game-analytics',
+    ], { cwd: directory })).toBe(0)
+    expect(await main(['resume', '--head', 'invented-head'], { cwd: directory })).toBe(0)
+
+    // Assert
+    expect(parseState(readFileSync(join(directory, '.codex-flow/STATE.md'), 'utf8')).packs)
+      .toBe('game-analytics')
   })
 
   test.each([
@@ -897,6 +915,9 @@ describe('flow-state CLI', () => {
     ['evidence-mode', 'invalid'],
     ['language-mode', 'invalid'],
     ['run-language', 'invalid'],
+    ['packs', 'Game Analytics'],
+    ['packs', 'a,,b'],
+    ['packs', 'a,'],
   ])('rejects invalid %s during init without writing', async (flag, value) => {
     // Arrange
     const directory = makeTempDirectory('flow-state-profile-invalid-init-')
@@ -916,9 +937,12 @@ describe('flow-state CLI', () => {
   test('allows legacy state without optional keys and rejects invalid present values', () => {
     // Arrange
     const invalid = `${LEGACY_STATE}- profile: invalid\n`
+    const withPacks = `${LEGACY_STATE}- packs: game-analytics\n`
 
     // Act / Assert
     expect(checkState(stateWithSelectors({ currentTask: '-', taskStage: 'idle', wave: '-' }))).toEqual([])
+    expect(parseState(LEGACY_STATE).packs).toBe('-')
+    expect(parseState(withPacks).packs).toBe('game-analytics')
     expect(checkState(invalid)).toContainEqual({
       key: 'profile', reason: 'must be one of code|data|design|plan|content|mixed|-',
     })
@@ -928,11 +952,11 @@ describe('flow-state CLI', () => {
     // Arrange
     const optional = [
       '', '- profile: data', '- profileMode: shadow', '- evidenceMode: enforce', '- languageMode: on',
-      '- runLanguage: vi',
+      '- runLanguage: vi', '- packs: game-analytics',
     ].join('\n')
     const execution = `${stateAtPhase('execution')}${optional}`
     const expected = {
-      profile: 'data', profileMode: 'shadow', evidenceMode: 'enforce', languageMode: 'on', runLanguage: 'vi',
+      profile: 'data', profileMode: 'shadow', evidenceMode: 'enforce', languageMode: 'on', runLanguage: 'vi', packs: 'game-analytics',
     }
 
     // Act
@@ -953,6 +977,9 @@ describe('flow-state CLI', () => {
     ['evidenceMode', 'invalid'],
     ['languageMode', 'invalid'],
     ['runLanguage', 'invalid'],
+    ['packs', 'Game Analytics'],
+    ['packs', 'a,,b'],
+    ['packs', 'a,'],
   ])('rejects invalid optional %s values on set', async (key, value) => {
     // Arrange
     const directory = makeTempDirectory('flow-state-profile-set-')

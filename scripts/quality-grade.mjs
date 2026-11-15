@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, chmodSync, ap
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { appendLook, buildGraderPrompt, graderCacheKey, isInsideDir, loadHoldout, holdoutDir, loadRubric, parseGraderVerdict, validateCases, runMechanical, ingestGrades } from './quality-eval.mjs'
+import { appendLook, buildGraderPrompt, graderCacheKey, isInsideDir, loadHoldout, holdoutDir, loadRubric, parseGraderVerdict, validateCases, runMechanical, ingestGrades, verifyQuotes } from './quality-eval.mjs'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const rubricFile = path.join(root, 'tests/fixtures/quality/rubrics.json')
@@ -18,11 +18,11 @@ const readCache = (file) => {
 }
 const writeCache = (file, key, verdict) => { mkdirSync(path.dirname(file), { recursive: true }); appendFileSync(file, `${JSON.stringify({ key, verdict })}\n`, { mode: 0o600 }); chmodSync(file, 0o600) }
 
-export async function gradeCases({ cases, rubric, client, cache = new Map(), maxRuns = 6, seed = 0 }) {
+export async function gradeCases({ cases, rubric, client, cache = new Map(), maxRuns = 6, seed = 0, baseDir = process.cwd() }) {
   const results = []; let runs = 0; let cacheHits = 0; let skipped = 0
   for (const [index, item] of cases.entries()) {
-    const built = buildGraderPrompt(item, rubric, seed + index)
-    const deliverableText = item.deliverableText ?? readFileSync(item.deliverable, 'utf8')
+    const deliverableText = item.deliverableText ?? readFileSync(path.isAbsolute(item.deliverable) ? item.deliverable : path.resolve(baseDir, item.deliverable), 'utf8')
+    const built = buildGraderPrompt({ ...item, deliverableText }, rubric, seed + index)
     const key = graderCacheKey(built.prompt, rubric.schemaVersion ?? 1, deliverableText)
     if (cache.has(key)) { results.push({ case: item, key, verdict: cache.get(key), fresh: false, cacheHit: true }); cacheHits++; continue }
     if (runs >= maxRuns) { results.push({ case: item, key, skipped: 'budget', fresh: false }); skipped++; continue }
@@ -41,7 +41,7 @@ export async function gradeCases({ cases, rubric, client, cache = new Map(), max
       if (payload?.status !== 'success') throw new Error(`codex_execute status is ${payload?.status ?? 'missing'}`)
       const agentMessage = payload.agentMessage
       if (typeof agentMessage !== 'string') throw new Error('codex_execute payload has no agentMessage')
-      const verdict = parseGraderVerdict(agentMessage, built.keyMap)
+      const verdict = verifyQuotes(parseGraderVerdict(agentMessage, built.keyMap), deliverableText).verdict
       cache.set(key, verdict); results.push({ case: item, key, verdict, fresh: true }); runs++
     } catch (error) {
       results.push({ index, case: item, key, error: error instanceof Error ? error.message : String(error), fresh: true }); runs++
@@ -56,7 +56,7 @@ export function gradingSummary(graded) {
   return { graded: graded.results.length - errors.length - skipped.length, errors, skipped: skipped.length }
 }
 export function gradingExitCode(graded) { return gradingSummary(graded).errors.length ? 1 : 0 }
-export function graderReportLine(graded) { const counts = gradingSummary(graded); return `Grader: ${counts.graded} graded, ${counts.errors.length} errors, ${counts.skipped} skipped` }
+export function graderReportLine(graded) { const counts = gradingSummary(graded); const unverified = graded.results.reduce((total, item) => total + Object.values(item.verdict ?? {}).filter((value) => value.quoteVerified === false).length, 0); return `Grader: ${counts.graded} graded, ${counts.errors.length} errors, ${counts.skipped} skipped, unverified quotes: ${unverified}` }
 
 export function parseGradeArgs(args) {
   const options = { maxRuns: 6, seed: 0 }
@@ -117,21 +117,22 @@ async function writeReport(file, graded, input, options) {
   writeFileSync(path.resolve(options.report), report.replace('\n\nGenerated:', `\n\n${graderReportLine(graded)}\n\nGenerated:`))
 }
 
-async function main(args) {
+export async function main(args, dependencies = {}) {
   const options = validateGradePaths(parseGradeArgs(args))
   if (!existsSync(path.join(root, 'dist/index.js'))) throw new Error('dist/ is missing; run npm run build first')
   const input = loadInput(options)
   const cacheFile = path.resolve(options.cache || (options.holdout ? path.join(input.holdout, 'grades.jsonl') : path.join(root, '.codex-flow/notes/grades-dev.jsonl'))); const cache = readCache(cacheFile)
-  const client = new Client({ name: 'quality-grade', version: '0.0.1' }); const transport = new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'dist/index.js')] })
+  const client = dependencies.client ?? new Client({ name: 'quality-grade', version: '0.0.1' }); const transport = dependencies.client ? undefined : new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'dist/index.js')] })
   try {
-    await client.connect(transport)
-    const graded = await gradeCases({ cases: input.cases, rubric: input.rubric, client, cache, maxRuns: options.maxRuns, seed: options.seed })
+    if (transport) await client.connect(transport)
+    const graded = await gradeCases({ cases: input.cases, rubric: input.rubric, client, cache, maxRuns: options.maxRuns, seed: options.seed, baseDir: input.baseDir })
     const counts = gradingSummary(graded)
     for (const item of counts.errors) console.error(`grade ${item.index}: ${item.error}`)
     if (counts.skipped) console.error(`grade skipped: ${counts.skipped}`)
+    process.stdout.write(`${graderReportLine(graded)}\n`)
     persistFreshGrades(cacheFile, graded); await writeReport(options.report, graded, input, options)
     if (gradingExitCode(graded)) process.exitCode = 1
-  } finally { await client.close().catch(() => {}) }
+  } finally { if (typeof client.close === 'function') await client.close().catch(() => {}) }
 }
 
 const direct = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href

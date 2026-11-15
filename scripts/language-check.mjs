@@ -60,11 +60,20 @@ const findingsFor = (text, language, terms) => {
     const candidates = language === 'vi' ? [term.en] : term.vi.filter(isEnglishSafe)
     for (const candidate of candidates) {
       const regex = new RegExp(language === 'vi' ? englishPattern(candidate) : variantPattern(candidate), 'giu')
-      for (const match of clean.matchAll(regex)) {
+      const candidateMatches = [...clean.matchAll(regex)]
+      let hasGlossed = false
+      for (const match of candidateMatches) {
         const index = match.index ?? 0
-        const ownVariantBeforeGloss = term.vi.some((variant) =>
-          new RegExp(`${escapeRegex(variant)}\\s*\\($`, 'iu').test(text.slice(0, index)))
-        if (ownVariantBeforeGloss) continue
+        if (language === 'vi') {
+          const ownVariantBeforeGloss = term.vi.some((variant) =>
+            new RegExp(`${escapeRegex(variant)}\\s*\\($`, 'iu').test(text.slice(0, index))
+          )
+          if (ownVariantBeforeGloss) {
+            hasGlossed = true
+            continue
+          }
+          if (hasGlossed) continue
+        }
         matches.push({ start: index, end: index + match[0].length, check: language === 'vi' ? 'untranslated-term' : 'wrong-language-term', term: candidate })
       }
     }

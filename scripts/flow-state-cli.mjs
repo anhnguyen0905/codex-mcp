@@ -48,7 +48,7 @@ export function parseCliArgs(argv) {
   if (command === 'init') {
     const parsed = parseOptions(args, 0, new Set([
       '--state', '--baseline', '--known-red', '--dirty-baseline', '--executor',
-      '--events', '--profile', '--profile-mode', '--evidence-mode', '--language-mode', '--run-language',
+      '--events', '--profile', '--profile-mode', '--evidence-mode', '--language-mode', '--run-language', '--packs',
     ]))
     return {
       command,
@@ -62,6 +62,7 @@ export function parseCliArgs(argv) {
       evidenceMode: parsed.options['--evidence-mode'],
       languageMode: parsed.options['--language-mode'],
       runLanguage: parsed.options['--run-language'],
+      packs: parsed.options['--packs'],
       events: parsed.options['--events'],
     }
   }

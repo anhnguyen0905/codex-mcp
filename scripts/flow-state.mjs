@@ -35,6 +35,7 @@ export const STATE_KEYS = Object.freeze([
   'evidenceMode',
   'languageMode',
   'runLanguage',
+  'packs',
 ])
 export { PHASES }
 export const TASK_STAGES = Object.freeze([
@@ -55,7 +56,7 @@ export const TASK_TRANSITIONS = Object.freeze({
 })
 const STATE_KEY_SET = new Set(STATE_KEYS)
 export const OPTIONAL_STATE_KEYS = Object.freeze([
-  'profile', 'profileMode', 'evidenceMode', 'languageMode', 'runLanguage',
+  'profile', 'profileMode', 'evidenceMode', 'languageMode', 'runLanguage', 'packs',
 ])
 const OPTIONAL_STATE_KEY_SET = new Set(OPTIONAL_STATE_KEYS)
 const PHASE_SET = new Set(PHASES)
@@ -147,7 +148,8 @@ export function parseState(text) {
     seen.add(line.key)
     entries.push([line.key, line.value])
   }
-  return Object.fromEntries(entries)
+  const state = Object.fromEntries(entries)
+  return Object.hasOwn(state, 'packs') ? state : { ...state, packs: NO_SELECTOR }
 }
 function stateValueError(key, value) {
   if (key === 'phase' && !PHASE_SET.has(value)) return `must be one of ${PHASES.join('|')}`
@@ -169,6 +171,9 @@ function stateValueError(key, value) {
   if (key === 'languageMode' && !['off', 'on'].includes(value)) return 'must be one of off|on'
   if (key === 'runLanguage' && !['vi', 'en', 'mixed', '-'].includes(value)) {
     return 'must be one of vi|en|mixed|-'
+  }
+  if (key === 'packs' && value !== NO_SELECTOR && !/^[a-z0-9-]+(,[a-z0-9-]+)*$/.test(value)) {
+    return 'must be - or comma-separated lowercase pack names'
   }
   return null
 }
@@ -622,7 +627,7 @@ async function createFileExclusively(targetPath, contents, label) {
 }
 function createInitialState({
   baseline, knownRed, dirtyBaseline = 'none', executor = 'codex', profile = '-', profileMode = 'off',
-  evidenceMode = 'off', languageMode = 'off', runLanguage = '-',
+  evidenceMode = 'off', languageMode = 'off', runLanguage = '-', packs = '-',
 }) {
   const values = {
     phase: 'interview',
@@ -644,6 +649,7 @@ function createInitialState({
     evidenceMode,
     languageMode,
     runLanguage,
+    packs,
   }
   for (const key of STATE_KEYS) validateStateKeyValue(key, values[key])
   return [

@@ -94,6 +94,47 @@ not used: most labels are `pass`, so a grader that passes everything would score
 - Codex grades come from one batch session per split, not from isolated per-case runs.
 - The holdout has no content-profile cases.
 
+## Re-baseline under the first-use gloss rule — 2026-11-15 (multiscope Phase 4, T10)
+
+- Method: the same harness was run twice on the same 22-case holdout and 32-case dev set with the same Codex verdicts (holdout: one batch of 22 verdicts; dev: 31 verdicts; seed = case index): once with the language checker at `0dd47a6` (every bare English term is a finding) and once with the Phase 4 checker (first-use gloss: bare uses after a `<Vietnamese term> (<English term>)` gloss are accepted). The old run reproduces the 2026-11-14 baseline tables exactly, cell for cell.
+- Owner calibration was not repeated.
+
+### Holdout — profile × language
+
+| Profile | Language | n | Rubric % mechanical old → new | Rubric % mechanical + Codex old → new | Language pass % old → new |
+| --- | --- | ---: | ---: | ---: | ---: |
+| data | vi | 9 | 0.0% → 0.0% | 80.0% → 80.0% | 0.0% → 0.0% |
+| data | en | 9 | 88.9% → 88.9% | 97.8% → 97.8% | 88.9% → 88.9% |
+| design | en | 1 | 16.7% → 16.7% | 28.6% → 28.6% | n/a |
+| design | vi | 1 | 33.3% → 33.3% | 42.9% → 42.9% | n/a |
+| plan | vi | 1 | 50.0% → 50.0% | 50.0% → 50.0% | n/a |
+| plan | en | 1 | 0.0% → 0.0% | 0.0% → 0.0% | n/a |
+
+### Dev — profile × language
+
+| Profile | Language | n | Rubric % mechanical old → new | Rubric % mechanical + Codex old → new | Language pass % old → new |
+| --- | --- | ---: | ---: | ---: | ---: |
+| data | en | 7 | 85.7% → 85.7% | 80.0% → 80.0% | 85.7% → 85.7% |
+| data | vi | 7 | 57.1% → 57.1% | 85.7% → 85.7% | 57.1% → 57.1% |
+| design | en | 3 | 100.0% → 100.0% | 100.0% → 100.0% | n/a |
+| design | vi | 3 | 100.0% → 100.0% | 100.0% → 100.0% | n/a |
+| plan | en | 3 | 100.0% → 100.0% | 100.0% → 100.0% | n/a |
+| plan | vi | 3 | 100.0% → 100.0% | 100.0% → 100.0% | n/a |
+| content | en | 3 | 100.0% → 100.0% | 100.0% → 100.0% | n/a |
+| content | vi | 3 | 91.7% → 91.7% | 91.7% → 91.7% | n/a |
+
+### Reading
+
+- No cell moved.
+- On the 9 Vietnamese data holdout deliverables the number of language findings is identical before and after, and none of them writes any listed English term inside parentheses (0 glosses), so the first-use rule had nothing to accept — these deliverables were produced without the gloss instruction.
+- The rule's effect can only show on deliverables that gloss, which is what the Phase 4 gate (pack v0.2) measures.
+- The baseline numbers therefore stand unchanged for the gate's pack-off comparison.
+
+### Quote provenance
+
+- Re-checking the stored Codex verdicts with `verifyQuotes`, 16 of 112 holdout quotes (14.3%) were not found in the deliverable after whitespace normalisation; dev: 0 unverified.
+- Those 16 verdicts' evidence is unverified, which supports treating the Codex grader as uncalibrated on real data.
+
 ## Pack gate — game-analytics 0.1.0 (2026-11-14, multiscope Phase 3, T12)
 
 **Decision: FAIL. `PACKS_DEFAULT` stays `'off'`** (`scripts/profile-router.mjs`).
@@ -146,3 +187,58 @@ not used: most labels are `pass`, so a grader that passes everything would score
 - Evidence items: the regenerated reports have no evidence manifests.
 - Design, plan and content packs: out of scope.
 - Run-to-run variance: each branch ran once per case.
+
+## Pack gate 2 — game-analytics 0.2.0 (2026-11-15, multiscope Phase 4, T11)
+
+**Decision: FAIL. `PACKS_DEFAULT` stays `'off'`** (`scripts/profile-router.mjs`).
+
+### Method
+
+- 3 analytics holdout cases never used by a gate (2 vi, 1 en) were sampled before any run with seed 20261115 (sha256(seed:id) ranking within a 4-case vi pool and a 2-case en pool).
+- Each case × branch (pack off / pack 0.2.0 on) ran 2 times: 12 reports from isolated Codex sessions on the same result tables and prompt, with the on branch adding only the pack standards block.
+- Grading used a mechanical grader, plus a blind Codex grader in one isolated session per report (opaque item keys, single-line quotes ≤ 200 chars, quote provenance check).
+- First pass: 4 of 12 verdicts were unusable for format (2 without the fenced json block, 2 with quotes over 200 chars); those 4 were re-graded once, blind, with a format reminder only. 1 of 12 stayed unusable (text after the fenced block) and that report is scored on mechanical items only.
+- The owner blind-graded 3 A/B pairs (run 1 of each branch per case, A/B order randomised and hidden); Codex blind-picked the same 3 pairs.
+
+### Result
+
+| Case | Language | Rubric % off: mean of 2 runs (spread) | Rubric % on: mean (spread) | Items down (max over runs) | Language pass off → on |
+| --- | --- | ---: | ---: | ---: | --- |
+| c1 | vi | 70.0% (20.0) | 60.0% (0.0) | 1 | 0/2 → 0/2 |
+| c2 | vi | 60.0% (0.0) | 60.0% (0.0) | 1 | 0/2 → 0/2 |
+| c3 | en | 100.0% (0.0) | 100.0% (0.0) | 0 | 2/2 → 2/2 |
+| **Mean (n = 3)** |  | **76.7%** | **73.3%** | **max 1** | **2/6 → 2/6** |
+
+Mean run-to-run spread: off 6.7 pp, on 0.0 pp.
+
+### Gate criteria
+
+| Criterion | Required | Observed | Met |
+| --- | --- | --- | --- |
+| Rubric mean on − off | ≥ +10 pp | −3.4 pp | no |
+| No case down more than 1 item | ≤ 1 | 1 | yes |
+| Language pass not lower | not lower | 2/6 → 2/6 | yes |
+| Owner prefers pack-on | ≥ 2/3 pairs | 1/3 (one on, one off, one tie) | no |
+| Codex pair calibration (recorded, not blocking) | ≥ 2/3 agreement with owner | 1/3 agreement → uncalibrated | n/a |
+
+Before the format re-grade the rubric delta was −10.0 pp with 4 verdicts missing; the decision does not depend on the re-grade (the owner criterion fails either way).
+
+### Reasons
+
+- Rubric moved the wrong way (−3.4 pp).
+- The owner did not prefer the pack (1/3).
+- Pack v0.2 improves gloss behaviour but not enough to pass the language check.
+- The Codex grader agrees with the owner on 1/3 pairs and stays uncalibrated, so its rubric items are weak evidence.
+
+### Diagnostics
+
+- Across the Vietnamese runs (4 per branch), pack-on lowered language-check findings from 68 to 52 and distinct flagged terms from 23 to 10, and glossed listed terms 8 times versus 0 off — the first-use rule is being followed partly — but every Vietnamese run in both branches still used at least one English term bare before its first gloss, so language pass stayed 0/4 vs 0/4.
+- Quote provenance: 6 of 55 Codex quotes (10.9%) were not found in the report.
+
+### Unchecked
+
+- n = 3 cases, 2 runs per branch.
+- Owner pairs compare run 1 only.
+- One report scored mechanical-only.
+- No evidence manifests (evidence pass n/a).
+- Codex sessions saw real holdout data (approved design; outputs stay local).
