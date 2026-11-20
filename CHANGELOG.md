@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.1] - 2026-11-20
+
+### Changed
+
+- `README.md` is now a short landing page (what it is, quick start, the five commands, how it works, highlights, security and development notes); repo links are absolute so they also work on the npm page. Stale counts are corrected (76 skills, five commands, seven tools).
+
+### Added
+
+- Reference pages moved out of the README: `docs/workflow.md` (phases, commands and presets, run state, skill selection, context persistence, parallel execution, brainstorm, run ledger, profile pilot), `docs/mcp-tools.md` (tools, result payloads, review findings and scope, `verifyCommand`, auth mode, redaction, metrics, auto-resume) and `docs/configuration.md` (every user-facing environment variable with its default, standalone MCP install, optional flint-chart, troubleshooting).
+
 ## [0.38.0] - 2026-11-15
 
 ### Added
