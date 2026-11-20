@@ -2,447 +2,153 @@
 
 # codex-mcp
 
-**Plan with Claude · Execute with OpenAI Codex · Review with Claude**
+**Plan with Claude · Execute with OpenAI Codex · Review with Claude + Codex**
 
-A Claude Code plugin and MCP server that runs a disciplined **plan → execute → review** loop:
-Claude interviews you and designs the plan, Codex writes the code, then Claude reviews each task
-and the final pass alongside a required Codex `codex_review`; findings are compared, fixes go back,
-and non-blocking improvements wait for your decision — all from a single command.
+A Claude Code plugin and MCP server for a repeatable plan → execute → review workflow.
 
-[![CI](https://github.com/anhnguyen0905/codex-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/anhnguyen0905/codex-mcp/actions/workflows/ci.yml)
-&nbsp;·&nbsp; macOS · Windows · Linux &nbsp;·&nbsp; Node ≥ 20 &nbsp;·&nbsp; MIT
+[![CI](https://github.com/anhnguyen0905/codex-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/anhnguyen0905/codex-mcp/actions/workflows/ci.yml) [![npm version](https://img.shields.io/npm/v/@anhnguyen0905/codex-mcp)](https://www.npmjs.com/package/@anhnguyen0905/codex-mcp) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/anhnguyen0905/codex-mcp/blob/main/LICENSE) ![Node >= 20](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)
+
+macOS · Windows · Linux
 
 </div>
 
----
+## What it is
+
+Claude interviews you and turns the request into an acceptance-tested plan. Codex implements the planned tasks, while Claude and Codex review each task and the final result. That split matters because the model that writes the code is not the only one judging it: Claude plans and reviews, and a fresh read-only Codex session reviews too, all from a single command. Findings loop back into fixes, and non-blocking improvements wait for your decision. The MCP server runs the local Codex CLI and returns structured results for the workflow to use.
+
+- Six phases take a request from preflight through interview, plan, backlog, execution, and review.
+- 76 skills are indexed and selected for the task instead of loading every skill into context.
+- Independent tasks can run in parallel in separate git worktrees.
+- Session reports record planning, allocation, task, cost, and summary files with PIC attribution.
 
 ## Quick start
 
-**1. Prerequisites** — Node ≥ 20 and the Codex CLI, authenticated:
+1. **Prerequisites.** Install Node ≥ 20 and the Codex CLI, then authenticate with ChatGPT Plus/Pro/Team or an API key:
 
-```bash
-npm i -g @openai/codex
-codex login          # ChatGPT Plus/Pro/Team — or set OPENAI_API_KEY
-```
+   ```bash
+   npm i -g @openai/codex
+   codex login
+   # Or set OPENAI_API_KEY instead of using codex login.
+   ```
 
-**2. Install the plugin** (bundles the `/codex-flow` command, ~60 skills, and the `codex` MCP server):
+2. **Install the plugin.** It bundles five commands, 76 skills, and the `codex` MCP server:
 
-```
-/plugin marketplace add anhnguyen0905/codex-mcp
-/plugin install codex-flow@codex-mcp
-```
+   ```text
+   /plugin marketplace add anhnguyen0905/codex-mcp
+   /plugin install codex-flow@codex-mcp
+   ```
 
-Once listed in the Claude community directory, this also works:
-`claude plugin marketplace add anthropics/claude-plugins-community` then
-`claude plugin install codex-flow@claude-community`.
+   The community-directory alternative is:
 
-**3. Run it** in any project:
+   ```text
+   claude plugin marketplace add anthropics/claude-plugins-community
+   claude plugin install codex-flow@claude-community
+   ```
 
-```
-/codex-flow implement a dark-mode toggle on the settings page
-```
+3. **First run.** In a project, start with:
 
-<details>
-<summary>Alternative: install the MCP server standalone (no plugin)</summary>
+   ```text
+   /codex-flow implement a dark-mode toggle on the settings page
+   ```
 
-```bash
-# from npm (recommended — ships a prebuilt dist, nothing to compile)
-claude mcp add --scope user codex -- npx -y @anhnguyen0905/codex-mcp
-# or straight from this repo, which builds from source on first run
-claude mcp add --scope user codex -- npx -y github:anhnguyen0905/codex-mcp
-```
+For a standalone MCP server, see [Standalone MCP server](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/configuration.md#standalone-mcp-server).
 
-`claude mcp list` should then show `codex … ✔ Connected`. Copy
-[`commands/codex-flow.md`](commands/codex-flow.md) to `~/.claude/commands/` for the workflow
-command, or just use the plugin install above which bundles both.
-</details>
+**Auth mode.** `codex_health` reports `authMode: "chatgpt" | "apikey" | "unknown"`. The ChatGPT-auth backend rejects arbitrary model ids, so pass `model` only when `authMode` is `apikey`; otherwise omit it and steer with `reasoningEffort`. `/codex-flow` follows the same rule, and a flowDocs guard checks that wording.
 
-### Optional: flint-chart-mcp
+## Commands
 
-codex-flow routes chart and graph tasks to flint-chart (Microsoft Research) via the
-`codex-flow:exec-visualization` skill, rendering polished PNG/SVG charts instead of using ad-hoc
-Python plotting.
-
-Register the server with the Codex CLI in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.flint-chart]
-command = "npx"
-args = ["-y", "flint-chart-mcp"]
-```
-
-Register it with Claude:
-
-```bash
-claude mcp add flint-chart -- npx -y flint-chart-mcp
-```
-
-This setup is optional; when the server is not present, the `exec-visualization` skill degrades to
-a fallback.
-
-<details>
-<summary>Troubleshooting: <code>Failed to reconnect to Plugin:codex-flow:codex: -32000</code></summary>
-
-The plugin is distributed as a git clone and `dist/` is gitignored, so up to v0.14.0 a freshly
-installed plugin had no build and its `node dist/index.js` launcher exited immediately.
-
-Since v0.15.1 the bundled `.mcp.json` runs the published npm tarball
-(`npx -y @anhnguyen0905/codex-mcp@<version>`), which ships a prebuilt `dist/` — nothing is compiled
-at install time. Updating the plugin is the fix:
-
-```
-/plugin update codex-flow@codex-mcp
-```
-
-If you are pinned to an older version, patch that install once instead:
-
-```bash
-cd ~/.claude/plugins/cache/codex-mcp/codex-flow/<version>
-npm install --no-audit --no-fund && npm run build
-```
-
-Then restart Claude Code and confirm with `claude mcp list` (or call `codex_health`).
-</details>
-
----
+| Command | Purpose |
+|---|---|
+| `/codex-flow <task>` | Run the six-phase workflow from preflight to Claude + Codex review. |
+| `/codex-flow:brainstorm <question>` | Frame, map, challenge, and ratify a read-only systems-thinking analysis. |
+| `/codex-flow:analyze <task>` | Run the full flow with the `data` profile preset. |
+| `/codex-flow:design <task>` | Run the full flow with the `design` profile preset for game/product design docs. |
+| `/codex-flow:plan <task>` | Run the full flow with the `plan` profile preset. |
 
 ## How it works
 
-```
+```text
 Claude Code ──(MCP stdio)──▶ codex-mcp ──spawns──▶ codex exec --json
 ```
 
-`/codex-flow` runs six phases, keeping Claude as the planner/reviewer and Codex as the implementer:
-
 | Phase | Owner | What happens |
-|-------|-------|--------------|
-| **0 · Preflight** | Claude | Verify Codex login; baseline git + tests; resume an interrupted run. |
-| **1 · Interview** | Claude | Clarify requirements until every acceptance criterion is verifiable. |
-| **2 · Plan** | Claude | Explore the codebase, select relevant skills, write `.codex-flow/PLAN.md`. |
-| **3 · Backlog** | Claude | Decompose into dependency-ordered tasks in `.codex-flow/TASKS.md`. |
-| **4 · Execute** | Codex | Implement one task at a time — or several in parallel (see below). |
-| **5 · Review** | Claude + Codex | Dual-review each task and the final pass via Claude + required `codex_review`; compare findings, loop fixes back, and collect non-blocking improvements for a user decision gate. |
+|---|---|---|
+| 0 · Preflight | Claude | Verify Codex, baseline the workspace, and resume interrupted work. |
+| 1 · Interview | Claude | Clarify requirements until acceptance criteria are verifiable. |
+| 2 · Plan | Claude | Explore the codebase, select skills, and write the plan. |
+| 3 · Backlog | Claude | Decompose the plan into dependency-ordered tasks. |
+| 4 · Execute | Codex | Implement tasks serially or in parallel when independent. |
+| 5 · Review | Claude + Codex | Compare reviews, fix findings, and gate non-blocking improvements. |
 
-The bundled `session-report` skill writes a per-session bundle to `.codex-flow/reports/<YYYYMMDD-HHMMSS>/` with planning, allocation, task, cost, and summary reports plus explicit `claude` / `codex` / `both` PIC attribution.
-
-The server spawns `codex exec` non-interactively, parses its JSONL event stream, and returns a
-structured result (`sessionId`, `agentMessage`, `fileChanges`, `commands`, token `usage`, `diff`).
-
----
-
-## `/codex-flow:brainstorm` — think before you build (systems-thinking debate)
-
-Not every task should end in code. `/codex-flow:brainstorm <question>` is a read-only thinking
-workflow that frames the question, builds independent system maps, tests the reasoning, checks the
-surviving recommendation's feasibility, and delivers an `ANALYSIS.md` for user ratification. It is
-grounded in Meadows, *Thinking in Systems*; Senge, *The Fifth Discipline*; Minto, *The Pyramid
-Principle*; Ackoff, *Redesigning the Future* / *Creating the Corporate Future*; and Checkland,
-*Systems Thinking, Systems Practice*.
-
-| Phase | Who | What | Artifact |
-|-------|-----|------|----------|
-| **Frame** | Claude | Clarify the decision, constraints, and meaning of decided; apply SCQA, CATWOE, treatment, and the system boundary without introducing an option. | `FRAME.md` |
-| **Map** | Claude, then Codex | Build independent system maps with stocks, flows, feedback loops, delays, archetypes, and leverage points; record divergence without an option or recommendation. Fable critiques both maps. | `MAP.md` |
-| **Reason** | Claude ⇄ Codex | Build and challenge a pyramid thesis through steelman → counter-thesis → Toulmin/Walton challenges, and 1–3 fresh read-only Astra rounds. | `REASON.md` |
-| **Feasibility** | Codex | Assess only the surviving recommendation for effort, reversibility, dependencies, risks, conditions, first step, and one verdict; Fable critiques the verdict; skip it when no recommendation survives Reason. | `REASON.md` (raw turn); `ANALYSIS.md` `## Feasibility` |
-| **Decide** | Claude + user | Present the analysis for accept, amend, reject, or one more round; ratify it before offering the analysis as the starting point for a later flow. | `ANALYSIS.md` |
-
-The run directory is `.codex-flow/brainstorm/<timestamp>/` and contains `FRAME.md`, `MAP.md`,
-`REASON.md` (append-only), and `ANALYSIS.md`, plus one `.codex-flow/notes/brainstorm.log` line. Astra's JSON is
-parsed fail-closed by `scripts/debate-parse.mjs` with kinds `map`, `round`, and `feasibility`;
-malformed entries are reported and never reconstructed from prose. Reason records a standpoint ledger and
-assumption register, with argumentation grounded in Toulmin, *The Uses of Argument*; Walton, Reed & Macagno,
-*Argumentation Schemes*; van Eemeren & Grootendorst, *A Systematic Theory of Argumentation*; Rapoport's rules
-via Dennett, *Intuition Pumps*; and Mason & Mitroff, *Challenging Strategic Planning Assumptions*. The workflow
-writes no implementation code and does not touch the full flow's control files.
-
+The server parses Codex’s JSONL event stream and returns a structured result through `codex_execute`, `codex_continue`, `codex_review`, `codex_batch`, `codex_sessions`, `codex_metrics`, and `codex_health`; see the [MCP tools reference](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/mcp-tools.md).
 
 ## Highlights
 
-### Index-based skill selection
+- **Dual review and improvements gate.** Claude and required `codex_review` findings are compared; non-blocking improvements wait for a user decision. [Workflow reference](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/workflow.md#the-six-phases)
+- **Index-based skill selection.** A local index selects relevant skills within a context budget, and third-party skills are vetted before use. [Skill selection](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/workflow.md#skill-selection)
+- **Context persistence for large projects.** Budgeted task slices and resume context carry anchored decisions and preserve mandatory task text. [Context persistence](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/workflow.md#context-persistence)
+- **Parallel execution in git worktrees.** Independent tasks run across workspaces, then merge and receive integration review by wave. [Parallel execution](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/workflow.md#parallel-execution)
+- **Executor fallback.** When Codex is unavailable, the flow offers an explicit choice to repair Codex or let Claude execute under the same plan/review contract. [Executor fallback](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/workflow.md#executor-fallback)
+- **Per-session reports with PIC attribution.** Each session leaves planning, allocation, task, cost, and summary reports marked `claude`, `codex`, or `both`. [Session reports](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/workflow.md#session-reports)
 
-Instead of blind-loading whole skill collections, `/codex-flow` selects only the skills a task
-needs from a **local index**: it classifies the request's role facets (engineering, data,
-marketing, growth, research, design…) and loads every relevant skill that fits a context budget
-(~3% of the window), embedding distilled rule blocks into the Codex prompts. Skills on disk cost
-zero context until selected; third-party skills are vetted once before first use.
+## Documentation
 
-The index covers `~/.claude/skills`, `~/claude-skill-library`, **and the `skills/` dir of every
-installed plugin** (newest version per plugin) — so selection knows about skills the machine
-already has instead of reporting a gap. And a domain facet never ends with zero skills: when
-nothing indexed fits, Step 7 re-indexes, vets, searches (`gh`/catalog/web), and — failing all of
-that — **authors the missing `SKILL.md` before execution**, so the library grows toward the work.
-
-```bash
-node scripts/sync-awesome-skills.mjs --clone   # build a local library from awesome-claude-skills
-node scripts/build-skills-index.mjs            # → ~/.claude/skill-library/INDEX.md
-```
-
-Besides the phase skills, the plugin ships 17 domain skills authored through Step 7 — paid media,
-unit economics, media planning, warehouse modeling, event taxonomy, attribution, causal inference,
-survey design, ASO, localisation, OKRs, creative briefs, influencer strategy, SOPs and data-quality
-checks, and agent context persistence — so they are indexed and selectable out of the box. Their
-numeric thresholds are labelled *derived, unverified*: replace them with your own account history
-before treating any of them as a target.
-
-Verified by a 32-scenario scope eval (`npm run skills:eval`) — latest **32/32** — plus a
-100-request non-engineering scope run (data analysis, marketing planning, performance marketing,
-market research, content, product): **99/100** covered by an existing skill, at precision@1 84/99,
-with the remaining case queued for Step 7 acquisition/authoring. Full procedure:
-[`skills/skill-selection/SKILL.md`](skills/skill-selection/SKILL.md).
-
-### Context persistence on large projects
-
-`scripts/context-slice.mjs` generates budgeted derived slices from `.codex-flow/PLAN.md` and
-`.codex-flow/TASKS.md`: per-task `.codex-flow/CONTEXT-T<n>.md` files (≤ **4000 estimated tokens**
-using the chars/4 heuristic) and `.codex-flow/RESUME.md` on resume (≤ **8000 estimated tokens**
-using the chars/4 heuristic). Decision-log blocks carry a git-SHA `Anchor:`, and slices stamp each
-block `[fresh]` or `[verify]`; anything unverifiable — including a missing or invalid anchor or a
-git failure — degrades to `[verify]`.
-
-`scripts/project-context.mjs` writes `.codex-flow/PROJECT.md`, the durable project brief Codex
-reads on every task: `--generate` derives it from the repo (what it is, users, layout, constraints,
-quality mechanisms, known limitations, direction) and `--refresh` regenerates the generated parts
-while preserving any `<!-- owner-notes -->` blocks the team added. `/codex-flow` Phase 0 generates it
-on a fresh run when it is absent and has the user confirm or edit it in the interview; Phase 2 reads
-it before exploring; Phase 5 proposes a `--refresh` (with the diff shown for confirmation) when a
-Decision-log block records a contract deviation or an architecture change. It is a tracked project
-file, not run state — committed with the run, never archived with it — and slices carry it as a
-`## Project context` item capped at 600 tokens.
-
-Mandatory task text and task statuses are never dropped. Lower-priority content is dropped whole
-when necessary, with a restorable
-`(+N lower-priority items omitted — read .codex-flow/PLAN.md …)` pointer. Full
-`.codex-flow/PLAN.md` remains the on-disk source of truth. The slice helper is required: when it is
-missing or exits non-zero the flow stops and asks for a plugin reinstall instead of degrading.
-
-### Run-state & requirements fidelity
-
-- `.codex-flow/REQUIREMENTS.md` records confirmed acceptance criteria verbatim with atomic
-  `R<n>.<m>` IDs. Mid-run changes append confirmed `ADDED`/`MODIFIED`/`REMOVED` Deltas instead of
-  rewriting history, and reset affected downstream approvals.
-- `.codex-flow/STATE.md` is the resume authority instead of file existence. Its 14-key run state
-  tracks the phase and approvals (changed through typed `flow-state` commands), immutable `runBaselineRef` / known-red / dirty-baseline values,
-  checkpoint choice, execution mode, and a separate `resumeHead`.
-- `scripts/requirements-coverage.mjs` rejects uncited or unknown criterion IDs at the Phase 3 gate;
-  final review then walks every ID and records met/not-met with evidence.
-- TASKS.md records session lineage and an append-only status-transition log. Resume reconciles
-  orphaned in-progress work, while wave scheduling seeds dependencies from done tasks, waits on
-  in-progress tasks, and blocks dependents of failed or unknown states.
-- In parallel mode, one coordinator writes `.codex-flow/*`; workers return structured handoffs with
-  touched files, checks, findings, decision-log proposals, and session IDs.
-- Context slices always carry a stamped contracts index, compact known-red failures, and rank
-  decision blocks by explicit `Applies to:` scope before recency; the execution prompt carries the
-  run-position recitation header.
-
-### Parallel execution for large backlogs
-
-codex-mcp serializes runs per workspace but parallelizes across workspaces, so independent tasks
-can run **concurrently** — each in its own git worktree driven by a Claude subagent, then merged
-and integration-reviewed per wave.
-
-```bash
-npm run waves                                  # compute execution waves from .codex-flow/TASKS.md
-```
-
-Waves batch tasks whose dependencies are met and whose files are disjoint, capped at **10
-concurrent subagents** (`--max <n>` to lower). Parallel is the default when `task-waves` reports
-width > 1: waves of ≤3 run automatically, while wider waves ask first; parallel execution costs
-N× simultaneous quota. Playbook:
-[`skills/parallel-execution/SKILL.md`](skills/parallel-execution/SKILL.md).
-
----
-
-## Tools
-
-| Tool | Purpose |
-|------|---------|
-| `codex_execute` | Start a new Codex session executing a task/plan |
-| `codex_continue` | Resume a session with follow-up (e.g. review feedback) |
-| `codex_review` | Read-only review of uncommitted workspace changes |
-| `codex_batch` | Run up to 50 tasks in parallel across distinct workspaces (worktrees) |
-| `codex_sessions` | List prior Codex sessions (from `~/.codex/sessions/`), filterable by cwd |
-| `codex_metrics` | Aggregate token/duration/failure metrics from the local run log |
-| `codex_health` | Check Codex CLI version and login status |
-
-`codex_execute` / `codex_continue` / `codex_review` accept `writeNotes: true` to persist a markdown
-summary of the run to `<cwd>/.codex-flow/notes/<sessionId>.md`.
-
-When Codex is not logged in or unreachable, `/codex-flow` no longer stops dead: it offers an
-explicit **Executor fallback** (fix Codex and re-check, or let Claude execute the backlog under the
-same plan/review contract, with an independent subagent review replacing `codex_review`). The choice
-is recorded in `.codex-flow/STATE.md` as `executor:` and is never made silently or mid-task.
-
-Every `codex_execute` / `codex_continue` / `codex_review` payload carries `accepted: boolean`, a
-fail-closed delivery verdict: `status === "success"` AND the acceptance evidence holds — the
-`verifyCommand` passed (when given), or for `codex_review` the findings block parsed. It never
-changes `status`/`isError`; read it before trusting `agentMessage`. `codex_review` is never
-auto-resumed: a timed-out or partial review is reported after one attempt.
-
-`codex_review` asks Codex to end its message with one fenced json block and returns it parsed
-fail-closed as `reviewFindings: { parsed, findings[], improvements[], dropped, droppedReasons,
-parseError? }` (severity is one of CRITICAL/HIGH/MEDIUM/LOW; malformed entries are counted in
-`dropped`, never coerced). `droppedReasons: string[]` carries one entry per dropped item, naming the
-field that failed validation (for example `findings[0].line`, or the bare locator `findings[0]` when
-the whole entry is invalid), so `dropped` is always `droppedReasons.length`. Any `dropped > 0` makes
-`accepted` false for `codex_review` — a review that lost an entry is never treated as delivered. The
-prose `agentMessage` is still returned for the `parsed: false` case.
-
-`codex_execute` / `codex_continue` accept `verifyCommand` (plus optional `verifyTimeoutMs`, default
-10 min, cap 30): after the Codex run settles, the server runs that acceptance command in `cwd`
-(still inside the workspace lock) and returns `verification: { command, exitCode, timedOut,
-durationMs, outputTail, passed, skipped? }`. This is deterministic evidence that the acceptance
-check ran — independent of Codex's own claim. It is skipped (`skipped: "run-failed"`) when the run
-itself failed or aborted, and it never changes the run's `status`/`isError`. Termination is bounded
-(SIGTERM → tree SIGKILL → forced settle) so a hung check can never hold the workspace lock. The
-command runs with the server's environment, and its output tail passes through the same redaction
-pass as every other returned text — treat it with the same trust as Codex's own output.
-
-`codex_execute` / `codex_continue` / `codex_review` and each `codex_batch` task accept
-`reasoningEffort: minimal | low | medium | high | xhigh`, passed to Codex as
-`-c model_reasoning_effort="<value>"`.
-
-**Secret redaction.** Every returned or persisted text — `agentMessage`, `stderr`, `errors`,
-`verification.outputTail`, live-progress notifications, the raw JSONL live log, and `writeNotes`
-run notes — is redacted before it leaves the server: each known secret shape (OpenAI/GitHub/AWS/
-Slack/Google keys, bearer tokens, JWTs, PEM private keys, `SECRET`/`TOKEN`/`KEY`-style env
-assignments) is replaced by `[REDACTED:<kind>]`. `codex_execute` / `codex_continue` / `codex_review`
-report `redactions: <n>` (and each `codex_batch` task result its own `redactions`, with
-`redactionsTotal` on the batch payload) whenever the count is above zero; the fields are omitted at
-zero. Redaction is idempotent and never changes `status`, `isError`, `accepted`, or a
-`verification.passed` verdict.
-
-**Auth mode & the model guard.** `codex_health` always returns
-`authMode: "chatgpt" | "apikey" | "unknown"`, derived from the Codex CLI login output. Under
-ChatGPT auth a `model` override is refused before anything is spawned — `codex_execute` /
-`codex_continue` / `codex_review` return an error and a `codex_batch` task fails with
-`model override is not allowed under ChatGPT auth; steer with reasoningEffort` — because the
-ChatGPT-auth backend rejects arbitrary model ids. So pass `model` only when `authMode` is
-`apikey`; otherwise omit it and steer with `reasoningEffort`. `/codex-flow` Phase 4 follows the same
-rule, and a flowDocs guard checks that wording.
-
-**Review scope.** `codex_review` accepts `scope: { files: string[]; contract?: string }` (files
-non-empty, up to 200 entries; contract up to 4000 chars). The server appends the contract and the
-file list to the reviewer prompt and stamps every parsed finding with `inScope: boolean`, plus
-`reviewFindings.outOfScopeCount` for the findings outside the declared files. Out-of-scope findings
-are non-blocking by default — `/codex-flow` routes them to the improvements ledger and blocks only
-when the reviewer verifies they affect the task's acceptance.
-
-**Metrics history & completeness.** `codex_metrics` accepts `includeHistory: true` to aggregate the
-archived `history/*.jsonl` back-files alongside the live and rotated log (default `false`, with
-`historyFiles` / `historyExcluded` reported when archives exist). Every aggregate carries
-`completeness: { complete, unpricedRuns, missingUsage, readErrors, historyExcluded }` so an
-incomplete roll-up is visible instead of silent. Note that the shipped `COST_TABLE` is empty and
-`CODEX_MCP_PRICING` does not fill it, so any run that reported usage counts as unpriced:
-`completeness.complete` is never `true` for usage-bearing entries in this release.
-
-### Run ledger & gate inventory
-
-The run ledger is append-only JSONL at `~/.codex-mcp/run-ledger.jsonl`; set
-`CODEX_MCP_RUN_LEDGER` to override the path. Each record captures the lane, project, run ID, profile,
-domain, language, request, selected skills, fix rounds, Codex tokens, wall-clock minutes, owner gates,
-bypasses, and outcome. Requests are redacted and capped at 4,000 characters. Ledger writes are
-best-effort: report a non-zero exit and continue. Inspect aggregates with
-`node scripts/run-ledger.mjs summary [--project <abs path>] [--json]`. The
-[gate inventory](docs/gate-inventory.md) is Phase 0 of the multiscope roadmap accepted on 2026-11-13; analysis kept in the local brainstorm record.
-
-### Profile pilot
-
-The multiscope Phase 1 data-analysis pilot has independent profile, evidence, and run-language switches.
-Defaults preserve today's behaviour; shadow routing records its proposed gate replacements.
-See the [profile pilot procedure](docs/profile-pilot.md) for the manifest, checker, and pass bar.
-Compare switch cohorts with `node scripts/run-ledger.mjs summary --filter key=value`.
-
-Sandbox modes: `read-only`, `workspace-write` (default), `danger-full-access`. Default execution
-timeout is 60 min (`timeoutMs` caps at 2 h). Runs into the same `cwd` are serialized; different
-workspaces run in parallel.
-
-By default, the server automatically resumes the same session after a transient turn failure
-(at most 2 resumes), timeout (at most 1), or `partial` result caused by a missing completion marker
-or parse errors (at most 1, reported as `no-completion-marker`), with 2 s then 8 s backoff (8 s
-for any later resume). Set `CODEX_MCP_AUTO_RESUME=0` to opt out.
-
-<details>
-<summary>Result payload &amp; live progress</summary>
-
-Every run tool returns `sessionId`, `agentMessage`, `fileChanges`, `commands`, token `usage`,
-`errors`, plus:
-
-- **`diff`** — `git status --porcelain` + `git diff HEAD` after the run (64 KB cap, `truncated`
-  flag; `null` outside a git repo) so the caller can review without re-reading files.
-- **`aborted`** — `true` when cancelled from the client (Esc in Claude Code); the server forwards
-  cancellation to Codex (SIGTERM → SIGKILL after 5 s).
-- **`attempts` / `resumeReasons`** — total attempts and the ordered reasons for automatic resumes;
-  each `codex_batch` task result carries the same fields.
-- **`liveLog`** — path to the raw JSONL event log when the live terminal view is enabled.
-
-Clients that send an MCP `progressToken` (Claude Code does) get `notifications/progress` for every
-meaningful Codex event. Set `terminal: true` (or `CODEX_MCP_TERMINAL=1`) to also open a live-tailing
-window — Terminal.app on macOS, PowerShell on Windows, the first available emulator on Linux. On
-macOS, the window closes itself about 4 seconds after a successful run; it stays open after a failed
-or interrupted run. The delay defaults to 4000 ms; `0` closes immediately, and values above `60000`
-are clamped. Windows and Linux windows already close with their process. If no window can open, the
-run still succeeds; follow the `liveLog` or the in-session progress instead.
-</details>
-
----
-
-## Configuration
-
-| Variable | Effect |
-|----------|--------|
-| `OPENAI_API_KEY` | Auth for Codex CLI (alternative to `codex login`). |
-| `CODEX_BIN` | Override the Codex binary path/name (e.g. `C:\tools\codex.exe`). |
-| `CODEX_MCP_TERMINAL=1` | Open the live-progress window by default. |
-| `CODEX_MCP_TERMINAL_KEEP_OPEN=1` | Never auto-close the live-progress window (the value must be exactly `1`). |
-| `CODEX_MCP_TERMINAL_CLOSE_DELAY_MS` | Set the close delay in ms; negative, non-integer, or unparseable input uses `4000`. |
-| `CODEX_MCP_AUTO_RESUME=0` | Disable bounded server-side session auto-resume. |
-| `CODEX_FLOW_SKILLS_INDEX` | Override the skill index path. |
-| `MCP_TOOL_TIMEOUT` | Raise Claude Code's MCP tool timeout (ms) for long runs. |
+| Document | Use it for |
+|---|---|
+| [Workflow](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/workflow.md) | Phases, commands, state, skill selection, context, and reports. |
+| [MCP tools](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/mcp-tools.md) | Tool inputs, results, review behavior, redaction, and execution controls. |
+| [Configuration](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/configuration.md) | Environment variables, standalone setup, optional flint-chart, and troubleshooting. |
+| [CHANGELOG](https://github.com/anhnguyen0905/codex-mcp/blob/main/CHANGELOG.md) | Release history. |
+| [SECURITY](https://github.com/anhnguyen0905/codex-mcp/blob/main/SECURITY.md) | Vulnerability reporting. |
 
 ## Security & privacy
 
-- **No credentials handled.** The server never reads, stores, or transmits your credentials — auth
-  is handled entirely by the Codex CLI (`~/.codex/`). Run `npm run doctor` to verify your setup.
-- **No network calls of its own.** The MCP server only spawns the local `codex` CLI (and `git` for
-  diffs). All model traffic is Codex's, under your OpenAI account and its data policies.
-- **Local-only telemetry.** Run metrics (tokens, durations, exit codes, a 200-char error head) are
-  appended to `~/.codex-mcp/metrics.jsonl` on your machine and never uploaded. Live-progress logs
-  and run notes stay under the project's gitignored `.codex-flow/`.
-- **Sandboxed writes.** Codex runs in `workspace-write` by default; `codex_review` is always
-  `read-only`; `danger-full-access` is never used unless a task explicitly needs it and the user is
-  told first. Per-cwd locks serialize runs into the same workspace.
-- **Caller-defined commands.** `verifyCommand` runs the acceptance command you pass, in your
-  workspace, with the server's environment; its output tail is redacted like every other returned
-  text, but treat it with the same trust as any other shell output. Third-party skills are loaded only after a content-pinned vet
-  (`skill-selection`).
-- Report vulnerabilities per [SECURITY.md](SECURITY.md).
-
----
+- **No credentials handled.** The server never reads, stores, or transmits credentials; authentication is handled entirely by the Codex CLI (`~/.codex/`); run `npm run doctor` to verify setup.
+- **No network calls of its own.** The server spawns local `codex` and `git`; model traffic is Codex's, under your OpenAI account and its data policies.
+- **Local-only telemetry.** Run metrics (tokens, durations, exit codes, and a 200-character error head) are appended to `~/.codex-mcp/metrics.jsonl` on your machine and never uploaded; logs and notes stay under gitignored `.codex-flow/`.
+- **Sandboxed writes.** `workspace-write` is the default, `codex_review` is always `read-only`, `danger-full-access` is never used unless needed and disclosed, and per-cwd locks serialize runs.
+- **Caller-defined `verifyCommand`.** Its redacted output tail is shell output and should be treated as such; third-party skills load only after a content-pinned vet.
+- **Vulnerability reports.** Follow [SECURITY.md](https://github.com/anhnguyen0905/codex-mcp/blob/main/SECURITY.md).
+- **Secret-redacted results.** Returned text is redacted before it leaves the server; see [Secret redaction](https://github.com/anhnguyen0905/codex-mcp/blob/main/docs/mcp-tools.md#secret-redaction).
 
 ## Development
 
 ```bash
-npm test          # unit tests (vitest)
+npm test          # unit tests
 npm run coverage  # enforces 80% thresholds
 npm run build     # tsc → dist/
-npm run test:e2e  # real end-to-end smoke test (spawns Codex, uses quota)
+npm run test:e2e  # spawns Codex and uses quota
+npm run data:guard # scans for real data before a commit
 ```
+
+Key files:
 
 <details>
 <summary>Source layout</summary>
 
-**Server** (`src/`): `index.ts` (stdio entry) · `server.ts` (MCP tools, cwd lock, cancellation) ·
-`argsBuilder.ts` (argv) · `codexRunner.ts` (spawn + timeout/kill) · `eventParser.ts` (JSONL →
-result) · `workspaceDiff.ts` (git diff) · `terminal.ts` / `liveView.ts` / `progressFormatter.ts` /
-`progressNotifier.ts` (live progress).
+| Area | File | Role |
+|---|---|---|
+| Server | `src/index.ts` | stdio entry |
+| Server | `src/server.ts` | MCP tools, cwd lock, cancellation |
+| Server | `src/argsBuilder.ts` | Codex argv |
+| Server | `src/codexRunner.ts` | spawn, timeout, and kill |
+| Server | `src/eventParser.ts` | JSONL → result |
+| Server | `src/workspaceDiff.ts` | git diff |
+| Server | `src/terminal.ts`, `src/liveView.ts`, `src/progressFormatter.ts`, `src/progressNotifier.ts` | live progress |
+| Server | `src/redaction.ts` | secret redaction |
+| Server | `src/reviewFindings.ts` | review findings |
+| Server | `src/verification.ts` | acceptance verification |
+| Workflow | `scripts/sync-awesome-skills.mjs` | sync skill library |
+| Workflow | `scripts/build-skills-index.mjs` | build skill index |
+| Workflow | `scripts/skill-match.mjs`, `scripts/skill-eval.mjs` | match and evaluate skills |
+| Workflow | `scripts/task-waves.mjs` | compute execution waves |
+| Workflow | `scripts/session-cost.mjs` | session cost reporting |
+| Workflow | `scripts/tail-progress.mjs` | live progress tail |
+| Workflow | `scripts/flow-state.mjs` | validate run state |
+| Workflow | `scripts/context-slice.mjs` | generate context slices |
 
-**Skill & workflow scripts** (`scripts/`): `sync-awesome-skills.mjs` · `build-skills-index.mjs` ·
-`skill-match.mjs` · `skill-eval.mjs` · `task-waves.mjs` · `session-cost.mjs` · `tail-progress.mjs`.
 </details>
 
----
-
 <div align="center">
-<sub>MIT · <a href="CHANGELOG.md">Changelog</a></sub>
+<sub><a href="https://github.com/anhnguyen0905/codex-mcp/blob/main/LICENSE">MIT</a> · <a href="https://github.com/anhnguyen0905/codex-mcp/blob/main/CHANGELOG.md">Changelog</a></sub>
 </div>
