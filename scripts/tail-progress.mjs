@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url'
 
 const logPath = process.argv[2]
 const writerPidText = process.argv[3]
-const writerPid = writerPidText && /^[1-9]\d*$/.test(writerPidText) ? Number(writerPidText) : null
+const parsedWriterPid = writerPidText && /^[1-9]\d*$/.test(writerPidText) ? Number(writerPidText) : null
+const writerPid = parsedWriterPid !== null && Number.isSafeInteger(parsedWriterPid) ? parsedWriterPid : null
 if (!logPath) {
   console.error('usage: tail-progress.mjs <logPath> [writerPid]')
   process.exit(1)
@@ -221,6 +222,7 @@ if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
 drain()
 const dir = dirname(logPath)
 watcher = watch(dir, () => drain())
+// The 1 s poll keeps following when fs.watch fails, for example because of EMFILE.
 watcher.on('error', () => {})
 // Poll as a fallback in case fs.watch misses events on network drives.
 pollTimer = setInterval(() => {

@@ -335,7 +335,7 @@ describe('tail-progress watcher auto-exit', () => {
     const logPath = join(dir, 'run.jsonl')
     writeFileSync(logPath, '{"type":"thread.started"}\n')
     const watcher = runWatcher(logPath, {}, TAIL_SCRIPT, 'abc')
-    await new Promise((resolve) => setTimeout(resolve, 2500))
+    await new Promise((resolve) => setTimeout(resolve, PID_CHECK_DELAY_MS))
     expect(watcher.child.exitCode).toBe(null)
     appendFileSync(logPath, JSON.stringify({ type: LIVE_RUN_FINISHED_TYPE, status: 'completed', sessionId: 'sess-pid' }) + '\n')
     expect((await watcher.done).code).toBe(0)
@@ -347,7 +347,33 @@ describe('tail-progress watcher auto-exit', () => {
     const logPath = join(dir, 'run.jsonl')
     writeFileSync(logPath, '{"type":"thread.started"}\n')
     const watcher = runWatcher(logPath, {}, TAIL_SCRIPT, process.pid)
-    await new Promise((resolve) => setTimeout(resolve, 2500))
+    await new Promise((resolve) => setTimeout(resolve, PID_CHECK_DELAY_MS))
+    expect(watcher.child.exitCode).toBe(null)
+    watcher.child.kill('SIGTERM')
+    expect((await watcher.done).code).not.toBe(0)
+  })
+
+  test('ignores an oversized writer pid until a marker arrives', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-tail-'))
+    tempDirs.push(dir)
+    const logPath = join(dir, 'run.jsonl')
+    writeFileSync(logPath, '{"type":"thread.started"}\n')
+    const watcher = runWatcher(logPath, {}, TAIL_SCRIPT, '99999999999999999999')
+
+    await new Promise((resolve) => setTimeout(resolve, PID_CHECK_DELAY_MS))
+    expect(watcher.child.exitCode).toBe(null)
+    appendFileSync(logPath, `${JSON.stringify({ type: LIVE_RUN_FINISHED_TYPE, status: 'completed' })}\n`)
+    expect((await watcher.done).code).toBe(0)
+  })
+
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('treats EPERM from process.kill as an alive writer pid', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-tail-'))
+    tempDirs.push(dir)
+    const logPath = join(dir, 'run.jsonl')
+    writeFileSync(logPath, '{"type":"thread.started"}\n')
+    const watcher = runWatcher(logPath, {}, TAIL_SCRIPT, 1)
+
+    await new Promise((resolve) => setTimeout(resolve, PID_CHECK_DELAY_MS))
     expect(watcher.child.exitCode).toBe(null)
     watcher.child.kill('SIGTERM')
     expect((await watcher.done).code).not.toBe(0)

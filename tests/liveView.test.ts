@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import {
   createWriteStream,
   existsSync,
@@ -143,6 +144,7 @@ describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrap
       logPath: string
       nodeBin: string
       tailScript: string
+      writerPid: number | undefined
     }> = []
 
     const view = createLiveView(cwd, {
@@ -154,6 +156,7 @@ describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrap
           logPath,
           nodeBin: options.nodeBin,
           tailScript: options.tailScript,
+          writerPid: options.writerPid,
         })
         return true
       },
@@ -165,6 +168,7 @@ describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrap
     expect(content).toBe(
       `#!/bin/zsh\nexport CODEX_MCP_TERMINAL_TTY="$(tty)"\nexec "${escapeDoubleQuotedShell(launch.nodeBin)}" "${escapeDoubleQuotedShell(launch.tailScript)}" "${escapeDoubleQuotedShell(launch.logPath)}" ${process.pid}\n`,
     )
+    expect(launch.writerPid).toBe(process.pid)
     expect(content.indexOf('export CODEX_MCP_TERMINAL_TTY="$(tty)"')).toBeLessThan(
       content.indexOf('exec '),
     )
@@ -361,6 +365,41 @@ describe('createLiveView completion marker', () => {
 
     stream.emit('error', new Error('simulated stream failure'))
     view.onStdout?.(Buffer.from('{"type":"turn.completed"}\n'))
+    view.close()
+
+    const lines = await readLogLines(view.logPath)
+    const markers = lines.filter((line) => line.includes(LIVE_RUN_FINISHED_TYPE))
+    expect(markers).toHaveLength(1)
+    expect(JSON.parse(markers[0] ?? '')).toMatchObject({
+      type: LIVE_RUN_FINISHED_TYPE,
+      status: 'completed',
+    })
+    stream.destroy()
+  })
+
+  test('appends one marker when the stream errors while end is in flight', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-end-error-'))
+    const liveRoot = makeLiveRoot()
+    tempDirs.push(cwd)
+    let stream: ReturnType<typeof createWriteStream> | undefined
+    const view = createLiveView(cwd, {
+      liveRoot,
+      openTerminalFn: () => true,
+      createWriteStreamFn: (path, options) => {
+        const eventStream = new EventEmitter() as unknown as ReturnType<typeof createWriteStream>
+        eventStream.write = () => true
+        eventStream.end = function endInFlight() {
+          setImmediate(() => this.emit('error', new Error('simulated end failure')))
+          return this
+        }
+        eventStream.destroy = () => eventStream
+        stream = eventStream
+        return stream
+      },
+    })
+    if (!view.logPath || !stream) throw new Error('expected a live log stream')
+    view.onStdout?.(Buffer.from('{"type":"turn.completed"}\n'))
+
     view.close()
 
     const lines = await readLogLines(view.logPath)
