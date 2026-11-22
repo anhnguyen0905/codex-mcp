@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import {
   chmodSync,
+  closeSync,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -430,7 +431,10 @@ describe('createLiveView completion marker', () => {
       type: LIVE_RUN_FINISHED_TYPE,
       status: 'completed',
     })
-    stream.destroy()
+    await new Promise<void>((resolve) => {
+      stream.once('close', resolve)
+      stream.destroy()
+    })
   })
 
   test('appends one marker when the stream errors while end is in flight', async () => {
@@ -448,7 +452,11 @@ describe('createLiveView completion marker', () => {
           setImmediate(() => this.emit('error', new Error('simulated end failure')))
           return this
         }
-        eventStream.destroy = () => eventStream
+        eventStream.destroy = () => {
+          if (typeof options.fd === 'number') closeSync(options.fd)
+          setImmediate(() => eventStream.emit('close'))
+          return eventStream
+        }
         stream = eventStream
         return stream
       },
@@ -465,10 +473,13 @@ describe('createLiveView completion marker', () => {
       type: LIVE_RUN_FINISHED_TYPE,
       status: 'completed',
     })
-    stream.destroy()
+    await new Promise<void>((resolve) => {
+      stream.once('close', resolve)
+      stream.destroy()
+    })
   })
 
-  test('does not throw when the fallback marker append fails', () => {
+  test('does not throw when the fallback marker append fails', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-append-failure-'))
     const liveRoot = makeLiveRoot()
     tempDirs.push(cwd)
@@ -484,7 +495,10 @@ describe('createLiveView completion marker', () => {
     if (!view.logPath || !stream) throw new Error('expected a live log stream')
 
     stream.emit('error', new Error('simulated stream failure'))
-    stream.destroy()
+    await new Promise<void>((resolve) => {
+      stream.once('close', resolve)
+      stream.destroy()
+    })
     rmSync(dirname(view.logPath), { recursive: true, force: true })
 
     expect(() => view.close()).not.toThrow()

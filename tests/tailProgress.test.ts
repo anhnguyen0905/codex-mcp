@@ -306,7 +306,7 @@ describe('tail-progress watcher auto-exit', () => {
     expect(existsSync(closeCommandLogPath)).toBe(false)
   })
 
-  test('handles a completed marker before checking a dead writer pid', async () => {
+  test.skipIf(process.platform === 'win32')('handles a completed marker before checking a dead writer pid', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-tail-'))
     tempDirs.push(dir)
     const logPath = join(dir, 'run.jsonl')
