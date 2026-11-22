@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import {
+  createWriteStream,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -13,7 +15,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, test, vi } from 'vitest'
-import { createLiveView } from '../src/liveView.js'
+import { createLiveView, defaultLiveRoot, liveDirFor } from '../src/liveView.js'
 import { LIVE_RUN_FINISHED_TYPE } from '../src/progressFormatter.js'
 import { escapeDoubleQuotedShell } from '../src/terminal.js'
 import { TERMINAL_CLOSE_DELAY_ENV, TERMINAL_KEEP_OPEN_ENV } from '../src/terminalCloser.js'
@@ -31,8 +33,15 @@ afterEach(() => {
 /** A live view whose terminal launcher is a no-op so tests never open real windows. */
 const makeView = () => {
   const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-marker-'))
-  tempDirs.push(cwd)
-  return createLiveView(cwd, { openTerminalFn: () => true })
+  const liveRoot = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-root-'))
+  tempDirs.push(cwd, liveRoot)
+  return createLiveView(cwd, { liveRoot, openTerminalFn: () => true })
+}
+
+const makeLiveRoot = (): string => {
+  const liveRoot = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-root-'))
+  tempDirs.push(liveRoot)
+  return liveRoot
 }
 
 const POLL_INTERVAL_MS = 20
@@ -63,6 +72,63 @@ const readLogLines = async (logPath: string): Promise<string[]> => {
   return readFileSync(logPath, 'utf8').split('\n').filter((line) => line.length > 0)
 }
 
+describe('live log placement', () => {
+  test('uses CODEX_MCP_LIVE_DIR for the default root', () => {
+    expect(defaultLiveRoot()).toBe(process.env.CODEX_MCP_LIVE_DIR)
+  })
+
+  test('writes the log outside the workspace and creates private entries', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-placement-'))
+    const liveRoot = makeLiveRoot()
+    tempDirs.push(cwd)
+    const view = createLiveView(cwd, { liveRoot, openTerminalFn: () => true })
+
+    if (!view.logPath) throw new Error('expected a live log path')
+    expect(dirname(view.logPath)).toBe(liveDirFor(cwd, liveRoot))
+    expect(view.logPath).not.toContain('.codex-flow')
+    expect(existsSync(join(cwd, '.codex-flow'))).toBe(false)
+    view.close()
+    await readMarker(view.logPath)
+    if (process.platform !== 'win32') {
+      expect(statSync(dirname(view.logPath)).mode & 0o777).toBe(0o700)
+      expect(statSync(view.logPath).mode & 0o777).toBe(0o600)
+    }
+  })
+
+  test('maps different workspaces to different directories and symlinked paths together', () => {
+    const root = makeLiveRoot()
+    const first = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-workspace-'))
+    const second = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-workspace-'))
+    const linkParent = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-link-'))
+    const link = join(linkParent, 'alias')
+    tempDirs.push(first, second, linkParent)
+    symlinkSync(first, link)
+
+    expect(liveDirFor(first, root)).not.toBe(liveDirFor(second, root))
+    expect(liveDirFor(first, root)).toBe(liveDirFor(link, root))
+  })
+
+  test('prunes older workspace entries to at most 20 live entries', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-prune-'))
+    const liveRoot = makeLiveRoot()
+    tempDirs.push(cwd)
+    const logDir = liveDirFor(cwd, liveRoot)
+    mkdirSync(logDir, { recursive: true })
+    for (let index = 0; index < 25; index += 1) {
+      writeFileSync(join(logDir, `old-${index}.jsonl`), '{}\n')
+    }
+
+    const view = createLiveView(cwd, { liveRoot, openTerminalFn: () => true })
+    if (!view.logPath) throw new Error('expected a live log path')
+    const entriesAfterCreate = readdirSync(logDir).filter(
+      (name) => name.endsWith('.jsonl') || name.endsWith('.command'),
+    )
+    expect(entriesAfterCreate.filter((name) => name.startsWith('old-'))).toHaveLength(20)
+    view.close()
+    await readMarker(view.logPath)
+  })
+})
+
 // These tests mock process.platform to 'darwin' but exercise real POSIX fs
 // behavior (0o755 permissions, shell metacharacters in temp-dir names) that
 // Windows cannot host — they run on the macOS and Linux CI jobs.
@@ -70,6 +136,7 @@ describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrap
   test('writes the tty export before the escaped exec command with executable permissions', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-command-'))
+    const liveRoot = makeLiveRoot()
     tempDirs.push(cwd)
     const launches: Array<{
       commandFile: string | undefined
@@ -80,6 +147,7 @@ describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrap
 
     const view = createLiveView(cwd, {
       env: {},
+      liveRoot,
       openTerminalFn: (logPath, options) => {
         launches.push({
           commandFile: options.commandFile,
@@ -95,7 +163,7 @@ describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrap
     if (!launch?.commandFile) throw new Error('expected a macOS .command wrapper')
     const content = readFileSync(launch.commandFile, 'utf8')
     expect(content).toBe(
-      `#!/bin/zsh\nexport CODEX_MCP_TERMINAL_TTY="$(tty)"\nexec "${escapeDoubleQuotedShell(launch.nodeBin)}" "${escapeDoubleQuotedShell(launch.tailScript)}" "${escapeDoubleQuotedShell(launch.logPath)}"\n`,
+      `#!/bin/zsh\nexport CODEX_MCP_TERMINAL_TTY="$(tty)"\nexec "${escapeDoubleQuotedShell(launch.nodeBin)}" "${escapeDoubleQuotedShell(launch.tailScript)}" "${escapeDoubleQuotedShell(launch.logPath)}" ${process.pid}\n`,
     )
     expect(content.indexOf('export CODEX_MCP_TERMINAL_TTY="$(tty)"')).toBeLessThan(
       content.indexOf('exec '),
@@ -109,12 +177,14 @@ describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrap
 
   test('keeps malicious log-path metacharacters escaped while leaving only tty expansion active', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
-    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-$(touch pwned)`id`"-'))
-    tempDirs.push(cwd)
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-cwd-'))
+    const liveRoot = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-$(touch pwned)`id`"-'))
+    tempDirs.push(cwd, liveRoot)
     const commandFiles: string[] = []
 
     const view = createLiveView(cwd, {
       env: {},
+      liveRoot,
       openTerminalFn: (_logPath, options) => {
         if (options.commandFile) commandFiles.push(options.commandFile)
         return true
@@ -128,6 +198,8 @@ describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrap
     expect(content).toContain('export CODEX_MCP_TERMINAL_TTY="$(tty)"')
     expect(execLine).toContain('\\$(touch pwned)')
     expect(execLine).toContain('\\`id\\`')
+    expect(execLine).toMatch(new RegExp(` ${process.pid}$`))
+    expect(execLine).not.toContain('.codex-flow')
     expect(execLine).not.toMatch(/[^\\]\$\(touch pwned\)/)
 
     view.close()
@@ -138,6 +210,7 @@ describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrap
   test('forwards allowlisted watcher config exports between the tty and exec lines', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-command-'))
+    const liveRoot = makeLiveRoot()
     tempDirs.push(cwd)
     let commandFile: string | undefined
 
@@ -146,6 +219,7 @@ describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrap
         [TERMINAL_KEEP_OPEN_ENV]: '1',
         [TERMINAL_CLOSE_DELAY_ENV]: '9000',
       },
+      liveRoot,
       openTerminalFn: (_logPath, options) => {
         commandFile = options.commandFile
         return true
@@ -169,11 +243,13 @@ describe.skipIf(process.platform === 'win32')('createLiveView macOS command wrap
   test('omits watcher config exports when neither server-side value is set', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-command-'))
+    const liveRoot = makeLiveRoot()
     tempDirs.push(cwd)
     let commandFile: string | undefined
 
     const view = createLiveView(cwd, {
       env: {},
+      liveRoot,
       openTerminalFn: (_logPath, options) => {
         commandFile = options.commandFile
         return true
@@ -204,6 +280,22 @@ describe('createLiveView completion marker', () => {
     expect(marker.type).toBe(LIVE_RUN_FINISHED_TYPE)
     expect(marker.status).toBe('completed')
     expect(marker.sessionId).toBe('sess-42')
+  })
+
+  test('writes exactly one marker on a healthy close', async () => {
+    const view = makeView()
+    view.onStdout?.(Buffer.from('{"type":"turn.completed"}\n'))
+
+    view.close()
+
+    if (!view.logPath) throw new Error('expected a live log path')
+    const lines = await readLogLines(view.logPath)
+    const markers = lines.filter((line) => line.includes(LIVE_RUN_FINISHED_TYPE))
+    expect(markers).toHaveLength(1)
+    expect(JSON.parse(markers[0] ?? '')).toMatchObject({
+      type: LIVE_RUN_FINISHED_TYPE,
+      status: 'completed',
+    })
   })
 
   test('writes a failed marker when the stream saw turn.failed', async () => {
@@ -250,6 +342,57 @@ describe('createLiveView completion marker', () => {
 
     const marker = await readMarker(view.logPath as string)
     expect(marker.status).toBe('completed')
+  })
+
+  test('appends one completed marker after the stream errors', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-stream-error-'))
+    const liveRoot = makeLiveRoot()
+    tempDirs.push(cwd)
+    let stream: ReturnType<typeof createWriteStream> | undefined
+    const view = createLiveView(cwd, {
+      liveRoot,
+      openTerminalFn: () => true,
+      createWriteStreamFn: (path, options) => {
+        stream = createWriteStream(path, options)
+        return stream
+      },
+    })
+    if (!view.logPath || !stream) throw new Error('expected a live log stream')
+
+    stream.emit('error', new Error('simulated stream failure'))
+    view.onStdout?.(Buffer.from('{"type":"turn.completed"}\n'))
+    view.close()
+
+    const lines = await readLogLines(view.logPath)
+    const markers = lines.filter((line) => line.includes(LIVE_RUN_FINISHED_TYPE))
+    expect(markers).toHaveLength(1)
+    expect(JSON.parse(markers[0] ?? '')).toMatchObject({
+      type: LIVE_RUN_FINISHED_TYPE,
+      status: 'completed',
+    })
+    stream.destroy()
+  })
+
+  test('does not throw when the fallback marker append fails', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-append-failure-'))
+    const liveRoot = makeLiveRoot()
+    tempDirs.push(cwd)
+    let stream: ReturnType<typeof createWriteStream> | undefined
+    const view = createLiveView(cwd, {
+      liveRoot,
+      openTerminalFn: () => true,
+      createWriteStreamFn: (path, options) => {
+        stream = createWriteStream(path, options)
+        return stream
+      },
+    })
+    if (!view.logPath || !stream) throw new Error('expected a live log stream')
+
+    stream.emit('error', new Error('simulated stream failure'))
+    stream.destroy()
+    rmSync(dirname(view.logPath), { recursive: true, force: true })
+
+    expect(() => view.close()).not.toThrow()
   })
 })
 
@@ -371,18 +514,31 @@ describe('tail-progress event gaps', () => {
 })
 
 describe('createLiveView symlink guard', () => {
-  test('refuses when the nested .codex-flow/live dir is a planted symlink (no write through it)', () => {
+  test('refuses a symlinked live root', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-'))
+    const rootTarget = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-root-target-'))
+    const rootParent = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-root-parent-'))
+    const root = join(rootParent, 'live')
+    tempDirs.push(cwd, rootTarget, rootParent)
+    symlinkSync(rootTarget, root)
+
+    const view = createLiveView(cwd, { liveRoot: root })
+
+    expect(view.logPath).toBeNull()
+    expect(view.onStdout).toBeUndefined()
+    expect(readdirSync(rootTarget)).toHaveLength(0)
+  })
+
+  test('refuses a symlinked workspace subdirectory', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-'))
+    const root = makeLiveRoot()
     const target = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-target-'))
     tempDirs.push(cwd, target)
+    const logDir = liveDirFor(cwd, root)
+    symlinkSync(target, logDir)
 
-    // Simulate a cloned repo with a real .codex-flow/ but `live` committed as a symlink elsewhere.
-    mkdirSync(join(cwd, '.codex-flow'))
-    symlinkSync(target, join(cwd, '.codex-flow', 'live'))
+    const view = createLiveView(cwd, { liveRoot: root })
 
-    const view = createLiveView(cwd)
-
-    // Guard tripped → degraded no-op view, and nothing written through the symlink to the target.
     expect(view.logPath).toBeNull()
     expect(view.onStdout).toBeUndefined()
     expect(readdirSync(target)).toHaveLength(0)

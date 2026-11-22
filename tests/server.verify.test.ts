@@ -345,7 +345,7 @@ describe('live-log redaction (R5.2)', () => {
 
   test('redacts each live-log line while keeping it valid JSON', async () => {
     const cwd = mkCwd('codex-live-redact-')
-    const view = createLiveView(cwd, { openTerminalFn: () => true })
+    const view = createLiveView(cwd, { liveRoot: mkCwd('codex-live-root-'), openTerminalFn: () => true })
     if (!view.logPath) throw new Error('expected a live log path')
     const event = JSON.stringify({
       type: 'item.completed',
@@ -365,7 +365,7 @@ describe('live-log redaction (R5.2)', () => {
 
   test('redacts a partial (non-JSON) live-log line as text', async () => {
     const cwd = mkCwd('codex-live-redact-partial-')
-    const view = createLiveView(cwd, { openTerminalFn: () => true })
+    const view = createLiveView(cwd, { liveRoot: mkCwd('codex-live-root-'), openTerminalFn: () => true })
     if (!view.logPath) throw new Error('expected a live log path')
     view.onStdout?.(Buffer.from(`{"type":"turn.started",broken ${SECRET_LINE}\n`))
     view.close()
@@ -378,7 +378,7 @@ describe('live-log redaction (R5.2)', () => {
 
   test('scripts/tail-progress.mjs still parses and exits on a redacted live log', async () => {
     const cwd = mkCwd('codex-live-redact-tail-')
-    const view = createLiveView(cwd, { openTerminalFn: () => true })
+    const view = createLiveView(cwd, { liveRoot: mkCwd('codex-live-root-'), openTerminalFn: () => true })
     if (!view.logPath) throw new Error('expected a live log path')
     view.onStdout?.(
       Buffer.from(

@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import {
+  appendFileSync,
   createWriteStream,
   lstatSync,
   mkdirSync,
@@ -9,7 +11,8 @@ import {
   writeFileSync,
   type WriteStream,
 } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { homedir } from 'node:os'
 import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
 import { isBenignCliNotice } from './eventParser.js'
@@ -17,6 +20,7 @@ import { LIVE_RUN_FINISHED_TYPE, type LiveRunFinishedStatus } from './progressFo
 import { redactJsonLine } from './redaction.js'
 import { escapeDoubleQuotedShell, LINUX_TERMINALS, openTerminal, type LinuxTerminal } from './terminal.js'
 import { buildWatcherEnvExports, type TerminalCloseEnv } from './terminalCloser.js'
+import { canonicalCwd } from './workspaceLease.js'
 
 /** Keep at most this many run logs per workspace; older ones are pruned on each new run. */
 const MAX_LOG_FILES = 20
@@ -32,6 +36,18 @@ export interface LiveView {
 export interface LiveViewDeps {
   env?: TerminalCloseEnv
   openTerminalFn?: typeof openTerminal
+  liveRoot?: string
+  createWriteStreamFn?: typeof createWriteStream
+}
+
+export const defaultLiveRoot = (): string =>
+  process.env.CODEX_MCP_LIVE_DIR ?? join(homedir(), '.codex-mcp', 'live')
+
+export const liveDirFor = (cwd: string, root: string = defaultLiveRoot()): string => {
+  const canonical = canonicalCwd(cwd)
+  const slug = basename(canonical).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 40) || 'workspace'
+  const hash12 = createHash('sha256').update(canonical).digest('hex').slice(0, 12)
+  return join(root, `${slug}-${hash12}`)
 }
 
 /**
@@ -181,7 +197,7 @@ const writeCommandFile = (
     // interpolated paths belong behind the double-quoted shell escaper.
     const watcherEnvExports = buildWatcherEnvExports(env)
     const configLines = watcherEnvExports.length > 0 ? `${watcherEnvExports}\n` : ''
-    const script = `#!/bin/zsh\nexport CODEX_MCP_TERMINAL_TTY="$(tty)"\n${configLines}exec "${dq(process.execPath)}" "${dq(TAIL_SCRIPT)}" "${dq(logPath)}"\n`
+    const script = `#!/bin/zsh\nexport CODEX_MCP_TERMINAL_TTY="$(tty)"\n${configLines}exec "${dq(process.execPath)}" "${dq(TAIL_SCRIPT)}" "${dq(logPath)}" ${process.pid}\n`
     writeFileSync(commandFile, script, { mode: 0o755 })
     return commandFile
   } catch {
@@ -195,29 +211,50 @@ const writeCommandFile = (
  * a no-op sink so a broken viewer never fails the actual Codex run.
  */
 export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView => {
-  const { env = process.env, openTerminalFn = openTerminal } = deps
+  const {
+    env = process.env,
+    openTerminalFn = openTerminal,
+    liveRoot = defaultLiveRoot(),
+    createWriteStreamFn = createWriteStream,
+  } = deps
   try {
-    // Refuse a symlinked control dir OR nested `live` dir: `mkdirSync`/writes would otherwise
-    // follow it (mkdir -p does NOT fail on an existing symlink-to-dir) and drop an executable
-    // `.command` + the run transcript at an attacker-chosen path outside cwd.
-    const controlDir = join(cwd, '.codex-flow')
-    assertNotSymlink(controlDir, '.codex-flow')
-    const logDir = join(controlDir, 'live')
-    assertNotSymlink(logDir, '.codex-flow/live') // pre-existing symlink at the leaf
-    mkdirSync(logDir, { recursive: true })
-    assertNotSymlink(logDir, '.codex-flow/live') // mkdir -p left an existing symlink in place
+    assertNotSymlink(liveRoot, 'live root')
+    const logDir = liveDirFor(cwd, liveRoot)
+    assertNotSymlink(logDir, 'live workspace directory')
+    mkdirSync(logDir, { recursive: true, mode: 0o700 })
+    assertNotSymlink(logDir, 'live workspace directory')
     pruneOldLogs(logDir, MAX_LOG_FILES)
     // Include the pid so two runs started in the same millisecond don't share (and interleave) a log file.
     const stamp = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`
     const logPath = join(logDir, `${stamp}.jsonl`)
     // 0o600: the transcript can contain file contents/secrets Codex read during the run.
-    const stream: WriteStream = createWriteStream(logPath, { flags: 'a', mode: 0o600 })
+    const stream: WriteStream = createWriteStreamFn(logPath, { flags: 'a', mode: 0o600 })
     // A mid-run write error (disk full, EPIPE, revoked perms) emits 'error'; without a listener
     // Node would throw it as an unhandled event and crash the whole MCP server. Swallow it and
     // stop writing — a broken live log must never fail the actual Codex run.
-    let writable = true
+    let streamFailed = false
+    let streamFinished = false
+    let isClosed = false
+    let fallbackMarkerWritten = false
+    let markerLine: string | undefined
+    let isEnding = false
+
+    const appendFallbackMarker = (): void => {
+      if (fallbackMarkerWritten || streamFinished || markerLine === undefined) return
+      fallbackMarkerWritten = true
+      try {
+        appendFileSync(logPath, toLogLine(markerLine), { mode: 0o600 })
+      } catch {
+        // The live view is best-effort; a failed fallback must not fail the Codex run.
+      }
+    }
+
     stream.on('error', () => {
-      writable = false
+      streamFailed = true
+      if (isEnding) appendFallbackMarker()
+    })
+    stream.on('finish', () => {
+      streamFinished = true
     })
 
     const tracker = createStreamStateTracker()
@@ -233,8 +270,18 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
     const writeRawCarry = (): void => {
       if (carry.length === 0) return
       tracker.observeLine(carry)
-      stream.write(toLogLine(carry))
+      writeToStream(toLogLine(carry))
       resetCarry()
+    }
+
+    const writeToStream = (line: string): void => {
+      if (streamFailed) return
+      try {
+        stream.write(line)
+      } catch {
+        streamFailed = true
+        // The live view is best-effort; a broken stream must not fail the Codex run.
+      }
     }
 
     const appendCarry = (text: string): void => {
@@ -254,10 +301,10 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
       const firstLine = carry + (lines[0] ?? '')
       resetCarry()
       tracker.observeLine(firstLine)
-      stream.write(toLogLine(stampEventLine(firstLine)))
+      writeToStream(toLogLine(stampEventLine(firstLine)))
       for (const line of lines.slice(1, -1)) {
         tracker.observeLine(line)
-        stream.write(toLogLine(stampEventLine(line)))
+        writeToStream(toLogLine(stampEventLine(line)))
       }
       appendCarry(lines[lines.length - 1] ?? '')
     }
@@ -268,26 +315,38 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
       tailScript: TAIL_SCRIPT,
       commandFile: writeCommandFile(logDir, stamp, logPath, env),
       linuxTerminal: detectLinuxTerminal(),
+      writerPid: process.pid,
       env,
     })
 
     return {
       onStdout: (chunk: Buffer) => {
-        if (!writable) return
+        if (isClosed) return
         writeCompleteLines(decoder.write(chunk))
       },
       close: () => {
-        if (!writable) return
-        writable = false
+        if (isClosed) return
+        isClosed = true
         appendCarry(decoder.end())
         if (carry.length > 0) {
           tracker.observeLine(carry)
-          stream.write(toLogLine(stampEventLine(carry)))
+          writeToStream(toLogLine(stampEventLine(carry)))
           resetCarry()
         }
         // Explicit end-of-run marker: lets watchers (scripts/tail-progress.mjs) detect that the
         // run settled and exit instead of following the file forever.
-        stream.end(toLogLine(tracker.markerLine()))
+        markerLine = tracker.markerLine()
+        if (streamFailed) {
+          appendFallbackMarker()
+          return
+        }
+        isEnding = true
+        try {
+          stream.end(toLogLine(markerLine))
+        } catch {
+          streamFailed = true
+          appendFallbackMarker()
+        }
       },
       logPath,
     }

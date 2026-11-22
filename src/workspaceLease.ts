@@ -39,7 +39,7 @@ export const defaultLocksDir = (): string =>
   process.env.CODEX_MCP_LOCKS_DIR ?? join(homedir(), '.codex-mcp', 'locks')
 
 /** Canonicalize so symlinked variants of one workspace map to one lease. */
-const canonicalCwd = (cwd: string): string => {
+export const canonicalCwd = (cwd: string): string => {
   try {
     return realpathSync.native(resolve(cwd))
   } catch {
