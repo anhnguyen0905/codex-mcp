@@ -12,8 +12,8 @@ if (!process.env.CODEX_MCP_LOCKS_DIR) {
   process.env.CODEX_MCP_LOCKS_DIR = join(tmpdir(), `codex-mcp-test-locks-${process.pid}-${workerId}`)
 }
 
-// Keep live-view logs outside the repository and isolate them per Vitest worker.
-if (!process.env.CODEX_MCP_LIVE_DIR) {
+// Tests must never write live-view logs to a real live root; isolate them per Vitest worker.
+{
   const workerId = process.env.VITEST_WORKER_ID ?? '0'
   process.env.CODEX_MCP_LIVE_DIR = join(tmpdir(), `codex-mcp-test-live-${process.pid}-${workerId}`)
 }

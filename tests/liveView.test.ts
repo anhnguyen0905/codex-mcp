@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import {
+  chmodSync,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -94,6 +95,61 @@ describe('live log placement', () => {
       expect(statSync(dirname(view.logPath)).mode & 0o777).toBe(0o700)
       expect(statSync(view.logPath).mode & 0o777).toBe(0o600)
     }
+  })
+
+  test('tightens an existing workspace directory to private mode', async () => {
+    if (process.platform === 'win32') return
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-mode-'))
+    const liveRoot = makeLiveRoot()
+    tempDirs.push(cwd)
+    const logDir = liveDirFor(cwd, liveRoot)
+    mkdirSync(logDir, { recursive: true })
+    chmodSync(logDir, 0o755)
+
+    const view = createLiveView(cwd, { liveRoot, openTerminalFn: () => true })
+
+    if (!view.logPath) throw new Error('expected a live log path')
+    expect(statSync(logDir).mode & 0o777).toBe(0o700)
+    view.close()
+    await readMarker(view.logPath)
+  })
+
+  test('uses a suffixed log when the first stamp already exists', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-collision-'))
+    const liveRoot = makeLiveRoot()
+    tempDirs.push(cwd)
+    const logDir = liveDirFor(cwd, liveRoot)
+    mkdirSync(logDir, { recursive: true })
+    const now = new Date('2026-11-22T12:34:56.789Z')
+    const stamp = `${now.toISOString().replace(/[:.]/g, '-')}-${process.pid}`
+    const firstLogPath = join(logDir, `${stamp}.jsonl`)
+    writeFileSync(firstLogPath, 'existing\n')
+
+    const view = createLiveView(cwd, {
+      liveRoot,
+      now: () => now,
+      openTerminalFn: () => true,
+    })
+
+    expect(view.logPath).toBe(join(logDir, `${stamp}-1.jsonl`))
+    expect(readFileSync(firstLogPath, 'utf8')).toBe('existing\n')
+    if (!view.logPath) throw new Error('expected a suffixed live log path')
+    view.close()
+    await readMarker(view.logPath)
+  })
+
+  test('degrades to a no-op when live directory realpath verification fails', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-mcp-lv-realpath-'))
+    const liveRoot = makeLiveRoot()
+    tempDirs.push(cwd)
+    const view = createLiveView(cwd, {
+      liveRoot,
+      openTerminalFn: () => true,
+      realpathSyncFn: () => join(liveRoot, 'unexpected'),
+    })
+
+    expect(view.logPath).toBeNull()
+    expect(view.onStdout).toBeUndefined()
   })
 
   test('maps different workspaces to different directories and symlinked paths together', () => {

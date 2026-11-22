@@ -2,10 +2,15 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import {
   appendFileSync,
+  chmodSync,
+  closeSync,
+  constants,
   createWriteStream,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
+  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -25,6 +30,9 @@ import { canonicalCwd } from './workspaceLease.js'
 /** Keep at most this many run logs per workspace; older ones are pruned on each new run. */
 const MAX_LOG_FILES = 20
 const MAX_CARRY_BYTES = 1024 * 1024
+const MAX_STAMP_ATTEMPTS = 5
+const PRIVATE_DIR_MODE = 0o700
+const PRIVATE_LOG_MODE = 0o600
 
 export interface LiveView {
   onStdout: ((chunk: Buffer) => void) | undefined
@@ -38,6 +46,8 @@ export interface LiveViewDeps {
   openTerminalFn?: typeof openTerminal
   liveRoot?: string
   createWriteStreamFn?: typeof createWriteStream
+  now?: () => Date
+  realpathSyncFn?: typeof realpathSync
 }
 
 export const defaultLiveRoot = (): string =>
@@ -154,6 +164,68 @@ const assertNotSymlink = (path: string, label: string): void => {
   }
 }
 
+const ensurePrivateLiveDir = (
+  liveRoot: string,
+  logDir: string,
+  realpathSyncFn: typeof realpathSync,
+): void => {
+  assertNotSymlink(liveRoot, 'live root')
+  assertNotSymlink(logDir, 'live workspace directory')
+  mkdirSync(logDir, { recursive: true, mode: PRIVATE_DIR_MODE })
+  if (process.platform !== 'win32') chmodSync(logDir, PRIVATE_DIR_MODE)
+  assertNotSymlink(logDir, 'live workspace directory')
+
+  const resolvedRoot = realpathSyncFn(liveRoot)
+  const resolvedDir = realpathSyncFn(logDir)
+  const expectedDir = join(resolvedRoot, basename(logDir))
+  if (resolvedDir !== expectedDir) {
+    throw new Error('live workspace directory resolved outside live root')
+  }
+}
+
+interface OpenedLiveLog {
+  fd: number
+  logPath: string
+  stamp: string
+}
+
+const openExclusiveLog = (logDir: string, stamp: string): OpenedLiveLog => {
+  const noFollow = process.platform !== 'win32' ? (constants.O_NOFOLLOW ?? 0) : 0
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_APPEND | noFollow
+  for (let attempt = 0; attempt < MAX_STAMP_ATTEMPTS; attempt += 1) {
+    const finalStamp = attempt === 0 ? stamp : `${stamp}-${attempt}`
+    const logPath = join(logDir, `${finalStamp}.jsonl`)
+    try {
+      const fd = openSync(logPath, flags, PRIVATE_LOG_MODE)
+      return { fd, logPath, stamp: finalStamp }
+    } catch (error: unknown) {
+      const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
+      if (code === 'EEXIST') continue
+      throw error
+    }
+  }
+  throw new Error('could not allocate a unique live log path')
+}
+
+const createLiveLogStream = (
+  logDir: string,
+  stamp: string,
+  createWriteStreamFn: typeof createWriteStream,
+): OpenedLiveLog & { stream: WriteStream } => {
+  const openedLog = openExclusiveLog(logDir, stamp)
+  try {
+    const stream = createWriteStreamFn(openedLog.logPath, {
+      fd: openedLog.fd,
+      flags: 'a',
+      mode: PRIVATE_LOG_MODE,
+    })
+    return { ...openedLog, stream }
+  } catch (error: unknown) {
+    closeSync(openedLog.fd)
+    throw error
+  }
+}
+
 /**
  * Best-effort log rotation: keep only the newest MAX_LOG_FILES entries in the live dir so
  * per-run `.jsonl`/`.command` files don't accumulate unbounded over a workspace's lifetime.
@@ -198,7 +270,7 @@ const writeCommandFile = (
     const watcherEnvExports = buildWatcherEnvExports(env)
     const configLines = watcherEnvExports.length > 0 ? `${watcherEnvExports}\n` : ''
     const script = `#!/bin/zsh\nexport CODEX_MCP_TERMINAL_TTY="$(tty)"\n${configLines}exec "${dq(process.execPath)}" "${dq(TAIL_SCRIPT)}" "${dq(logPath)}" ${process.pid}\n`
-    writeFileSync(commandFile, script, { mode: 0o755 })
+    writeFileSync(commandFile, script, { flag: 'wx', mode: 0o755 })
     return commandFile
   } catch {
     return undefined
@@ -216,19 +288,17 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
     openTerminalFn = openTerminal,
     liveRoot = defaultLiveRoot(),
     createWriteStreamFn = createWriteStream,
+    now = () => new Date(),
+    realpathSyncFn = realpathSync,
   } = deps
   try {
-    assertNotSymlink(liveRoot, 'live root')
     const logDir = liveDirFor(cwd, liveRoot)
-    assertNotSymlink(logDir, 'live workspace directory')
-    mkdirSync(logDir, { recursive: true, mode: 0o700 })
-    assertNotSymlink(logDir, 'live workspace directory')
+    ensurePrivateLiveDir(liveRoot, logDir, realpathSyncFn)
     pruneOldLogs(logDir, MAX_LOG_FILES)
     // Include the pid so two runs started in the same millisecond don't share (and interleave) a log file.
-    const stamp = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`
-    const logPath = join(logDir, `${stamp}.jsonl`)
-    // 0o600: the transcript can contain file contents/secrets Codex read during the run.
-    const stream: WriteStream = createWriteStreamFn(logPath, { flags: 'a', mode: 0o600 })
+    const stamp = `${now().toISOString().replace(/[:.]/g, '-')}-${process.pid}`
+    const openedLog = createLiveLogStream(logDir, stamp, createWriteStreamFn)
+    const { logPath, stream, stamp: finalStamp } = openedLog
     // A mid-run write error (disk full, EPIPE, revoked perms) emits 'error'; without a listener
     // Node would throw it as an unhandled event and crash the whole MCP server. Swallow it and
     // stop writing — a broken live log must never fail the actual Codex run.
@@ -313,7 +383,7 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
       platform: process.platform,
       nodeBin: process.execPath,
       tailScript: TAIL_SCRIPT,
-      commandFile: writeCommandFile(logDir, stamp, logPath, env),
+      commandFile: writeCommandFile(logDir, finalStamp, logPath, env),
       linuxTerminal: detectLinuxTerminal(),
       writerPid: process.pid,
       env,
@@ -351,6 +421,7 @@ export const createLiveView = (cwd: string, deps: LiveViewDeps = {}): LiveView =
       logPath,
     }
   } catch {
+    // The live view is best-effort; setup failures must never fail the Codex run.
     return { onStdout: undefined, close: () => {}, logPath: null }
   }
 }
