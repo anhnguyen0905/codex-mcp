@@ -23,6 +23,7 @@ Set these variables in the environment that launches Claude Code, the MCP server
 | `CODEX_MCP_PRICING` | Supplies JSON pricing rates (`inputPer1M`, `cachedInputPer1M`, `outputPer1M`, `reasoningOutputPer1M`) so metrics can include `estCostUsd`. | See `src/metricsLog.ts`; the built-in cost table is empty. |
 | `CODEX_MCP_MAX_CONCURRENT` | Sets the global cap on concurrent Codex runs. Values must be finite numbers of at least `1`; values are floored. Invalid or empty values use the default. | `16` (`src/concurrency.ts`) |
 | `CODEX_MCP_LOCKS_DIR` | Overrides the directory for cross-process workspace lease files. | `~/.codex-mcp/locks` (`src/workspaceLease.ts`) |
+| `CODEX_MCP_LIVE_DIR` | Overrides the live-progress log root. | `~/.codex-mcp/live` (`src/liveView.ts`); logs land in a per-workspace `<name>-<hash>` subdir outside the workspace so cloud-synced folders (OneDrive, iCloud, Dropbox) cannot freeze them. |
 | `CODEX_MCP_RUN_LEDGER` | Overrides the run-ledger file path. | `~/.codex-mcp/run-ledger.jsonl` (`scripts/run-ledger.mjs:8,141`). |
 | `CODEX_MCP_DATA_GUARD` | Overrides the data-guard denylist path. | `~/.codex-mcp/data-guard.json` (`scripts/data-guard.mjs:11,109`). |
 | `CODEX_FLOW_PROFILE_MODE` | Selects profile routing behavior: `off`, `shadow`, or `enforce`. | `shadow` (`scripts/profile-router.mjs`) |

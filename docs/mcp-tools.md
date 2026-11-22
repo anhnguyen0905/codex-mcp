@@ -25,7 +25,7 @@ Every run tool returns `sessionId`, `agentMessage`, `fileChanges`, `commands`, t
 - `diff` contains `git status --porcelain` plus `git diff HEAD` after the run. It has a 64 KB cap and a `truncated` flag; it is `null` outside a Git repository.
 - `aborted: true` means the client cancelled the run. Cancellation is forwarded to Codex as SIGTERM, then SIGKILL after 5 seconds.
 - `attempts` is the total attempt count. `resumeReasons` lists automatic-resume reasons in order. Each `codex_batch` task result carries these fields too.
-- `liveLog` is the path to the raw JSONL event log when live terminal viewing is enabled.
+- `liveLog` is the path to the raw JSONL event log when live terminal viewing is enabled: `~/.codex-mcp/live/<workspace>-<hash>/<run>.jsonl`, or the corresponding path under `CODEX_MCP_LIVE_DIR`.
 
 Clients that send an MCP `progressToken` (including Claude Code) receive `notifications/progress` for every meaningful Codex event. Set `terminal: true` or `CODEX_MCP_TERMINAL=1` to open a live-tailing window: Terminal.app on macOS, PowerShell on Windows, or the first available emulator on Linux. On macOS, the window closes about four seconds after a successful run and stays open after a failed or interrupted run. The delay defaults to 4000 ms; `0` closes immediately, and values above 60000 are clamped. Windows and Linux windows already close with their process. If no window opens, the run still succeeds; use `liveLog` or in-session progress.
 

@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.2] - 2026-11-22
+
+### Fixed
+
+- Live-progress windows no longer go blank and stay open for workspaces in OneDrive: logs move to `~/.codex-mcp/live`, the end marker is written even after a writer error, and the watcher stops when the MCP server process exits.
+
 ## [0.38.1] - 2026-11-20
 
 ### Changed
