@@ -1,16 +1,13 @@
-<!-- generated 2026-11-15T10:44:54.284Z from README.md, AGENTS.md, package.json -->
+<!-- generated 2026-11-22T15:04:11.441Z from README.md, AGENTS.md, package.json -->
 
 # Project context
 
 ## What it is
 
-- Package: `@anhnguyen0905/codex-mcp` v0.37.1
+- Package: `@anhnguyen0905/codex-mcp` v0.38.2
 - Manifest description: MCP server bridging Claude Code and OpenAI Codex CLI for plan-execute-review workflows
 
-A Claude Code plugin and MCP server that runs a disciplined **plan → execute → review** loop:
-Claude interviews you and designs the plan, Codex writes the code, then Claude reviews each task
-and the final pass alongside a required Codex `codex_review`; findings are compared, fixes go back,
-and non-blocking improvements wait for your decision — all from a single command.
+A Claude Code plugin and MCP server for a repeatable plan → execute → review workflow.
 
 <!-- owner-notes -->
 <!-- /owner-notes -->
@@ -56,29 +53,34 @@ _Source: AGENTS.md_
 ## Quality mechanisms
 
 ```bash
-npm test          # unit tests (vitest)
+npm test          # unit tests
 npm run coverage  # enforces 80% thresholds
 npm run build     # tsc → dist/
-npm run test:e2e  # real end-to-end smoke test (spawns Codex, uses quota)
+npm run test:e2e  # spawns Codex and uses quota
+npm run data:guard # scans for real data before a commit
 ```
+
+Key files:
 
 <details>
 <summary>Source layout</summary>
 
-**Server** (`src/`): `index.ts` (stdio entry) · `server.ts` (MCP tools, cwd lock, cancellation) ·
-`argsBuilder.ts` (argv) · `codexRunner.ts` (spawn + timeout/kill) · `eventParser.ts` (JSONL →
-result) · `workspaceDiff.ts` (git diff) · `terminal.ts` / `liveView.ts` / `progressFormatter.ts` /
-`progressNotifier.ts` (live progress).
-
-**Skill & workflow scripts** (`scripts/`): `sync-awesome-skills.mjs` · `build-skills-index.mjs` ·
-`skill-match.mjs` · `skill-eval.mjs` · `task-waves.mjs` · `session-cost.mjs` · `tail-progress.mjs`.
-</details>
-
----
-
-<div align="center">
-<sub>MIT · <a href="CHANGELOG.md">Changelog</a></sub>
-</div>
+| Area | File | Role |
+|---|---|---|
+| Server | `src/index.ts` | stdio entry |
+| Server | `src/server.ts` | MCP tools, cwd lock, cancellation |
+| Server | `src/argsBuilder.ts` | Codex argv |
+| Server | `src/codexRunner.ts` | spawn, timeout, and kill |
+| Server | `src/eventParser.ts` | JSONL → result |
+| Server | `src/workspaceDiff.ts` | git diff |
+| Server | `src/terminal.ts`, `src/liveView.ts`, `src/progressFormatter.ts`, `src/progressNotifier.ts` | live progress |
+| Server | `src/redaction.ts` | secret redaction |
+| Server | `src/reviewFindings.ts` | review findings |
+| Server | `src/verification.ts` | acceptance verification |
+| Workflow | `scripts/sync-awesome-skills.mjs` | sync skill library |
+| Workflow | `scripts/build-skills-index.mjs` | build skill index |
+| Workflow | `scripts/skill-match.mjs`, `scripts/skill-eval.mjs` | match and evaluate skills |
+| Workflow | `scripts/task-waves.mjs` | compute… (truncated)
 
 _Source: README.md_
 
