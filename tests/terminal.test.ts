@@ -6,6 +6,46 @@ import { buildTerminalLaunch, escapeDoubleQuotedShell, openTerminal } from '../s
 const paths = { nodeBin: '/usr/bin/node', tailScript: '/tools/tail.mjs', logPath: '/logs/a b.jsonl' }
 
 describe('buildTerminalLaunch', () => {
+  test('forwards a valid writer pid in each launch shape', () => {
+    const darwin = buildTerminalLaunch('darwin', { ...paths, writerPid: 4242 })
+    const commandFile = buildTerminalLaunch('darwin', { ...paths, commandFile: '/logs/watch.command', writerPid: 4242 })
+    const windows = buildTerminalLaunch('win32', { ...paths, writerPid: 4242 })
+    const linux = buildTerminalLaunch('linux', {
+      ...paths,
+      writerPid: 4242,
+      linuxTerminal: { command: 'gnome-terminal', execFlag: ['--'] },
+    })
+
+    expect(darwin?.args.at(-1)).toContain('\\"/logs/a b.jsonl\\" 4242')
+    expect(commandFile).toEqual({ command: 'open', args: ['-a', 'Terminal', '/logs/watch.command'] })
+    expect(windows?.args.at(-1)).toContain('"4242"')
+    expect(linux?.args.at(-1)).toBe('4242')
+  })
+
+  test.each([undefined, 0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
+    'preserves launch argv for invalid writer pid %s',
+    (writerPid) => {
+      const linuxPaths = {
+        ...paths,
+        linuxTerminal: { command: 'gnome-terminal', execFlag: ['--'] },
+      }
+      const baseline = [
+        buildTerminalLaunch('darwin', paths),
+        buildTerminalLaunch('darwin', { ...paths, commandFile: '/logs/watch.command' }),
+        buildTerminalLaunch('win32', paths),
+        buildTerminalLaunch('linux', linuxPaths),
+      ]
+      const launch = [
+        buildTerminalLaunch('darwin', { ...paths, writerPid }),
+        buildTerminalLaunch('darwin', { ...paths, commandFile: '/logs/watch.command', writerPid }),
+        buildTerminalLaunch('win32', { ...paths, writerPid }),
+        buildTerminalLaunch('linux', { ...linuxPaths, writerPid }),
+      ]
+
+      expect(launch).toEqual(baseline)
+    },
+  )
+
   test('darwin uses `open -a Terminal` with a .command wrapper when provided (no Apple Events)', () => {
     const launch = buildTerminalLaunch('darwin', { ...paths, commandFile: '/logs/watch.command' })
     expect(launch?.command).toBe('open')

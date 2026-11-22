@@ -28,6 +28,7 @@ export interface TerminalPaths {
   nodeBin: string
   tailScript: string
   logPath: string
+  writerPid?: number
   /**
    * Executable `.command` wrapper (macOS). When present, the launcher uses `open -a Terminal`
    * (LaunchServices) instead of `osascript` (Apple Events), which does not require the caller to
@@ -59,6 +60,9 @@ const escapeAppleScript = (value: string): string =>
 
 const escapePowerShell = (value: string): string => value.replace(/'/g, "''")
 
+const validWriterPid = (pid: number | undefined): string | null =>
+  pid !== undefined && Number.isSafeInteger(pid) && pid > 0 ? String(pid) : null
+
 /**
  * Escape a value for interpolation inside a POSIX double-quoted shell string ("..."). Without this,
  * a workspace path containing `"`, backtick, `$` or `\` would break out and let a shell execute
@@ -68,14 +72,15 @@ const escapePowerShell = (value: string): string => value.replace(/'/g, "''")
 export const escapeDoubleQuotedShell = (value: string): string => value.replace(/[\\"`$]/g, '\\$&')
 
 const buildDarwinLaunch = (
-  { nodeBin, tailScript, logPath, commandFile }: TerminalPaths,
+  { nodeBin, tailScript, logPath, commandFile, writerPid }: TerminalPaths,
   env: TerminalCloseEnv,
 ): TerminalLaunch => {
   if (commandFile) {
     return { command: 'open', args: ['-a', 'Terminal', commandFile] }
   }
   const dq = escapeDoubleQuotedShell
-  const escapedPathCommand = `"${dq(nodeBin)}" "${dq(tailScript)}" "${dq(logPath)}"`
+  const pid = validWriterPid(writerPid)
+  const escapedPathCommand = `"${dq(nodeBin)}" "${dq(tailScript)}" "${dq(logPath)}"${pid ? ` ${pid}` : ''}`
   // This fixed shell expression must expand inside the new Terminal window; only interpolated
   // paths are shell-escaped before AppleScript escaping protects the complete command string.
   const watcherEnvExports = buildWatcherEnvExports(env).replaceAll('\n', '; ')
@@ -93,11 +98,13 @@ const buildDarwinLaunch = (
   }
 }
 
-const buildWindowsLaunch = ({ nodeBin, tailScript, logPath }: TerminalPaths): TerminalLaunch => {
+const buildWindowsLaunch = ({ nodeBin, tailScript, logPath, writerPid }: TerminalPaths): TerminalLaunch => {
   // Embed real double-quotes inside each ArgumentList element: Windows PowerShell 5.1's
   // Start-Process joins the array with bare spaces to build the child's command line, so a path
   // containing a space (very common on Windows) would otherwise be split into extra argv tokens.
-  const argumentList = [tailScript, logPath].map((value) => `'"${escapePowerShell(value)}"'`).join(',')
+  const pid = validWriterPid(writerPid)
+  const values = pid === null ? [tailScript, logPath] : [tailScript, logPath, pid]
+  const argumentList = values.map((value) => `'"${escapePowerShell(value)}"'`).join(',')
   return {
     command: 'powershell.exe',
     args: [
@@ -108,11 +115,12 @@ const buildWindowsLaunch = ({ nodeBin, tailScript, logPath }: TerminalPaths): Te
   }
 }
 
-const buildLinuxLaunch = ({ nodeBin, tailScript, logPath, linuxTerminal }: TerminalPaths): TerminalLaunch | null => {
+const buildLinuxLaunch = ({ nodeBin, tailScript, logPath, linuxTerminal, writerPid }: TerminalPaths): TerminalLaunch | null => {
   if (!linuxTerminal) return null
+  const pid = validWriterPid(writerPid)
   return {
     command: linuxTerminal.command,
-    args: [...linuxTerminal.execFlag, nodeBin, tailScript, logPath],
+    args: [...linuxTerminal.execFlag, nodeBin, tailScript, logPath, ...(pid === null ? [] : [pid])],
   }
 }
 
@@ -140,12 +148,13 @@ export const openTerminal = (logPath: string, options: OpenTerminalOptions): boo
     tailScript,
     commandFile,
     linuxTerminal,
+    writerPid,
     env = process.env,
     spawnFn = spawn,
   } = options
   const launch = buildTerminalLaunch(
     platform,
-    { nodeBin, tailScript, logPath, commandFile, linuxTerminal },
+    { nodeBin, tailScript, logPath, commandFile, linuxTerminal, writerPid },
     env,
   )
   if (launch === null) return false

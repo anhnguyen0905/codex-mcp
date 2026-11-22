@@ -19,6 +19,7 @@ import { TERMINAL_CLOSE_DELAY_ENV, TERMINAL_KEEP_OPEN_ENV } from '../src/termina
 const TAIL_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'tail-progress.mjs')
 const EXIT_TIMEOUT_MS = 10_000
 const MARKER_DELAY_MS = 300
+const PID_CHECK_DELAY_MS = 2500
 const TEST_WINDOW_ID = '3845'
 
 const tempDirs: string[] = []
@@ -37,13 +38,15 @@ const runWatcher = (
   logPath: string,
   env: NodeJS.ProcessEnv = {},
   tailScript = TAIL_SCRIPT,
-): { done: Promise<WatcherResult> } => {
+  writerPid?: string | number,
+): { child: ReturnType<typeof spawn>; done: Promise<WatcherResult> } => {
   const inheritedEnv = Object.fromEntries(
     Object.entries(process.env).filter(
       ([key]) => key !== TERMINAL_KEEP_OPEN_ENV && key !== TERMINAL_CLOSE_DELAY_ENV,
     ),
   )
-  const child = spawn(process.execPath, [tailScript, logPath], {
+  const args = writerPid === undefined ? [tailScript, logPath] : [tailScript, logPath, String(writerPid)]
+  const child = spawn(process.execPath, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...inheritedEnv, ...env },
   })
@@ -73,7 +76,7 @@ const runWatcher = (
       reject(error)
     })
   })
-  return { done }
+  return { child, done }
 }
 
 describe('tail-progress watcher auto-exit', () => {
@@ -279,5 +282,74 @@ describe('tail-progress watcher auto-exit', () => {
     expect(code).toBe(0)
     expect(stdout).toContain('(run finished — closing watcher)')
     expect(existsSync(closeCommandLogPath)).toBe(false)
+  })
+
+  test('exits interrupted when the writer pid is dead and no marker exists', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-tail-'))
+    tempDirs.push(dir)
+    const logPath = join(dir, 'run.jsonl')
+    const closeCommandLogPath = join(dir, 'close-command.json')
+    writeFileSync(logPath, '{"type":"thread.started"}\n')
+    const writer = spawn(process.execPath, ['-e', ''])
+    await new Promise<void>((resolve, reject) => {
+      writer.once('close', () => resolve())
+      writer.once('error', reject)
+    })
+
+    const { code, stdout } = await runWatcher(logPath, {
+      CODEX_TAIL_CLOSE_CMD_LOG: closeCommandLogPath,
+      CODEX_TAIL_TEST_PLATFORM: 'darwin',
+    }, TAIL_SCRIPT, writer.pid).done
+
+    expect(code).toBe(1)
+    expect(stdout).toContain('MCP server process ' + writer.pid + ' exited before the run finished — run interrupted; leaving this window open')
+    expect(existsSync(closeCommandLogPath)).toBe(false)
+  })
+
+  test('handles a completed marker before checking a dead writer pid', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-tail-'))
+    tempDirs.push(dir)
+    const logPath = join(dir, 'run.jsonl')
+    const closeCommandLogPath = join(dir, 'close-command.json')
+    writeFileSync(logPath, JSON.stringify({ type: LIVE_RUN_FINISHED_TYPE, status: 'completed', sessionId: 'sess-pid' }) + '\n')
+    const writer = spawn(process.execPath, ['-e', ''])
+    await new Promise<void>((resolve, reject) => {
+      writer.once('close', () => resolve())
+      writer.once('error', reject)
+    })
+
+    const { code } = await runWatcher(logPath, {
+      CODEX_MCP_TERMINAL_TTY: '/dev/ttys999',
+      CODEX_TAIL_CLOSE_CMD_LOG: closeCommandLogPath,
+      CODEX_TAIL_TEST_PLATFORM: 'darwin',
+      CODEX_TAIL_TEST_WINDOW_ID: TEST_WINDOW_ID,
+    }, TAIL_SCRIPT, writer.pid).done
+
+    expect(code).toBe(0)
+    expect(existsSync(closeCommandLogPath)).toBe(true)
+  })
+
+  test('ignores an invalid writer pid until a marker arrives', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-tail-'))
+    tempDirs.push(dir)
+    const logPath = join(dir, 'run.jsonl')
+    writeFileSync(logPath, '{"type":"thread.started"}\n')
+    const watcher = runWatcher(logPath, {}, TAIL_SCRIPT, 'abc')
+    await new Promise((resolve) => setTimeout(resolve, 2500))
+    expect(watcher.child.exitCode).toBe(null)
+    appendFileSync(logPath, JSON.stringify({ type: LIVE_RUN_FINISHED_TYPE, status: 'completed', sessionId: 'sess-pid' }) + '\n')
+    expect((await watcher.done).code).toBe(0)
+  })
+
+  test('keeps following while the writer pid is alive', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-mcp-tail-'))
+    tempDirs.push(dir)
+    const logPath = join(dir, 'run.jsonl')
+    writeFileSync(logPath, '{"type":"thread.started"}\n')
+    const watcher = runWatcher(logPath, {}, TAIL_SCRIPT, process.pid)
+    await new Promise((resolve) => setTimeout(resolve, 2500))
+    expect(watcher.child.exitCode).toBe(null)
+    watcher.child.kill('SIGTERM')
+    expect((await watcher.done).code).not.toBe(0)
   })
 })

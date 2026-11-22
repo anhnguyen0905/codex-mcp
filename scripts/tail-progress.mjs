@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Pretty-tail a Codex live JSONL log: node tail-progress.mjs <logPath>
+// Pretty-tail a Codex live JSONL log: node tail-progress.mjs <logPath> [writerPid]
 // Prints human-readable progress lines as the file grows, and exits automatically (code 0) when
 // the end-of-run marker written by liveView appears. Optional fallback: set CODEX_TAIL_TIMEOUT_MS
 // to exit 1 after that many ms if no marker ever arrives (e.g. the writer crashed).
@@ -8,8 +8,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const logPath = process.argv[2]
+const writerPidText = process.argv[3]
+const writerPid = writerPidText && /^[1-9]\d*$/.test(writerPidText) ? Number(writerPidText) : null
 if (!logPath) {
-  console.error('usage: tail-progress.mjs <logPath>')
+  console.error('usage: tail-progress.mjs <logPath> [writerPid]')
   process.exit(1)
 }
 
@@ -50,6 +52,16 @@ let watcher
 let pollTimer
 let timeoutTimer
 let previousEventAtMs = null
+let hasHandledEndMarker = false
+
+const isPidAlive = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error?.code !== 'ESRCH'
+  }
+}
 
 const finish = (code, message) => {
   if (message) console.log(message)
@@ -150,6 +162,7 @@ const handleLine = (line) => {
   if (formatted) console.log(formatted)
   const status = parseRunFinishedStatus(line)
   if (status === null) return
+  hasHandledEndMarker = true
   if (tryCloseTerminal(status)) return
   finish(0, '\n(run finished — closing watcher)')
 }
@@ -208,6 +221,15 @@ if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
 drain()
 const dir = dirname(logPath)
 watcher = watch(dir, () => drain())
+watcher.on('error', () => {})
 // Poll as a fallback in case fs.watch misses events on network drives.
-pollTimer = setInterval(drain, 1000)
+pollTimer = setInterval(() => {
+  drain()
+  if (writerPid !== null && !hasHandledEndMarker && !isPidAlive(writerPid)) {
+    drain()
+    if (!hasHandledEndMarker) {
+      finish(1, `\n(MCP server process ${writerPidText} exited before the run finished — run interrupted; leaving this window open)`)
+    }
+  }
+}, 1000)
 console.log('(following… exits automatically when the run finishes)')
