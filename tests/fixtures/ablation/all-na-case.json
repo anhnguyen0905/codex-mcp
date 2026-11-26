@@ -1,0 +1,10 @@
+{
+  "id": "all-na",
+  "profile": "data",
+  "language": "en",
+  "domain": "synthetic-report",
+  "request": "Describe a report with no mechanical evidence.",
+  "split": "dev",
+  "source": "synthetic",
+  "deliverableText": "A short invented note."
+}

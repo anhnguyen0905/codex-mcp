@@ -2,7 +2,17 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+const qualityEvalMock = vi.hoisted(() => ({ allNa: false }))
+vi.mock('../scripts/quality-eval.mjs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../scripts/quality-eval.mjs')>()
+  return {
+    ...actual,
+    runMechanical: (item: { id: string }, options: unknown) => qualityEvalMock.allNa && item.id === 'all-na'
+      ? [{ id: 'all-na.synthetic', result: 'n/a' }]
+      : actual.runMechanical(item, options),
+  }
+})
 // @ts-expect-error — plain .mjs script
 import { buildAblationPrompts, compareGrades, main } from '../scripts/skill-ablation.mjs'
 
@@ -52,6 +62,26 @@ describe('skill ablation', () => {
     // Assert
     expect(result.cases[0]).toMatchObject({ id: 'alpha', withRate: 1 / 3, withoutRate: 0, delta: 1 / 3 })
     expect(result.aggregate).toEqual({ withRate: 1 / 3, withoutRate: 0, delta: 1 / 3 })
+  })
+
+  it('scores an all-n/a rubric as null and excludes null rates from an aggregate mean', () => {
+    // Arrange
+    const allNaCase = JSON.parse(readFileSync('tests/fixtures/ablation/all-na-case.json', 'utf8'))
+    const scoredCase = validCase('scored', '# Goal\nA goal.\n# Core Loop\nPlay.')
+    qualityEvalMock.allNa = true
+
+    // Act
+    try {
+      const result = compareGrades([scoredCase, allNaCase], [scoredCase, allNaCase])
+
+      // Assert
+      expect(result.cases.find((row) => row.id === 'all-na')).toMatchObject({ withRate: null, withoutRate: null, delta: null })
+      const scoredRow = result.cases.find((row) => row.id === 'scored')
+      expect(scoredRow).toMatchObject({ withRate: 1 / 3, withoutRate: 1 / 3, delta: 0 })
+      expect(result.aggregate).toEqual({ withRate: scoredRow?.withRate, withoutRate: scoredRow?.withoutRate, delta: scoredRow?.delta })
+    } finally {
+      qualityEvalMock.allNa = false
+    }
   })
 
   it('pairs equal id sets in with-file order', () => {
