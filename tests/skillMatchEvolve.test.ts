@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto'
 import { cpSync, readFileSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error — plain .mjs script
-import { compareCandidates, evolve, formatReport, mulberry32, mutate, recommend, validateTuning } from '../scripts/skill-match-evolve.mjs'
+import { compareCandidates, evolve, formatReport, mulberry32, mutate, recommend, resolveRealOutput, validateTuning } from '../scripts/skill-match-evolve.mjs'
 // @ts-expect-error — plain .mjs script
 import { TUNING_BOUNDS, DEFAULT_TUNING } from '../scripts/skill-match.mjs'
 
@@ -121,6 +121,35 @@ describe('skill-match evolution', () => {
     expect(attempt).toThrow(RangeError)
   })
 
+  it('resolves missing output segments from the nearest existing ancestor', async () => {
+    // Arrange
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'evolve-resolve-')))
+    const missingOutput = join(root, 'a', 'b', 'report.md')
+    const existingFile = join(process.cwd(), 'scripts', 'skill-match.mjs')
+
+    // Act
+    const missingResult = await resolveRealOutput(missingOutput)
+    const existingResult = await resolveRealOutput(existingFile)
+
+    // Assert
+    expect(missingResult).toBe(missingOutput)
+    expect(existingResult).toBe(realpathSync(existingFile))
+  })
+
+  it.skipIf(process.platform === 'win32')('resolves missing output segments through a symlinked ancestor', async () => {
+    // Arrange
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'evolve-link-root-')))
+    const target = realpathSync(mkdtempSync(join(tmpdir(), 'evolve-link-target-')))
+    const link = join(root, 'link')
+    symlinkSync(target, link)
+
+    // Act
+    const result = await resolveRealOutput(join(link, 'x', 'y', 'report.md'))
+
+    // Assert
+    expect(result).toBe(join(target, 'x', 'y', 'report.md'))
+  })
+
   it('does not change skill-match.mjs after a CLI run', () => {
     // Arrange
     const before = createHash('sha256').update(readFileSync(join(root, 'scripts', 'skill-match.mjs'))).digest('hex')
@@ -156,7 +185,7 @@ describe('skill-match evolution', () => {
     expect(after).toBe(before)
   })
 
-  it('rejects case-variant and symlink protected outputs in a copied scripts directory', () => {
+  it.skipIf(process.platform === 'win32')('rejects case-variant and symlink protected outputs in a copied scripts directory', () => {
     // Arrange
     const copyRoot = realpathSync(mkdtempSync(join(tmpdir(), 'evolve-scripts-')))
     const scriptsCopy = join(copyRoot, 'scripts')
@@ -170,9 +199,11 @@ describe('skill-match evolution', () => {
     // Act
     const caseVariant = command(join(scriptsCopy, 'SKILL-MATCH.mjs'))
     const symlinkOutput = command(link)
-    const normalized = command(join(scriptsCopy, 'scripts', '..', 'scripts', '.', 'skill-match.mjs'))
+    const normalized = command(`${scriptsCopy}${sep}..${sep}scripts${sep}.${sep}skill-match.mjs`)
     const acceptedPath = join(copyRoot, 'my-skill-match.mjs')
     const accepted = command(acceptedPath)
+    const nestedAcceptedPath = join(scriptsCopy, 'newdir', 'skill-match.mjs')
+    const nestedAccepted = command(nestedAcceptedPath)
     const after = createHash('sha256').update(readFileSync(skillMatch)).digest('hex')
 
     // Assert
@@ -181,6 +212,8 @@ describe('skill-match evolution', () => {
     expect(normalized.status).toBe(2)
     expect(accepted.status).toBe(0)
     expect(readFileSync(acceptedPath, 'utf8')).toContain('# Skill-match evolution')
+    expect(nestedAccepted.status).toBe(0)
+    expect(readFileSync(nestedAcceptedPath, 'utf8')).toContain('# Skill-match evolution')
     expect(after).toBe(before)
   })
 })

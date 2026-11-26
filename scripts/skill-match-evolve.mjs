@@ -170,14 +170,16 @@ async function statIfPresent(file) {
   }
 }
 
-async function resolveRealOutput(file) {
+export async function resolveRealOutput(file) {
   if (await statIfPresent(file)) return fs.realpath(file)
-  let parent = path.dirname(file)
+  const missing = []
+  let current = file
   while (true) {
-    if (await statIfPresent(parent)) return path.join(await fs.realpath(parent), path.basename(file))
-    const next = path.dirname(parent)
-    if (next === parent) throw new Error(`cannot resolve output parent: ${file}`)
-    parent = next
+    missing.unshift(path.basename(current))
+    const parent = path.dirname(current)
+    if (await statIfPresent(parent)) return path.join(await fs.realpath(parent), ...missing)
+    if (parent === current) throw new Error(`cannot resolve output parent: ${file}`)
+    current = parent
   }
 }
 

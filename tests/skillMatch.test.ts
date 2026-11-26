@@ -136,6 +136,35 @@ const TUNING_INDEX = [
 ]
 
 describe('skill-match tuning contract', () => {
+  test('keeps defaults within every bound and accepts all bound values', () => {
+    // Arrange
+    const entry = { name: 'tiny skill', description: 'tiny description' }
+    const entries = [entry]
+    const stats = buildDocFrequency(entries)
+    const publicEntries = [
+      (tuning: Record<string, number>) => idfWeight('tiny', stats, tuning),
+      (tuning: Record<string, number>) => matchDetail(entry, ['tiny'], stats, tuning),
+      (tuning: Record<string, number>) => scoreEntry(entry, ['tiny'], stats, tuning),
+      (tuning: Record<string, number>) => rankCandidates(entries, ['tiny'], stats, tuning),
+      (tuning: Record<string, number>) => selectSkills(entries, ['tiny'], { tuning }),
+    ]
+
+    // Act
+    const attempts = Object.entries(TUNING_BOUNDS).flatMap(([key, [min, max]]) =>
+      publicEntries.flatMap((publicEntry) => [
+        () => publicEntry({ [key]: min }),
+        () => publicEntry({ [key]: max }),
+      ]),
+    )
+
+    // Assert
+    for (const [key, [min, max]] of Object.entries(TUNING_BOUNDS)) {
+      expect(DEFAULT_TUNING[key]).toBeGreaterThanOrEqual(min)
+      expect(DEFAULT_TUNING[key]).toBeLessThanOrEqual(max)
+    }
+    expect(Object.keys(DEFAULT_TUNING).sort()).toEqual(Object.keys(TUNING_BOUNDS).sort())
+    for (const attempt of attempts) expect(attempt).not.toThrow()
+  })
   test('matches the pre-refactor golden selections for every scenario', () => {
     // Arrange
     const golden = JSON.parse(readFileSync('tests/fixtures/skill-match-golden.json', 'utf8')) as {
