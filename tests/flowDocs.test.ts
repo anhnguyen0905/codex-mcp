@@ -108,47 +108,8 @@ const PHASE_LOADED_MAX_BYTES: Readonly<Record<string, number>> = {
 const FLOW_TOTAL_MAX_BYTES = 158_686
 // C7 phase → skills map. The union of these lists is the "flow skills" set FLOW_TOTAL_MAX_BYTES
 // covers; Phase 4 counts exactly one exec-<lang> skill (TypeScript, this project's language).
-const PHASE_SKILL_MAP: ReadonlyArray<{ phase: string, skills: readonly string[] }> = [
-  { phase: 'Phase 0', skills: ['preflight', 'fast-path', 'executor-fallback'] },
-  { phase: 'Phase 1', skills: ['interview-elicitation', 'interview-ask-back'] },
-  {
-    phase: 'Phase 2',
-    skills: [
-      'plan-research-first',
-      'plan-architecture',
-      'skill-selection',
-      'context-discipline',
-      'session-report',
-    ],
-  },
-  { phase: 'Phase 3', skills: ['plan-backlog'] },
-  {
-    phase: 'Phase 4',
-    skills: [
-      'exec-coding-standards',
-      'exec-self-testing',
-      'exec-typescript',
-      'context-discipline',
-      'parallel-execution',
-      'task-loop',
-    ],
-  },
-  {
-    phase: 'Phase 5',
-    skills: [
-      'review-conformance',
-      'review-quality',
-      'review-security',
-      'review-feedback',
-      'review-dual',
-      'context-discipline',
-      'session-report',
-      'run-ledger',
-      'task-loop',
-      'final-review',
-    ],
-  },
-]
+// @ts-expect-error — plain .mjs script
+import { PHASE_SKILL_MAP } from '../scripts/flow-skill-map.mjs'
 const FLOW_STATE_SUBCOMMANDS = [
   'init', 'approve', 'advance', 'requirement-delta', 'plan-drift', 'improvement-gate',
   'resume', 'set', 'check', 'archive-paths', 'task',
