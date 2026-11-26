@@ -1,0 +1,4 @@
+[
+  {"id":"alpha","profile":"design","language":"en","domain":"game","request":"Draft a game concept.","split":"dev","source":"synthetic","deliverableText":"# Goal\nA compact game concept."},
+  {"id":"beta","profile":"content","language":"en","domain":"copy","request":"Write a store message.","split":"dev","source":"synthetic","deliverableText":"# Message\nA clear store message."}
+]

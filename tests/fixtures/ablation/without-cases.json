@@ -1,0 +1,4 @@
+[
+  {"id":"beta","profile":"content","language":"en","domain":"copy","request":"Write a store message.","split":"dev","source":"synthetic","deliverableText":"No headings here."},
+  {"id":"alpha","profile":"design","language":"en","domain":"game","request":"Draft a game concept.","split":"dev","source":"synthetic","deliverableText":"No headings here."}
+]
