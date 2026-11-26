@@ -1,8 +1,8 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, it, test } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 // @ts-expect-error — plain .mjs script
-import { runScenarios } from '../scripts/skill-eval.mjs'
+import { evaluateScenario, runScenarios } from '../scripts/skill-eval.mjs'
 
 // @ts-expect-error — plain .mjs script, not part of the tsc build
 import {
@@ -17,7 +17,9 @@ import {
   idfWeight,
   buildDocFrequency,
   DEFAULT_TOKEN_BUDGET,
+  DEFAULT_TUNING,
   RELATIVE_SCORE_FLOOR,
+  TUNING_BOUNDS,
 } from '../scripts/skill-match.mjs'
 
 describe('deriveTerms', () => {
@@ -126,6 +128,182 @@ const INDEX = [
   { name: 'market-research-reports', description: 'Produce market research reports, competitor analysis, and positioning.', file: '/a/market-research-reports/SKILL.md' },
   { name: 'pdf', description: 'PDF manipulation toolkit — extract text and tables, merge/split documents.', file: '/a/pdf/SKILL.md' },
 ]
+
+const TUNING_INDEX = [
+  { name: 'alpha-beta', description: 'alpha beta', file: '/tuning/alpha-beta/SKILL.md' },
+  { name: 'alpha', description: 'alpha', file: '/tuning/alpha/SKILL.md' },
+  { name: 'substring', description: 'alphabet soup', file: '/tuning/substring/SKILL.md' },
+]
+
+describe('skill-match tuning contract', () => {
+  test('matches the pre-refactor golden selections for every scenario', () => {
+    // Arrange
+    const golden = JSON.parse(readFileSync('tests/fixtures/skill-match-golden.json', 'utf8')) as {
+      entries: Array<{ name: string; description: string; file: string }>
+      suites: Record<string, Array<{ id: string; selected: string[] }>>
+    }
+
+    // Act
+    const actual = Object.fromEntries(Object.entries(golden.suites).map(([file]) => {
+      const { scenarios } = JSON.parse(readFileSync(`tests/fixtures/${file}`, 'utf8')) as {
+        scenarios: Array<{ id: string; terms?: unknown; request?: string }>
+      }
+      return [file, scenarios.map((scenario) => ({
+        id: scenario.id,
+        selected: evaluateScenario(scenario, golden.entries).selected,
+      }))]
+    }))
+
+    // Assert
+    expect(actual).toEqual(golden.suites)
+  })
+
+  test('places the defaults and bounds inside the evolve block', () => {
+    // Arrange
+    const source = readFileSync('scripts/skill-match.mjs', 'utf8')
+    const start = source.indexOf('// EVOLVE-BLOCK-START')
+    const end = source.indexOf('// EVOLVE-BLOCK-END')
+
+    // Act
+    const block = source.slice(start, end)
+
+    // Assert
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(end).toBeGreaterThan(start)
+    expect(block).toContain('DEFAULT_TUNING')
+    expect(block).toContain('TUNING_BOUNDS')
+    expect(Object.isFrozen(DEFAULT_TUNING)).toBe(true)
+    expect(Object.isFrozen(TUNING_BOUNDS)).toBe(true)
+    expect(Object.values(TUNING_BOUNDS).every((bound) => Object.isFrozen(bound))).toBe(true)
+  })
+
+  it('tunes name word weight', () => {
+    // Arrange
+    const baseline = scoreEntry({ name: 'alpha', description: '' }, ['alpha'])
+
+    // Act
+    const tuned = scoreEntry({ name: 'alpha', description: '' }, ['alpha'], null, { nameWord: 10 })
+
+    // Assert
+    expect(tuned).not.toBe(baseline)
+  })
+
+  it('tunes name phrase weight', () => {
+    // Arrange
+    const baseline = scoreEntry({ name: 'alpha-beta', description: '' }, ['alpha beta'])
+
+    // Act
+    const tuned = scoreEntry({ name: 'alpha-beta', description: '' }, ['alpha beta'], null, { namePhrase: 10 })
+
+    // Assert
+    expect(tuned).not.toBe(baseline)
+  })
+
+  it('tunes description word weight', () => {
+    // Arrange
+    const baseline = scoreEntry({ name: 'skill', description: 'alpha' }, ['alpha'])
+
+    // Act
+    const tuned = scoreEntry({ name: 'skill', description: 'alpha' }, ['alpha'], null, { descWord: 10 })
+
+    // Assert
+    expect(tuned).not.toBe(baseline)
+  })
+
+  it('tunes description phrase weight', () => {
+    // Arrange
+    const baseline = scoreEntry({ name: 'skill', description: 'alpha beta' }, ['alpha beta'])
+
+    // Act
+    const tuned = scoreEntry({ name: 'skill', description: 'alpha beta' }, ['alpha beta'], null, { descPhrase: 10 })
+
+    // Assert
+    expect(tuned).not.toBe(baseline)
+  })
+
+  it('tunes substring weight', () => {
+    // Arrange
+    const baseline = scoreEntry(TUNING_INDEX[2], ['alpha'])
+
+    // Act
+    const tuned = scoreEntry(TUNING_INDEX[2], ['alpha'], null, { substring: 5 })
+
+    // Assert
+    expect(tuned).not.toBe(baseline)
+  })
+
+  it('tunes partial phrase factor', () => {
+    // Arrange
+    const baseline = scoreEntry({ name: 'alpha-gamma', description: '' }, ['alpha beta'])
+
+    // Act
+    const tuned = scoreEntry({ name: 'alpha-gamma', description: '' }, ['alpha beta'], null, { partialFactor: 0 })
+
+    // Assert
+    expect(tuned).not.toBe(baseline)
+  })
+
+  it('tunes IDF pivot', () => {
+    // Arrange
+    const stats = { df: new Map<string, number>(), total: 10 }
+    const baseline = idfWeight('rare', stats)
+
+    // Act
+    const tuned = idfWeight('rare', stats, { idfPivot: 1 })
+
+    // Assert
+    expect(tuned).not.toBe(baseline)
+  })
+
+  it('tunes IDF minimum clamp', () => {
+    // Arrange
+    const stats = { df: new Map([['common', 10]]), total: 10 }
+    const baseline = idfWeight('common', stats)
+
+    // Act
+    const tuned = idfWeight('common', stats, { idfMin: 0 })
+
+    // Assert
+    expect(tuned).not.toBe(baseline)
+  })
+
+  it('tunes IDF maximum clamp', () => {
+    // Arrange
+    const stats = { df: new Map<string, number>(), total: 2000 }
+    const baseline = idfWeight('rare', stats)
+
+    // Act
+    const tuned = idfWeight('rare', stats, { idfMax: 1 })
+
+    // Assert
+    expect(tuned).not.toBe(baseline)
+  })
+
+  it('tunes the relative score floor', () => {
+    // Arrange
+    const baseline = selectSkills(TUNING_INDEX, ['alpha', 'beta']).map((entry) => entry.name)
+
+    // Act
+    const tuned = selectSkills(TUNING_INDEX, ['alpha', 'beta'], {
+      tuning: { relativeScoreFloor: 0.8 },
+    }).map((entry) => entry.name)
+
+    // Assert
+    expect(baseline).toEqual(['alpha-beta', 'alpha'])
+    expect(tuned).toEqual(['alpha-beta'])
+  })
+
+  it('rejects a non-finite known tuning value', () => {
+    // Arrange
+    const run = () => scoreEntry(TUNING_INDEX[0], ['alpha'], null, { nameWord: Number.NaN })
+
+    // Act
+    const result = run
+
+    // Assert
+    expect(result).toThrow(RangeError)
+  })
+})
 
 describe('scoreEntry', () => {
   test('scores a whole-word name hit higher than a description-only hit', () => {

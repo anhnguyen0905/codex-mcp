@@ -340,6 +340,23 @@ describe('evaluateScenario', () => {
     expect(result.facetCoverage).toBeNull()
   })
 
+  test('passes tuning options through to skill selection', () => {
+    // Arrange
+    const index = [
+      { name: 'alpha-beta', description: 'alpha beta', file: '/a/SKILL.md' },
+      { name: 'alpha', description: 'alpha', file: '/b/SKILL.md' },
+    ]
+    const scenario = { id: 'TUNE', terms: ['alpha', 'beta'] }
+
+    // Act
+    const baseline = evaluateScenario(scenario, index)
+    const tuned = evaluateScenario(scenario, index, { tuning: { relativeScoreFloor: 0.8 } })
+
+    // Assert
+    expect(baseline.selected).toEqual(['alpha-beta', 'alpha'])
+    expect(tuned.selected).toEqual(['alpha-beta'])
+  })
+
   test('runCli report states raw and oracle term modes', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'skill-eval-mode-'))
     const index = path.join(dir, 'INDEX.md')

@@ -86,7 +86,12 @@ export function evaluateScenario(scenario, entries, options = {}) {
   const selected = selectSkills(
     entries,
     options.raw ? [{ name: 'request', terms }] : terms,
-    { tokenBudget, tokensOf: sizer, domainTags: options.domainTags },
+    {
+      tokenBudget,
+      tokensOf: sizer,
+      tuning: options.tuning,
+      domainTags: options.domainTags,
+    },
   )
   const names = selected.map((s) => s.name)
   const genericOnly = selected.map((s) => Boolean(s.genericOnly))

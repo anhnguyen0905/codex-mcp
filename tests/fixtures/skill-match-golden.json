@@ -1,0 +1,2729 @@
+{
+  "entries": [
+    {
+      "name": "exec-typescript",
+      "description": "TypeScript JavaScript Node async REST API service execution patterns.",
+      "file": "/invented/0/exec-typescript/SKILL.md"
+    },
+    {
+      "name": "exec-go",
+      "description": "Go Golang concurrency goroutine worker pool service execution.",
+      "file": "/invented/1/exec-go/SKILL.md"
+    },
+    {
+      "name": "exec-python",
+      "description": "Python packaging type hints PEP 8 data analysis execution.",
+      "file": "/invented/2/exec-python/SKILL.md"
+    },
+    {
+      "name": "modern-python",
+      "description": "Modern Python library packaging typing testing and async patterns.",
+      "file": "/invented/3/modern-python/SKILL.md"
+    },
+    {
+      "name": "polars",
+      "description": "Fast DataFrame operations for CSV tabular data analysis joins pandas and aggregation.",
+      "file": "/invented/4/polars/SKILL.md"
+    },
+    {
+      "name": "exploratory-data-analysis",
+      "description": "Exploratory data analysis data cleaning missing values outliers distributions and diagnostics.",
+      "file": "/invented/5/exploratory-data-analysis/SKILL.md"
+    },
+    {
+      "name": "statistical-analysis",
+      "description": "Statistical analysis regression hypothesis tests descriptive statistics p-values effect size and assumptions.",
+      "file": "/invented/6/statistical-analysis/SKILL.md"
+    },
+    {
+      "name": "statsmodels",
+      "description": "Statistical regression hypothesis testing time series and survey statistics.",
+      "file": "/invented/7/statsmodels/SKILL.md"
+    },
+    {
+      "name": "statistical-power",
+      "description": "Statistical power sample size calculation minimum detectable effect alpha and experiment design.",
+      "file": "/invented/8/statistical-power/SKILL.md"
+    },
+    {
+      "name": "d3-viz",
+      "description": "D3.js interactive data visualisation charts SVG transitions and metrics.",
+      "file": "/invented/9/d3-viz/SKILL.md"
+    },
+    {
+      "name": "dashboard-builder",
+      "description": "Monitoring dashboard KPI chart metrics panel Grafana alerting and operator observability.",
+      "file": "/invented/10/dashboard-builder/SKILL.md"
+    },
+    {
+      "name": "market-research-reports",
+      "description": "Market research report competitor positioning landscape consulting report and executive recommendations.",
+      "file": "/invented/11/market-research-reports/SKILL.md"
+    },
+    {
+      "name": "competitive-platform-analysis",
+      "description": "Competitive analysis benchmark teardown rivals onboarding UX and market landscape.",
+      "file": "/invented/12/competitive-platform-analysis/SKILL.md"
+    },
+    {
+      "name": "pdf",
+      "description": "PDF manipulation extract tables merge documents and report files.",
+      "file": "/invented/13/pdf/SKILL.md"
+    },
+    {
+      "name": "docx",
+      "description": "DOCX document authoring Word formatting document conversion and business reports.",
+      "file": "/invented/14/docx/SKILL.md"
+    },
+    {
+      "name": "article-writing",
+      "description": "Article writing report writing executive summary business writing insight and stakeholder communication.",
+      "file": "/invented/15/article-writing/SKILL.md"
+    },
+    {
+      "name": "internal-comms",
+      "description": "Internal communication stakeholder writeup postmortem executive summary and business writing.",
+      "file": "/invented/16/internal-comms/SKILL.md"
+    },
+    {
+      "name": "xlsx",
+      "description": "Excel spreadsheet XLSX pivot table compare spreadsheets variance formulas and tabular data.",
+      "file": "/invented/17/xlsx/SKILL.md"
+    },
+    {
+      "name": "warehouse-modeling",
+      "description": "Data warehouse star schema fact table dimension table surrogate key dbt model and SQL model.",
+      "file": "/invented/18/warehouse-modeling/SKILL.md"
+    },
+    {
+      "name": "clickhouse-io",
+      "description": "ClickHouse event log active users aggregation weekly metrics retention and analytics warehouse.",
+      "file": "/invented/19/clickhouse-io/SKILL.md"
+    },
+    {
+      "name": "dbt-patterns",
+      "description": "dbt data warehouse modeling SQL model testing freshness and pipeline transformations.",
+      "file": "/invented/20/dbt-patterns/SKILL.md"
+    },
+    {
+      "name": "data-quality-checks",
+      "description": "Data validation rules completeness freshness SLA duplicate detection anomaly checks and quality gates.",
+      "file": "/invented/21/data-quality-checks/SKILL.md"
+    },
+    {
+      "name": "cohort-retention-analysis",
+      "description": "Cohort retention install cohort D1 D7 D30 retention event logs and rollover metrics.",
+      "file": "/invented/22/cohort-retention-analysis/SKILL.md"
+    },
+    {
+      "name": "causal-inference",
+      "description": "Causal effect geo holdout difference in differences counterfactual and incrementality test.",
+      "file": "/invented/23/causal-inference/SKILL.md"
+    },
+    {
+      "name": "marketing-campaign",
+      "description": "Marketing campaign strategy launch campaign audience messaging campaign content and copywriting.",
+      "file": "/invented/24/marketing-campaign/SKILL.md"
+    },
+    {
+      "name": "content-engine",
+      "description": "Content engine launch announcement video script short form video TikTok hook and social content.",
+      "file": "/invented/25/content-engine/SKILL.md"
+    },
+    {
+      "name": "media-planning",
+      "description": "Media planning budget allocation media mix spend split marketing ROI channel investment and paid acquisition.",
+      "file": "/invented/26/media-planning/SKILL.md"
+    },
+    {
+      "name": "performance-marketing",
+      "description": "Performance marketing ROAS bidding strategy target return guardrail and paid acquisition.",
+      "file": "/invented/27/performance-marketing/SKILL.md"
+    },
+    {
+      "name": "brand-voice",
+      "description": "Brand voice messaging positioning creative brief tone and campaign copy.",
+      "file": "/invented/28/brand-voice/SKILL.md"
+    },
+    {
+      "name": "influencer-strategy",
+      "description": "Influencer strategy creator campaign social publisher audience and channel growth.",
+      "file": "/invented/29/influencer-strategy/SKILL.md"
+    },
+    {
+      "name": "seo",
+      "description": "SEO search optimization content strategy keyword research and web marketing.",
+      "file": "/invented/30/seo/SKILL.md"
+    },
+    {
+      "name": "product-manager",
+      "description": "Product manager PRD product requirements success metrics roadmap and feature planning.",
+      "file": "/invented/31/product-manager/SKILL.md"
+    },
+    {
+      "name": "systematic-debugging",
+      "description": "Systematic debugging root cause analysis regression test diagnostics and engineering investigation.",
+      "file": "/invented/32/systematic-debugging/SKILL.md"
+    },
+    {
+      "name": "api-design",
+      "description": "API design REST endpoint backend service schema contract and integration patterns.",
+      "file": "/invented/33/api-design/SKILL.md"
+    },
+    {
+      "name": "backend-patterns",
+      "description": "Backend patterns service architecture error handling Node API connector and deployment.",
+      "file": "/invented/34/backend-patterns/SKILL.md"
+    },
+    {
+      "name": "database-migrations",
+      "description": "Database migrations SQL schema changes PostgreSQL data integrity and rollback.",
+      "file": "/invented/35/database-migrations/SKILL.md"
+    },
+    {
+      "name": "docker-patterns",
+      "description": "Docker containers deployment patterns CI services and reproducible environments.",
+      "file": "/invented/36/docker-patterns/SKILL.md"
+    },
+    {
+      "name": "kubernetes-patterns",
+      "description": "Kubernetes orchestration deployment service discovery containers and operations.",
+      "file": "/invented/37/kubernetes-patterns/SKILL.md"
+    },
+    {
+      "name": "security-review",
+      "description": "Security review vulnerability access control threat model compliance and secure coding.",
+      "file": "/invented/38/security-review/SKILL.md"
+    },
+    {
+      "name": "test-driven-development",
+      "description": "Test driven development regression testing unit tests mutation testing and quality.",
+      "file": "/invented/39/test-driven-development/SKILL.md"
+    },
+    {
+      "name": "frontend-design",
+      "description": "Frontend design responsive UI web app component layout and visual direction.",
+      "file": "/invented/40/frontend-design/SKILL.md"
+    },
+    {
+      "name": "design-system",
+      "description": "Design system UI components tokens accessibility onboarding UX and product interface.",
+      "file": "/invented/41/design-system/SKILL.md"
+    },
+    {
+      "name": "accessibility",
+      "description": "Accessibility WCAG accessible design onboarding UX and frontend a11y.",
+      "file": "/invented/42/accessibility/SKILL.md"
+    },
+    {
+      "name": "ux-research-wireframing",
+      "description": "UX research wireframing user interviews competitive analysis and usability.",
+      "file": "/invented/43/ux-research-wireframing/SKILL.md"
+    },
+    {
+      "name": "frontend-slides",
+      "description": "Presentation slides executive deck storyline visual design and board presentation.",
+      "file": "/invented/44/frontend-slides/SKILL.md"
+    },
+    {
+      "name": "pptx",
+      "description": "PowerPoint PPTX presentation slides executive deck investor materials and storytelling.",
+      "file": "/invented/45/pptx/SKILL.md"
+    },
+    {
+      "name": "game-designer-balance",
+      "description": "Game design balance economy tuning progression monetization and player metrics.",
+      "file": "/invented/46/game-designer-balance/SKILL.md"
+    },
+    {
+      "name": "game-designer-systems",
+      "description": "Game designer systems gameplay loops feature design progression and live operations.",
+      "file": "/invented/47/game-designer-systems/SKILL.md"
+    },
+    {
+      "name": "game-director",
+      "description": "Game director game strategy product vision game development and production planning.",
+      "file": "/invented/48/game-director/SKILL.md"
+    },
+    {
+      "name": "ltv-cohort-modeling",
+      "description": "LTV cohort modeling revenue cohorts retention monetization and game economy analysis.",
+      "file": "/invented/49/ltv-cohort-modeling/SKILL.md"
+    },
+    {
+      "name": "event-taxonomy",
+      "description": "Event taxonomy analytics instrumentation event log funnel metrics and tracking plan.",
+      "file": "/invented/50/event-taxonomy/SKILL.md"
+    },
+    {
+      "name": "finance-billing-ops",
+      "description": "Finance billing operations reconciliation revenue billing audit numbers and discrepancy handling.",
+      "file": "/invented/51/finance-billing-ops/SKILL.md"
+    },
+    {
+      "name": "financial-audit",
+      "description": "Financial audit accounting controls compliance reconciliation and audit preparation.",
+      "file": "/invented/52/financial-audit/SKILL.md"
+    },
+    {
+      "name": "unit-economics",
+      "description": "Unit economics budget model cost forecast financial plan revenue and profitability.",
+      "file": "/invented/53/unit-economics/SKILL.md"
+    },
+    {
+      "name": "localization-copy",
+      "description": "Localization Vietnamese translation copy adaptation cultural context and multilingual content.",
+      "file": "/invented/54/localization-copy/SKILL.md"
+    },
+    {
+      "name": "scientific-writing",
+      "description": "Scientific writing literature review research methods citations and academic reports.",
+      "file": "/invented/55/scientific-writing/SKILL.md"
+    },
+    {
+      "name": "logistics-exception-management",
+      "description": "Logistics operations inventory supply chain returns customs and exception management.",
+      "file": "/invented/56/logistics-exception-management/SKILL.md"
+    }
+  ],
+  "suites": {
+    "skill-scenarios.json": [
+      {
+        "id": "S01",
+        "selected": [
+          "exec-typescript"
+        ]
+      },
+      {
+        "id": "S02",
+        "selected": [
+          "exec-go"
+        ]
+      },
+      {
+        "id": "S03",
+        "selected": [
+          "exec-python",
+          "modern-python"
+        ]
+      },
+      {
+        "id": "S04",
+        "selected": [
+          "d3-viz"
+        ]
+      },
+      {
+        "id": "S05",
+        "selected": [
+          "polars",
+          "exploratory-data-analysis",
+          "exec-python"
+        ]
+      },
+      {
+        "id": "S06",
+        "selected": [
+          "statsmodels",
+          "statistical-analysis",
+          "statistical-power"
+        ]
+      },
+      {
+        "id": "S07",
+        "selected": [
+          "exploratory-data-analysis",
+          "exec-python",
+          "polars"
+        ]
+      },
+      {
+        "id": "S08",
+        "selected": [
+          "market-research-reports"
+        ]
+      },
+      {
+        "id": "S09",
+        "selected": [
+          "product-manager",
+          "logistics-exception-management"
+        ]
+      },
+      {
+        "id": "S10",
+        "selected": [
+          "frontend-design",
+          "frontend-slides",
+          "api-design",
+          "design-system",
+          "accessibility"
+        ]
+      },
+      {
+        "id": "S11",
+        "selected": [
+          "frontend-slides",
+          "pptx"
+        ]
+      },
+      {
+        "id": "S12",
+        "selected": []
+      },
+      {
+        "id": "S13",
+        "selected": []
+      },
+      {
+        "id": "S14",
+        "selected": []
+      },
+      {
+        "id": "S15",
+        "selected": []
+      },
+      {
+        "id": "S16",
+        "selected": []
+      },
+      {
+        "id": "S17",
+        "selected": [
+          "pdf"
+        ]
+      },
+      {
+        "id": "S18",
+        "selected": [
+          "xlsx",
+          "docx"
+        ]
+      },
+      {
+        "id": "S19",
+        "selected": [
+          "test-driven-development"
+        ]
+      },
+      {
+        "id": "S20",
+        "selected": [
+          "test-driven-development",
+          "statistical-analysis",
+          "statsmodels"
+        ]
+      },
+      {
+        "id": "S21",
+        "selected": [
+          "systematic-debugging"
+        ]
+      },
+      {
+        "id": "S22",
+        "selected": [
+          "scientific-writing"
+        ]
+      },
+      {
+        "id": "S23",
+        "selected": []
+      },
+      {
+        "id": "S24",
+        "selected": []
+      },
+      {
+        "id": "S25",
+        "selected": []
+      },
+      {
+        "id": "S26",
+        "selected": []
+      },
+      {
+        "id": "S27",
+        "selected": [
+          "game-designer-balance",
+          "game-designer-systems",
+          "game-director",
+          "ltv-cohort-modeling"
+        ]
+      },
+      {
+        "id": "S28",
+        "selected": [
+          "game-designer-systems",
+          "design-system",
+          "game-designer-balance",
+          "game-director"
+        ]
+      },
+      {
+        "id": "S29",
+        "selected": []
+      },
+      {
+        "id": "S30",
+        "selected": []
+      },
+      {
+        "id": "S31",
+        "selected": [
+          "market-research-reports",
+          "dashboard-builder",
+          "d3-viz"
+        ]
+      },
+      {
+        "id": "S32",
+        "selected": []
+      }
+    ],
+    "scenarios-100.json": [
+      {
+        "id": "A01",
+        "selected": [
+          "exploratory-data-analysis",
+          "xlsx"
+        ]
+      },
+      {
+        "id": "A02",
+        "selected": [
+          "polars",
+          "exploratory-data-analysis",
+          "xlsx"
+        ]
+      },
+      {
+        "id": "A03",
+        "selected": [
+          "xlsx"
+        ]
+      },
+      {
+        "id": "A04",
+        "selected": [
+          "xlsx"
+        ]
+      },
+      {
+        "id": "A05",
+        "selected": [
+          "statistical-analysis",
+          "exploratory-data-analysis"
+        ]
+      },
+      {
+        "id": "A06",
+        "selected": [
+          "polars"
+        ]
+      },
+      {
+        "id": "A07",
+        "selected": [
+          "clickhouse-io",
+          "cohort-retention-analysis",
+          "event-taxonomy"
+        ]
+      },
+      {
+        "id": "A08",
+        "selected": [
+          "data-quality-checks",
+          "polars",
+          "xlsx"
+        ]
+      },
+      {
+        "id": "A09",
+        "selected": [
+          "xlsx"
+        ]
+      },
+      {
+        "id": "A10",
+        "selected": [
+          "internal-comms",
+          "article-writing",
+          "scientific-writing",
+          "market-research-reports"
+        ]
+      },
+      {
+        "id": "B11",
+        "selected": [
+          "cohort-retention-analysis",
+          "ltv-cohort-modeling",
+          "warehouse-modeling",
+          "dbt-patterns",
+          "clickhouse-io"
+        ]
+      },
+      {
+        "id": "B12",
+        "selected": [
+          "warehouse-modeling",
+          "dbt-patterns"
+        ]
+      },
+      {
+        "id": "B13",
+        "selected": [
+          "warehouse-modeling",
+          "database-migrations"
+        ]
+      },
+      {
+        "id": "B14",
+        "selected": [
+          "api-design",
+          "backend-patterns"
+        ]
+      },
+      {
+        "id": "B15",
+        "selected": [
+          "dbt-patterns",
+          "warehouse-modeling"
+        ]
+      },
+      {
+        "id": "B16",
+        "selected": [
+          "finance-billing-ops",
+          "financial-audit"
+        ]
+      },
+      {
+        "id": "B17",
+        "selected": [
+          "event-taxonomy",
+          "cohort-retention-analysis",
+          "clickhouse-io"
+        ]
+      },
+      {
+        "id": "B18",
+        "selected": [
+          "event-taxonomy",
+          "cohort-retention-analysis"
+        ]
+      },
+      {
+        "id": "B19",
+        "selected": [
+          "database-migrations"
+        ]
+      },
+      {
+        "id": "B20",
+        "selected": [
+          "warehouse-modeling",
+          "dbt-patterns",
+          "database-migrations"
+        ]
+      },
+      {
+        "id": "C21",
+        "selected": [
+          "statsmodels",
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "C22",
+        "selected": [
+          "statistical-analysis",
+          "statsmodels",
+          "statistical-power"
+        ]
+      },
+      {
+        "id": "C23",
+        "selected": [
+          "statistical-power",
+          "statistical-analysis"
+        ]
+      },
+      {
+        "id": "C24",
+        "selected": []
+      },
+      {
+        "id": "C25",
+        "selected": []
+      },
+      {
+        "id": "C26",
+        "selected": [
+          "exploratory-data-analysis",
+          "systematic-debugging",
+          "statistical-analysis"
+        ]
+      },
+      {
+        "id": "C27",
+        "selected": [
+          "ltv-cohort-modeling"
+        ]
+      },
+      {
+        "id": "C28",
+        "selected": [
+          "media-planning"
+        ]
+      },
+      {
+        "id": "C29",
+        "selected": [
+          "causal-inference"
+        ]
+      },
+      {
+        "id": "C30",
+        "selected": [
+          "security-review",
+          "ltv-cohort-modeling"
+        ]
+      },
+      {
+        "id": "D31",
+        "selected": [
+          "dashboard-builder"
+        ]
+      },
+      {
+        "id": "D32",
+        "selected": [
+          "d3-viz",
+          "exec-python"
+        ]
+      },
+      {
+        "id": "D33",
+        "selected": [
+          "d3-viz"
+        ]
+      },
+      {
+        "id": "D34",
+        "selected": [
+          "pptx",
+          "frontend-slides"
+        ]
+      },
+      {
+        "id": "D35",
+        "selected": [
+          "xlsx"
+        ]
+      },
+      {
+        "id": "D36",
+        "selected": [
+          "article-writing",
+          "internal-comms",
+          "scientific-writing",
+          "market-research-reports"
+        ]
+      },
+      {
+        "id": "D37",
+        "selected": [
+          "docx",
+          "internal-comms",
+          "article-writing",
+          "pdf"
+        ]
+      },
+      {
+        "id": "D38",
+        "selected": [
+          "frontend-design",
+          "frontend-slides"
+        ]
+      },
+      {
+        "id": "D39",
+        "selected": [
+          "design-system",
+          "accessibility",
+          "game-designer-systems"
+        ]
+      },
+      {
+        "id": "D40",
+        "selected": [
+          "xlsx"
+        ]
+      },
+      {
+        "id": "E41",
+        "selected": [
+          "media-planning",
+          "marketing-campaign",
+          "market-research-reports",
+          "brand-voice",
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "E42",
+        "selected": [
+          "brand-voice"
+        ]
+      },
+      {
+        "id": "E43",
+        "selected": [
+          "marketing-campaign",
+          "influencer-strategy",
+          "media-planning",
+          "game-director"
+        ]
+      },
+      {
+        "id": "E44",
+        "selected": [
+          "content-engine"
+        ]
+      },
+      {
+        "id": "E45",
+        "selected": [
+          "brand-voice"
+        ]
+      },
+      {
+        "id": "E46",
+        "selected": [
+          "media-planning"
+        ]
+      },
+      {
+        "id": "E47",
+        "selected": [
+          "product-manager"
+        ]
+      },
+      {
+        "id": "E48",
+        "selected": [
+          "brand-voice",
+          "marketing-campaign"
+        ]
+      },
+      {
+        "id": "E49",
+        "selected": [
+          "influencer-strategy"
+        ]
+      },
+      {
+        "id": "E50",
+        "selected": [
+          "internal-comms"
+        ]
+      },
+      {
+        "id": "F51",
+        "selected": [
+          "media-planning",
+          "performance-marketing"
+        ]
+      },
+      {
+        "id": "F52",
+        "selected": [
+          "media-planning",
+          "performance-marketing"
+        ]
+      },
+      {
+        "id": "F53",
+        "selected": [
+          "media-planning",
+          "performance-marketing"
+        ]
+      },
+      {
+        "id": "F54",
+        "selected": [
+          "brand-voice",
+          "marketing-campaign"
+        ]
+      },
+      {
+        "id": "F55",
+        "selected": [
+          "media-planning",
+          "performance-marketing"
+        ]
+      },
+      {
+        "id": "F56",
+        "selected": [
+          "performance-marketing",
+          "media-planning"
+        ]
+      },
+      {
+        "id": "F57",
+        "selected": [
+          "media-planning"
+        ]
+      },
+      {
+        "id": "F58",
+        "selected": [
+          "unit-economics",
+          "ltv-cohort-modeling"
+        ]
+      },
+      {
+        "id": "F59",
+        "selected": [
+          "causal-inference",
+          "statistical-power"
+        ]
+      },
+      {
+        "id": "F60",
+        "selected": []
+      },
+      {
+        "id": "G61",
+        "selected": [
+          "market-research-reports",
+          "competitive-platform-analysis",
+          "ux-research-wireframing"
+        ]
+      },
+      {
+        "id": "G62",
+        "selected": [
+          "competitive-platform-analysis",
+          "ux-research-wireframing"
+        ]
+      },
+      {
+        "id": "G63",
+        "selected": [
+          "market-research-reports",
+          "ux-research-wireframing",
+          "competitive-platform-analysis",
+          "game-designer-balance",
+          "ltv-cohort-modeling"
+        ]
+      },
+      {
+        "id": "G64",
+        "selected": []
+      },
+      {
+        "id": "G65",
+        "selected": [
+          "statistical-analysis",
+          "statsmodels"
+        ]
+      },
+      {
+        "id": "G66",
+        "selected": [
+          "market-research-reports"
+        ]
+      },
+      {
+        "id": "G67",
+        "selected": [
+          "ux-research-wireframing"
+        ]
+      },
+      {
+        "id": "G68",
+        "selected": [
+          "competitive-platform-analysis",
+          "design-system",
+          "accessibility"
+        ]
+      },
+      {
+        "id": "G69",
+        "selected": [
+          "market-research-reports"
+        ]
+      },
+      {
+        "id": "G70",
+        "selected": [
+          "competitive-platform-analysis"
+        ]
+      },
+      {
+        "id": "H71",
+        "selected": [
+          "seo"
+        ]
+      },
+      {
+        "id": "H72",
+        "selected": [
+          "seo"
+        ]
+      },
+      {
+        "id": "H73",
+        "selected": [
+          "marketing-campaign",
+          "brand-voice"
+        ]
+      },
+      {
+        "id": "H74",
+        "selected": [
+          "marketing-campaign"
+        ]
+      },
+      {
+        "id": "H75",
+        "selected": [
+          "content-engine",
+          "brand-voice"
+        ]
+      },
+      {
+        "id": "H76",
+        "selected": [
+          "content-engine"
+        ]
+      },
+      {
+        "id": "H77",
+        "selected": [
+          "seo"
+        ]
+      },
+      {
+        "id": "H78",
+        "selected": [
+          "article-writing",
+          "content-engine"
+        ]
+      },
+      {
+        "id": "H79",
+        "selected": [
+          "localization-copy",
+          "brand-voice"
+        ]
+      },
+      {
+        "id": "H80",
+        "selected": [
+          "article-writing",
+          "content-engine",
+          "marketing-campaign"
+        ]
+      },
+      {
+        "id": "I81",
+        "selected": [
+          "product-manager"
+        ]
+      },
+      {
+        "id": "I82",
+        "selected": [
+          "product-manager",
+          "game-director"
+        ]
+      },
+      {
+        "id": "I83",
+        "selected": [
+          "game-designer-balance",
+          "ltv-cohort-modeling"
+        ]
+      },
+      {
+        "id": "I84",
+        "selected": []
+      },
+      {
+        "id": "I85",
+        "selected": [
+          "design-system",
+          "game-designer-systems"
+        ]
+      },
+      {
+        "id": "I86",
+        "selected": [
+          "product-manager"
+        ]
+      },
+      {
+        "id": "I87",
+        "selected": [
+          "media-planning"
+        ]
+      },
+      {
+        "id": "I88",
+        "selected": [
+          "dashboard-builder"
+        ]
+      },
+      {
+        "id": "I89",
+        "selected": []
+      },
+      {
+        "id": "I90",
+        "selected": [
+          "unit-economics",
+          "ltv-cohort-modeling"
+        ]
+      },
+      {
+        "id": "J91",
+        "selected": [
+          "content-engine",
+          "d3-viz",
+          "internal-comms",
+          "frontend-design",
+          "frontend-slides"
+        ]
+      },
+      {
+        "id": "J92",
+        "selected": [
+          "exec-python",
+          "modern-python",
+          "dbt-patterns"
+        ]
+      },
+      {
+        "id": "J93",
+        "selected": [
+          "design-system",
+          "accessibility",
+          "game-designer-systems",
+          "frontend-design"
+        ]
+      },
+      {
+        "id": "J94",
+        "selected": [
+          "frontend-slides",
+          "pptx"
+        ]
+      },
+      {
+        "id": "J95",
+        "selected": [
+          "systematic-debugging",
+          "internal-comms"
+        ]
+      },
+      {
+        "id": "J96",
+        "selected": [
+          "localization-copy"
+        ]
+      },
+      {
+        "id": "J97",
+        "selected": []
+      },
+      {
+        "id": "J98",
+        "selected": []
+      },
+      {
+        "id": "J99",
+        "selected": [
+          "statistical-analysis",
+          "exploratory-data-analysis"
+        ]
+      },
+      {
+        "id": "J100",
+        "selected": []
+      }
+    ],
+    "scenarios-multifacet.json": [
+      {
+        "id": "M01",
+        "selected": [
+          "dashboard-builder",
+          "content-engine",
+          "marketing-campaign"
+        ]
+      },
+      {
+        "id": "M02",
+        "selected": [
+          "systematic-debugging",
+          "internal-comms",
+          "exec-typescript",
+          "test-driven-development"
+        ]
+      },
+      {
+        "id": "M03",
+        "selected": [
+          "design-system",
+          "accessibility",
+          "competitive-platform-analysis",
+          "ux-research-wireframing",
+          "game-designer-systems"
+        ]
+      },
+      {
+        "id": "M04",
+        "selected": [
+          "product-manager",
+          "cohort-retention-analysis",
+          "statistical-analysis",
+          "ltv-cohort-modeling"
+        ]
+      },
+      {
+        "id": "M05",
+        "selected": [
+          "statistical-analysis",
+          "article-writing",
+          "internal-comms",
+          "cohort-retention-analysis",
+          "ltv-cohort-modeling",
+          "scientific-writing",
+          "market-research-reports",
+          "docx"
+        ]
+      },
+      {
+        "id": "M06",
+        "selected": [
+          "dashboard-builder",
+          "dbt-patterns",
+          "warehouse-modeling",
+          "database-migrations"
+        ]
+      },
+      {
+        "id": "M07",
+        "selected": [
+          "unit-economics",
+          "marketing-campaign",
+          "influencer-strategy",
+          "media-planning"
+        ]
+      },
+      {
+        "id": "M08",
+        "selected": [
+          "frontend-slides",
+          "market-research-reports",
+          "competitive-platform-analysis",
+          "pptx",
+          "ux-research-wireframing"
+        ]
+      },
+      {
+        "id": "M09",
+        "selected": [
+          "internal-comms",
+          "article-writing"
+        ]
+      },
+      {
+        "id": "M10",
+        "selected": [
+          "dashboard-builder",
+          "event-taxonomy"
+        ]
+      },
+      {
+        "id": "M11",
+        "selected": [
+          "seo"
+        ]
+      },
+      {
+        "id": "M12",
+        "selected": [
+          "api-design",
+          "backend-patterns"
+        ]
+      },
+      {
+        "id": "M13",
+        "selected": [
+          "ux-research-wireframing",
+          "design-system"
+        ]
+      },
+      {
+        "id": "M14",
+        "selected": [
+          "financial-audit",
+          "xlsx",
+          "warehouse-modeling",
+          "finance-billing-ops",
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "M15",
+        "selected": [
+          "internal-comms",
+          "exploratory-data-analysis",
+          "article-writing",
+          "exec-python",
+          "polars",
+          "market-research-reports",
+          "cohort-retention-analysis",
+          "ltv-cohort-modeling",
+          "d3-viz",
+          "clickhouse-io"
+        ]
+      },
+      {
+        "id": "M16",
+        "selected": [
+          "marketing-campaign",
+          "statistical-analysis",
+          "performance-marketing",
+          "statistical-power",
+          "cohort-retention-analysis"
+        ]
+      },
+      {
+        "id": "M17",
+        "selected": [
+          "systematic-debugging",
+          "internal-comms",
+          "test-driven-development",
+          "article-writing"
+        ]
+      },
+      {
+        "id": "M18",
+        "selected": [
+          "product-manager",
+          "market-research-reports",
+          "competitive-platform-analysis",
+          "ux-research-wireframing"
+        ]
+      },
+      {
+        "id": "M19",
+        "selected": [
+          "marketing-campaign",
+          "dashboard-builder",
+          "localization-copy",
+          "content-engine"
+        ]
+      },
+      {
+        "id": "M20",
+        "selected": [
+          "design-system",
+          "market-research-reports",
+          "competitive-platform-analysis",
+          "accessibility",
+          "game-designer-systems",
+          "ux-research-wireframing"
+        ]
+      },
+      {
+        "id": "M21",
+        "selected": [
+          "market-research-reports",
+          "competitive-platform-analysis",
+          "ux-research-wireframing"
+        ]
+      },
+      {
+        "id": "M22",
+        "selected": [
+          "marketing-campaign",
+          "influencer-strategy"
+        ]
+      }
+    ],
+    "scenarios-vi.json": [
+      {
+        "id": "V-A06",
+        "selected": [
+          "polars"
+        ]
+      },
+      {
+        "id": "V-B16",
+        "selected": [
+          "finance-billing-ops",
+          "financial-audit"
+        ]
+      },
+      {
+        "id": "V-C26",
+        "selected": [
+          "exploratory-data-analysis",
+          "systematic-debugging",
+          "statistical-analysis"
+        ]
+      },
+      {
+        "id": "V-D36",
+        "selected": [
+          "article-writing",
+          "internal-comms",
+          "scientific-writing",
+          "market-research-reports"
+        ]
+      },
+      {
+        "id": "V-E46",
+        "selected": [
+          "media-planning"
+        ]
+      },
+      {
+        "id": "V-F56",
+        "selected": [
+          "performance-marketing",
+          "media-planning"
+        ]
+      },
+      {
+        "id": "V-G66",
+        "selected": [
+          "market-research-reports"
+        ]
+      },
+      {
+        "id": "V-H76",
+        "selected": [
+          "content-engine"
+        ]
+      },
+      {
+        "id": "V-I86",
+        "selected": [
+          "product-manager"
+        ]
+      },
+      {
+        "id": "V-J96",
+        "selected": [
+          "localization-copy"
+        ]
+      },
+      {
+        "id": "V-K02",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-K04",
+        "selected": []
+      },
+      {
+        "id": "V-K05",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-K08",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-K10",
+        "selected": []
+      },
+      {
+        "id": "V-K11",
+        "selected": []
+      },
+      {
+        "id": "V-K14",
+        "selected": []
+      },
+      {
+        "id": "V-K16",
+        "selected": [
+          "finance-billing-ops"
+        ]
+      },
+      {
+        "id": "V-K17",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-K20",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-K22",
+        "selected": []
+      },
+      {
+        "id": "V-K23",
+        "selected": []
+      },
+      {
+        "id": "V-L02",
+        "selected": []
+      },
+      {
+        "id": "V-L04",
+        "selected": []
+      },
+      {
+        "id": "V-L05",
+        "selected": [
+          "security-review",
+          "xlsx",
+          "event-taxonomy",
+          "scientific-writing"
+        ]
+      },
+      {
+        "id": "V-L09",
+        "selected": []
+      },
+      {
+        "id": "V-L10",
+        "selected": []
+      },
+      {
+        "id": "V-L12",
+        "selected": []
+      },
+      {
+        "id": "V-L15",
+        "selected": []
+      },
+      {
+        "id": "V-L16",
+        "selected": [
+          "finance-billing-ops",
+          "xlsx"
+        ]
+      },
+      {
+        "id": "V-L18",
+        "selected": []
+      },
+      {
+        "id": "V-L21",
+        "selected": []
+      },
+      {
+        "id": "V-L22",
+        "selected": []
+      },
+      {
+        "id": "V-M02",
+        "selected": []
+      },
+      {
+        "id": "V-M04",
+        "selected": [
+          "docx"
+        ]
+      },
+      {
+        "id": "V-M05",
+        "selected": []
+      },
+      {
+        "id": "V-M08",
+        "selected": []
+      },
+      {
+        "id": "V-M10",
+        "selected": [
+          "financial-audit"
+        ]
+      },
+      {
+        "id": "V-M11",
+        "selected": []
+      },
+      {
+        "id": "V-M14",
+        "selected": []
+      },
+      {
+        "id": "V-M16",
+        "selected": [
+          "finance-billing-ops"
+        ]
+      },
+      {
+        "id": "V-M17",
+        "selected": []
+      },
+      {
+        "id": "V-M20",
+        "selected": [
+          "market-research-reports",
+          "article-writing"
+        ]
+      },
+      {
+        "id": "V-M22",
+        "selected": []
+      },
+      {
+        "id": "V-M23",
+        "selected": []
+      },
+      {
+        "id": "V-N02",
+        "selected": []
+      },
+      {
+        "id": "V-N04",
+        "selected": []
+      },
+      {
+        "id": "V-N05",
+        "selected": []
+      },
+      {
+        "id": "V-N08",
+        "selected": [
+          "financial-audit"
+        ]
+      },
+      {
+        "id": "V-N10",
+        "selected": [
+          "security-review",
+          "financial-audit"
+        ]
+      },
+      {
+        "id": "V-N11",
+        "selected": [
+          "financial-audit"
+        ]
+      },
+      {
+        "id": "V-N15",
+        "selected": []
+      },
+      {
+        "id": "V-N16",
+        "selected": [
+          "scientific-writing"
+        ]
+      },
+      {
+        "id": "V-N17",
+        "selected": []
+      },
+      {
+        "id": "V-N20",
+        "selected": [
+          "data-quality-checks"
+        ]
+      },
+      {
+        "id": "V-N22",
+        "selected": [
+          "statistical-analysis",
+          "systematic-debugging"
+        ]
+      },
+      {
+        "id": "V-O02",
+        "selected": []
+      },
+      {
+        "id": "V-O04",
+        "selected": [
+          "media-planning",
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-O05",
+        "selected": []
+      },
+      {
+        "id": "V-O10",
+        "selected": [
+          "article-writing",
+          "internal-comms"
+        ]
+      },
+      {
+        "id": "V-O13",
+        "selected": [
+          "media-planning"
+        ]
+      },
+      {
+        "id": "V-O16",
+        "selected": []
+      },
+      {
+        "id": "V-O19",
+        "selected": []
+      },
+      {
+        "id": "V-O22",
+        "selected": [
+          "article-writing",
+          "internal-comms",
+          "market-research-reports"
+        ]
+      },
+      {
+        "id": "V-P02",
+        "selected": [
+          "ux-research-wireframing"
+        ]
+      },
+      {
+        "id": "V-P04",
+        "selected": [
+          "clickhouse-io",
+          "ux-research-wireframing"
+        ]
+      },
+      {
+        "id": "V-P05",
+        "selected": [
+          "frontend-design"
+        ]
+      },
+      {
+        "id": "V-P08",
+        "selected": [
+          "ux-research-wireframing"
+        ]
+      },
+      {
+        "id": "V-P10",
+        "selected": []
+      },
+      {
+        "id": "V-P11",
+        "selected": [
+          "design-system",
+          "frontend-design"
+        ]
+      },
+      {
+        "id": "V-P14",
+        "selected": [
+          "ux-research-wireframing"
+        ]
+      },
+      {
+        "id": "V-P16",
+        "selected": []
+      },
+      {
+        "id": "V-P18",
+        "selected": []
+      },
+      {
+        "id": "V-P21",
+        "selected": [
+          "test-driven-development",
+          "game-director",
+          "product-manager"
+        ]
+      },
+      {
+        "id": "V-P22",
+        "selected": []
+      },
+      {
+        "id": "V-P23",
+        "selected": []
+      },
+      {
+        "id": "V-Q02",
+        "selected": []
+      },
+      {
+        "id": "V-Q04",
+        "selected": [
+          "event-taxonomy"
+        ]
+      },
+      {
+        "id": "V-Q05",
+        "selected": [
+          "seo"
+        ]
+      },
+      {
+        "id": "V-Q07",
+        "selected": []
+      },
+      {
+        "id": "V-Q09",
+        "selected": []
+      },
+      {
+        "id": "V-Q10",
+        "selected": [
+          "cohort-retention-analysis",
+          "clickhouse-io",
+          "ltv-cohort-modeling"
+        ]
+      },
+      {
+        "id": "V-Q11",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-Q14",
+        "selected": [
+          "event-taxonomy"
+        ]
+      },
+      {
+        "id": "V-Q16",
+        "selected": []
+      },
+      {
+        "id": "V-Q19",
+        "selected": [
+          "systematic-debugging",
+          "cohort-retention-analysis",
+          "clickhouse-io",
+          "ltv-cohort-modeling"
+        ]
+      },
+      {
+        "id": "V-Q22",
+        "selected": [
+          "internal-comms"
+        ]
+      },
+      {
+        "id": "V-R02",
+        "selected": []
+      },
+      {
+        "id": "V-R04",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-R05",
+        "selected": [
+          "media-planning"
+        ]
+      },
+      {
+        "id": "V-R07",
+        "selected": []
+      },
+      {
+        "id": "V-R09",
+        "selected": []
+      },
+      {
+        "id": "V-R10",
+        "selected": []
+      },
+      {
+        "id": "V-R12",
+        "selected": []
+      },
+      {
+        "id": "V-R14",
+        "selected": [
+          "data-quality-checks"
+        ]
+      },
+      {
+        "id": "V-R16",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-R18",
+        "selected": []
+      },
+      {
+        "id": "V-R21",
+        "selected": []
+      },
+      {
+        "id": "V-R22",
+        "selected": []
+      },
+      {
+        "id": "V-R23",
+        "selected": [
+          "performance-marketing"
+        ]
+      },
+      {
+        "id": "V-S03",
+        "selected": [
+          "systematic-debugging"
+        ]
+      },
+      {
+        "id": "V-S04",
+        "selected": []
+      },
+      {
+        "id": "V-S07",
+        "selected": []
+      },
+      {
+        "id": "V-S10",
+        "selected": []
+      },
+      {
+        "id": "V-S11",
+        "selected": []
+      },
+      {
+        "id": "V-S15",
+        "selected": []
+      },
+      {
+        "id": "V-S16",
+        "selected": []
+      },
+      {
+        "id": "V-S18",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-S22",
+        "selected": []
+      },
+      {
+        "id": "V-T04",
+        "selected": []
+      },
+      {
+        "id": "V-T09",
+        "selected": []
+      },
+      {
+        "id": "V-T10",
+        "selected": [
+          "seo"
+        ]
+      },
+      {
+        "id": "V-T16",
+        "selected": []
+      },
+      {
+        "id": "V-T20",
+        "selected": []
+      },
+      {
+        "id": "V-T22",
+        "selected": []
+      },
+      {
+        "id": "V-U04",
+        "selected": []
+      },
+      {
+        "id": "V-U08",
+        "selected": []
+      },
+      {
+        "id": "V-U10",
+        "selected": []
+      },
+      {
+        "id": "V-U14",
+        "selected": []
+      },
+      {
+        "id": "V-U16",
+        "selected": []
+      },
+      {
+        "id": "V-U18",
+        "selected": []
+      },
+      {
+        "id": "V-U22",
+        "selected": []
+      },
+      {
+        "id": "V-U23",
+        "selected": []
+      },
+      {
+        "id": "V-V03",
+        "selected": []
+      },
+      {
+        "id": "V-V04",
+        "selected": []
+      },
+      {
+        "id": "V-V07",
+        "selected": []
+      },
+      {
+        "id": "V-V10",
+        "selected": [
+          "frontend-slides",
+          "pptx"
+        ]
+      },
+      {
+        "id": "V-V13",
+        "selected": []
+      },
+      {
+        "id": "V-V16",
+        "selected": []
+      },
+      {
+        "id": "V-V17",
+        "selected": []
+      },
+      {
+        "id": "V-V22",
+        "selected": []
+      },
+      {
+        "id": "V-V23",
+        "selected": [
+          "article-writing"
+        ]
+      },
+      {
+        "id": "V-W03",
+        "selected": []
+      },
+      {
+        "id": "V-W04",
+        "selected": []
+      },
+      {
+        "id": "V-W10",
+        "selected": []
+      },
+      {
+        "id": "V-W14",
+        "selected": []
+      },
+      {
+        "id": "V-W16",
+        "selected": []
+      },
+      {
+        "id": "V-W20",
+        "selected": []
+      },
+      {
+        "id": "V-X03",
+        "selected": []
+      },
+      {
+        "id": "V-X04",
+        "selected": []
+      },
+      {
+        "id": "V-X09",
+        "selected": []
+      },
+      {
+        "id": "V-X10",
+        "selected": []
+      },
+      {
+        "id": "V-X15",
+        "selected": []
+      },
+      {
+        "id": "V-X16",
+        "selected": []
+      },
+      {
+        "id": "V-X25",
+        "selected": []
+      },
+      {
+        "id": "V-Y03",
+        "selected": [
+          "game-director",
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-Y04",
+        "selected": [
+          "systematic-debugging"
+        ]
+      },
+      {
+        "id": "V-Y07",
+        "selected": [
+          "data-quality-checks"
+        ]
+      },
+      {
+        "id": "V-Y10",
+        "selected": []
+      },
+      {
+        "id": "V-Y14",
+        "selected": []
+      },
+      {
+        "id": "V-Y16",
+        "selected": []
+      },
+      {
+        "id": "V-Y22",
+        "selected": [
+          "game-director"
+        ]
+      },
+      {
+        "id": "V-Y24",
+        "selected": []
+      },
+      {
+        "id": "V-Z04",
+        "selected": []
+      },
+      {
+        "id": "V-Z08",
+        "selected": [
+          "financial-audit"
+        ]
+      },
+      {
+        "id": "V-Z10",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "V-Z18",
+        "selected": [
+          "media-planning",
+          "unit-economics"
+        ]
+      }
+    ],
+    "scenarios-holdout.json": [
+      {
+        "id": "H001",
+        "selected": [
+          "dashboard-builder"
+        ]
+      },
+      {
+        "id": "H002",
+        "selected": [
+          "warehouse-modeling"
+        ]
+      },
+      {
+        "id": "H003",
+        "selected": [
+          "statsmodels",
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "H004",
+        "selected": [
+          "statistical-analysis",
+          "statsmodels",
+          "statistical-power"
+        ]
+      },
+      {
+        "id": "H005",
+        "selected": [
+          "statistical-power"
+        ]
+      },
+      {
+        "id": "H006",
+        "selected": [
+          "data-quality-checks"
+        ]
+      },
+      {
+        "id": "H007",
+        "selected": [
+          "cohort-retention-analysis",
+          "ltv-cohort-modeling"
+        ]
+      },
+      {
+        "id": "H008",
+        "selected": [
+          "causal-inference"
+        ]
+      },
+      {
+        "id": "H009",
+        "selected": [
+          "xlsx",
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "H010",
+        "selected": [
+          "event-taxonomy",
+          "cohort-retention-analysis"
+        ]
+      },
+      {
+        "id": "H011",
+        "selected": [
+          "database-migrations",
+          "game-director",
+          "warehouse-modeling"
+        ]
+      },
+      {
+        "id": "H012",
+        "selected": [
+          "api-design",
+          "backend-patterns",
+          "exec-typescript"
+        ]
+      },
+      {
+        "id": "H013",
+        "selected": [
+          "docker-patterns",
+          "kubernetes-patterns"
+        ]
+      },
+      {
+        "id": "H014",
+        "selected": []
+      },
+      {
+        "id": "H015",
+        "selected": []
+      },
+      {
+        "id": "H016",
+        "selected": [
+          "data-quality-checks",
+          "game-director"
+        ]
+      },
+      {
+        "id": "H017",
+        "selected": [
+          "api-design"
+        ]
+      },
+      {
+        "id": "H018",
+        "selected": []
+      },
+      {
+        "id": "H019",
+        "selected": [
+          "backend-patterns",
+          "api-design",
+          "exec-typescript"
+        ]
+      },
+      {
+        "id": "H020",
+        "selected": [
+          "api-design"
+        ]
+      },
+      {
+        "id": "H021",
+        "selected": [
+          "marketing-campaign",
+          "localization-copy",
+          "content-engine",
+          "brand-voice"
+        ]
+      },
+      {
+        "id": "H022",
+        "selected": [
+          "seo",
+          "database-migrations",
+          "warehouse-modeling"
+        ]
+      },
+      {
+        "id": "H023",
+        "selected": [
+          "performance-marketing"
+        ]
+      },
+      {
+        "id": "H024",
+        "selected": [
+          "media-planning"
+        ]
+      },
+      {
+        "id": "H025",
+        "selected": [
+          "test-driven-development",
+          "causal-inference",
+          "warehouse-modeling",
+          "dbt-patterns",
+          "media-planning"
+        ]
+      },
+      {
+        "id": "H026",
+        "selected": [
+          "influencer-strategy"
+        ]
+      },
+      {
+        "id": "H027",
+        "selected": [
+          "seo"
+        ]
+      },
+      {
+        "id": "H028",
+        "selected": [
+          "brand-voice"
+        ]
+      },
+      {
+        "id": "H029",
+        "selected": [
+          "localization-copy"
+        ]
+      },
+      {
+        "id": "H030",
+        "selected": [
+          "localization-copy",
+          "content-engine"
+        ]
+      },
+      {
+        "id": "H031",
+        "selected": [
+          "product-manager",
+          "api-design"
+        ]
+      },
+      {
+        "id": "H032",
+        "selected": [
+          "product-manager",
+          "systematic-debugging"
+        ]
+      },
+      {
+        "id": "H033",
+        "selected": [
+          "event-taxonomy"
+        ]
+      },
+      {
+        "id": "H034",
+        "selected": [
+          "product-manager"
+        ]
+      },
+      {
+        "id": "H035",
+        "selected": []
+      },
+      {
+        "id": "H036",
+        "selected": [
+          "ux-research-wireframing",
+          "statistical-analysis",
+          "clickhouse-io"
+        ]
+      },
+      {
+        "id": "H037",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "H038",
+        "selected": []
+      },
+      {
+        "id": "H039",
+        "selected": [
+          "seo"
+        ]
+      },
+      {
+        "id": "H040",
+        "selected": []
+      },
+      {
+        "id": "H041",
+        "selected": [
+          "financial-audit"
+        ]
+      },
+      {
+        "id": "H042",
+        "selected": [
+          "financial-audit"
+        ]
+      },
+      {
+        "id": "H043",
+        "selected": []
+      },
+      {
+        "id": "H044",
+        "selected": []
+      },
+      {
+        "id": "H045",
+        "selected": []
+      },
+      {
+        "id": "H046",
+        "selected": []
+      },
+      {
+        "id": "H047",
+        "selected": []
+      },
+      {
+        "id": "H048",
+        "selected": []
+      },
+      {
+        "id": "H049",
+        "selected": []
+      },
+      {
+        "id": "H050",
+        "selected": [
+          "pptx",
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "H051",
+        "selected": []
+      },
+      {
+        "id": "H052",
+        "selected": []
+      },
+      {
+        "id": "H053",
+        "selected": []
+      },
+      {
+        "id": "H054",
+        "selected": [
+          "event-taxonomy"
+        ]
+      },
+      {
+        "id": "H055",
+        "selected": []
+      },
+      {
+        "id": "H056",
+        "selected": [
+          "api-design"
+        ]
+      },
+      {
+        "id": "H057",
+        "selected": [
+          "event-taxonomy"
+        ]
+      },
+      {
+        "id": "H058",
+        "selected": []
+      },
+      {
+        "id": "H059",
+        "selected": []
+      },
+      {
+        "id": "H060",
+        "selected": []
+      },
+      {
+        "id": "H061",
+        "selected": [
+          "warehouse-modeling",
+          "frontend-design",
+          "seo",
+          "clickhouse-io",
+          "dbt-patterns"
+        ]
+      },
+      {
+        "id": "H062",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "H063",
+        "selected": []
+      },
+      {
+        "id": "H064",
+        "selected": []
+      },
+      {
+        "id": "H065",
+        "selected": []
+      },
+      {
+        "id": "H066",
+        "selected": []
+      },
+      {
+        "id": "H067",
+        "selected": [
+          "game-director",
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "H068",
+        "selected": [
+          "systematic-debugging"
+        ]
+      },
+      {
+        "id": "H069",
+        "selected": []
+      },
+      {
+        "id": "H070",
+        "selected": []
+      },
+      {
+        "id": "H071",
+        "selected": [
+          "accessibility",
+          "financial-audit"
+        ]
+      },
+      {
+        "id": "H072",
+        "selected": [
+          "ux-research-wireframing",
+          "statistical-analysis",
+          "clickhouse-io",
+          "systematic-debugging"
+        ]
+      },
+      {
+        "id": "H073",
+        "selected": []
+      },
+      {
+        "id": "H074",
+        "selected": [
+          "design-system",
+          "frontend-design",
+          "game-designer-systems",
+          "frontend-slides"
+        ]
+      },
+      {
+        "id": "H075",
+        "selected": []
+      },
+      {
+        "id": "H076",
+        "selected": []
+      },
+      {
+        "id": "H077",
+        "selected": [
+          "frontend-design",
+          "frontend-slides",
+          "accessibility"
+        ]
+      },
+      {
+        "id": "H078",
+        "selected": [
+          "ux-research-wireframing",
+          "clickhouse-io"
+        ]
+      },
+      {
+        "id": "H079",
+        "selected": []
+      },
+      {
+        "id": "H080",
+        "selected": []
+      },
+      {
+        "id": "H081",
+        "selected": [
+          "event-taxonomy"
+        ]
+      },
+      {
+        "id": "H082",
+        "selected": [
+          "scientific-writing"
+        ]
+      },
+      {
+        "id": "H083",
+        "selected": []
+      },
+      {
+        "id": "H084",
+        "selected": []
+      },
+      {
+        "id": "H085",
+        "selected": [
+          "scientific-writing"
+        ]
+      },
+      {
+        "id": "H086",
+        "selected": []
+      },
+      {
+        "id": "H087",
+        "selected": []
+      },
+      {
+        "id": "H088",
+        "selected": []
+      },
+      {
+        "id": "H089",
+        "selected": []
+      },
+      {
+        "id": "H090",
+        "selected": [
+          "ux-research-wireframing",
+          "scientific-writing"
+        ]
+      },
+      {
+        "id": "H091",
+        "selected": [
+          "unit-economics",
+          "marketing-campaign",
+          "media-planning"
+        ]
+      },
+      {
+        "id": "H092",
+        "selected": [
+          "warehouse-modeling",
+          "exploratory-data-analysis",
+          "ltv-cohort-modeling",
+          "dbt-patterns",
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "H093",
+        "selected": []
+      },
+      {
+        "id": "H094",
+        "selected": [
+          "ux-research-wireframing",
+          "product-manager",
+          "game-director"
+        ]
+      },
+      {
+        "id": "H095",
+        "selected": []
+      },
+      {
+        "id": "H096",
+        "selected": [
+          "statistical-analysis",
+          "statsmodels",
+          "causal-inference",
+          "dbt-patterns"
+        ]
+      },
+      {
+        "id": "H097",
+        "selected": []
+      },
+      {
+        "id": "H098",
+        "selected": [
+          "unit-economics"
+        ]
+      },
+      {
+        "id": "H099",
+        "selected": [
+          "design-system",
+          "game-designer-systems",
+          "accessibility",
+          "frontend-design"
+        ]
+      },
+      {
+        "id": "H100",
+        "selected": [
+          "product-manager",
+          "game-director"
+        ]
+      }
+    ]
+  }
+}

@@ -11,13 +11,48 @@ import {
 } from './skill-domains.mjs'
 
 const MIN_TERM_LEN = 3 // shorter terms are noise ("ts", "go" handled as explicit terms upstream)
-const NAME_WORD = 5
-const NAME_PHRASE = 5
-const DESC_WORD = 2
-const DESC_PHRASE = 3
-const SUBSTRING = 1
+// EVOLVE-BLOCK-START
+export const DEFAULT_TUNING = Object.freeze({
+  nameWord: 5,
+  namePhrase: 5,
+  descWord: 2,
+  descPhrase: 3,
+  substring: 1,
+  partialFactor: 0.6,
+  idfPivot: 2.5,
+  idfMin: 0.5,
+  idfMax: 3,
+  relativeScoreFloor: 0.2,
+})
+
+export const TUNING_BOUNDS = Object.freeze({
+  nameWord: Object.freeze([0, 20]),
+  namePhrase: Object.freeze([0, 20]),
+  descWord: Object.freeze([0, 20]),
+  descPhrase: Object.freeze([0, 20]),
+  substring: Object.freeze([0, 10]),
+  partialFactor: Object.freeze([0, 1]),
+  idfPivot: Object.freeze([0.1, 10]),
+  idfMin: Object.freeze([0, 10]),
+  idfMax: Object.freeze([0, 10]),
+  relativeScoreFloor: Object.freeze([0, 0.99]),
+})
+// EVOLVE-BLOCK-END
+
 // Missed phrases retain reduced constituent-word credit without rivaling exact phrases.
-export const PARTIAL_FACTOR = 0.6
+export const PARTIAL_FACTOR = DEFAULT_TUNING.partialFactor
+
+const TUNING_KEYS = Object.keys(DEFAULT_TUNING)
+
+function resolveTuning(tuning = {}) {
+  const input = tuning && typeof tuning === 'object' ? tuning : {}
+  for (const key of TUNING_KEYS) {
+    if (input[key] !== undefined && !Number.isFinite(input[key])) {
+      throw new RangeError(`tuning.${key} must be finite`)
+    }
+  }
+  return { ...DEFAULT_TUNING, ...input }
+}
 
 // Conservative morphological folding so a term matches the same concept written in
 // another form ("project management" vs "project-manager", "analytics" vs "analysis").
@@ -80,10 +115,6 @@ const stemPhrase = (text) => normalizePhrase(text).split(' ').map(stem).join(' '
 // IDF weighting: a term that only a few skills mention ("incrementality", "gacha")
 // is far more diagnostic than one half the index uses ("data", "analysis"). Without
 // it, generic skills outrank specialists on a flat name/desc score.
-const IDF_PIVOT = 2.5 // a mid-frequency term lands near weight 1.0
-const IDF_MIN = 0.5
-const IDF_MAX = 3
-
 /** Document frequency of every stemmed token across the index (names + descriptions). */
 export function buildDocFrequency(entries) {
   const df = new Map()
@@ -96,21 +127,25 @@ export function buildDocFrequency(entries) {
 }
 
 /** Weight one term by rarity, clamped so a typo can't dominate and a common word still counts. */
-export function idfWeight(term, stats) {
+export function idfWeight(term, stats, tuning = {}) {
+  const resolvedTuning = resolveTuning(tuning)
   if (!stats?.total) return 1
   const raw = Math.log((stats.total + 1) / ((stats.df.get(stem(term)) ?? 0) + 1))
-  return Math.min(Math.max(raw / IDF_PIVOT, IDF_MIN), IDF_MAX)
+  return Math.min(
+    Math.max(raw / resolvedTuning.idfPivot, resolvedTuning.idfMin),
+    resolvedTuning.idfMax,
+  )
 }
 
 // A phrase is as diagnostic as its rarest word.
-const phraseWeight = (phrase, stats) =>
-  stats ? Math.max(...phrase.split(' ').map((word) => idfWeight(word, stats))) : 1
+const phraseWeight = (phrase, stats, tuning) =>
+  stats ? Math.max(...phrase.split(' ').map((word) => idfWeight(word, stats, tuning))) : 1
 
 // The same word reached by several terms ("performance review" + "review process")
 // is ONE piece of evidence, not two: word-level credit and hit attribution are
 // deduplicated per entry via `credited` ({ name: Set, desc: Set } of stemmed words).
 // Exact phrase matches are a different evidence class and are never deduplicated.
-function scorePartialPhrase(phrase, nameWords, descWords, stats, partialFactor, credited) {
+function scorePartialPhrase(phrase, nameWords, descWords, stats, tuning, credited) {
   let score = 0
   let nameWordHits = 0
   let totalHits = 0
@@ -119,18 +154,18 @@ function scorePartialPhrase(phrase, nameWords, descWords, stats, partialFactor, 
 
   for (const word of phrase.split(' ')) {
     if (word.length < MIN_TERM_LEN) continue
-    const weight = idfWeight(word, stats)
+    const weight = idfWeight(word, stats, tuning)
     if (nameWords.has(word)) {
       if (credited.name.has(word)) continue
       credited.name.add(word)
-      score += NAME_WORD * weight * partialFactor
+      score += tuning.nameWord * weight * tuning.partialFactor
       nameWordHits++
       totalHits++
       maxMatchedWeight = Math.max(maxMatchedWeight, weight)
     } else if (descWords.has(word)) {
       if (credited.desc.has(word)) continue
       credited.desc.add(word)
-      score += DESC_WORD * weight * partialFactor
+      score += tuning.descWord * weight * tuning.partialFactor
       totalHits++
       maxMatchedWeight = Math.max(maxMatchedWeight, weight)
       minMatchedDescDf = Math.min(minMatchedDescDf, stats?.df.get(word) ?? Infinity)
@@ -140,19 +175,19 @@ function scorePartialPhrase(phrase, nameWords, descWords, stats, partialFactor, 
   return { score, nameWordHits, totalHits, maxMatchedWeight, minMatchedDescDf }
 }
 
-function scoreWordTerm(term, stemmed, nameWords, descWords, descText, stats, credited) {
-  const weight = idfWeight(term, stats)
+function scoreWordTerm(term, stemmed, nameWords, descWords, descText, stats, tuning, credited) {
+  const weight = idfWeight(term, stats, tuning)
   if (nameWords.has(stemmed)) {
     if (credited.name.has(stemmed)) return { score: 0, nameHits: 0, descHits: 0 }
     credited.name.add(stemmed)
-    return { score: NAME_WORD * weight, nameHits: 1, descHits: 0 }
+    return { score: tuning.nameWord * weight, nameHits: 1, descHits: 0 }
   }
   if (descWords.has(stemmed)) {
     if (credited.desc.has(stemmed)) return { score: 0, nameHits: 0, descHits: 0 }
     credited.desc.add(stemmed)
-    return { score: DESC_WORD * weight, nameHits: 0, descHits: 1, descDf: stats?.df.get(stemmed) ?? Infinity }
+    return { score: tuning.descWord * weight, nameHits: 0, descHits: 1, descDf: stats?.df.get(stemmed) ?? Infinity }
   }
-  const score = term.length >= MIN_TERM_LEN && descText.includes(term) ? SUBSTRING * weight : 0
+  const score = term.length >= MIN_TERM_LEN && descText.includes(term) ? tuning.substring * weight : 0
   return { score, nameHits: 0, descHits: 0 }
 }
 
@@ -162,12 +197,12 @@ function scoreWordTerm(term, stemmed, nameWords, descWords, descText, stats, cre
  *   for ranking, the relevance floor, and downstream shortlist attribution.
  */
 export function matchDetail(entry, terms, stats = null, tuning = {}) {
+  const resolvedTuning = resolveTuning(tuning)
   const nameWords = new Set(words(entry.name))
   const descWords = new Set(words(entry.description))
   const descText = entry.description.toLowerCase()
   const nameNorm = stemPhrase(entry.name)
   const descNorm = stemPhrase(entry.description)
-  const partialFactor = tuning.partialFactor ?? PARTIAL_FACTOR
 
   let score = 0
   let nameHits = 0
@@ -208,17 +243,17 @@ export function matchDetail(entry, terms, stats = null, tuning = {}) {
       const phrase = stemPhrase(term)
       // Score phrases by specificity: a longer phrase hit outranks a single generic word.
       const phraseWords = phrase.split(' ').length
-      const weight = phraseWeight(phrase, stats)
+      const weight = phraseWeight(phrase, stats, resolvedTuning)
       if (nameNorm.includes(phrase)) {
-        score += (NAME_PHRASE + (phraseWords - 1) * DESC_PHRASE) * weight
+        score += (resolvedTuning.namePhrase + (phraseWords - 1) * resolvedTuning.descPhrase) * weight
         nameHits++
         termWeight = weight
       } else if (descNorm.includes(phrase)) {
-        score += (DESC_PHRASE + (phraseWords - 1) * DESC_WORD) * weight
+        score += (resolvedTuning.descPhrase + (phraseWords - 1) * resolvedTuning.descWord) * weight
         phraseHits++
         termWeight = weight
       } else {
-        const partial = scorePartialPhrase(phrase, nameWords, descWords, stats, partialFactor, credited)
+        const partial = scorePartialPhrase(phrase, nameWords, descWords, stats, resolvedTuning, credited)
         score += partial.score
         if (partial.nameWordHits >= 2) nameHits++
         else if (partial.totalHits >= 2) phraseHits++
@@ -227,11 +262,11 @@ export function matchDetail(entry, terms, stats = null, tuning = {}) {
         minDescDf = Math.min(minDescDf, partial.minMatchedDescDf)
       }
     } else {
-      const wordMatch = scoreWordTerm(term, stemmed, nameWords, descWords, descText, stats, credited)
+      const wordMatch = scoreWordTerm(term, stemmed, nameWords, descWords, descText, stats, resolvedTuning, credited)
       score += wordMatch.score
       nameHits += wordMatch.nameHits
       descHits += wordMatch.descHits
-      if (wordMatch.score > 0) termWeight = idfWeight(term, stats)
+      if (wordMatch.score > 0) termWeight = idfWeight(term, stats, resolvedTuning)
       if (wordMatch.descDf !== undefined) minDescDf = Math.min(minDescDf, wordMatch.descDf)
     }
 
@@ -240,7 +275,7 @@ export function matchDetail(entry, terms, stats = null, tuning = {}) {
       maxTermWeight = Math.max(maxTermWeight, termWeight)
     }
   }
-  const genericOnly = classifyGenericOnly(entry, orderedTerms, matchedTerms, stats, tuning)
+  const genericOnly = classifyGenericOnly(entry, orderedTerms, matchedTerms, stats, resolvedTuning)
   return { score, nameHits, phraseHits, descHits, maxTermWeight, minDescDf, matchedTerms, genericOnly,
     corpusTotal: stats?.total ?? 0 }
 }
@@ -274,7 +309,8 @@ function classifyGenericOnly(entry, terms, matchedTerms, stats, tuning) {
 
 /** Score one index entry against derived terms (higher = more relevant; 0 = no match). */
 export function scoreEntry(entry, terms, stats = null, tuning = {}) {
-  return matchDetail(entry, terms, stats, tuning).score
+  const resolvedTuning = resolveTuning(tuning)
+  return matchDetail(entry, terms, stats, resolvedTuning).score
 }
 
 // A single description hit qualifies only when the matched term is this diagnostic
@@ -310,7 +346,7 @@ export const DEFAULT_TOKEN_BUDGET = Math.round(CONTEXT_WINDOW_TOKENS * 0.03) // 
 export const DISTILL_TOKENS_CAP = 600
 const DEFAULT_SKILL_TOKENS = DISTILL_TOKENS_CAP // fallback when real size is unknown
 /** Relative score cutoff against each facet's top score; 0 disables it. */
-export const RELATIVE_SCORE_FLOOR = 0.2
+export const RELATIVE_SCORE_FLOOR = DEFAULT_TUNING.relativeScoreFloor
 
 /** English function words removed from raw requests. */
 export const ENGLISH_STOP_WORDS = Object.freeze(new Set(
@@ -397,8 +433,9 @@ function firstFacetPick(ranked, chosen, used, tokenBudget, reserveFor, sizeOf) {
 
 /** Rank entries by descending score, dropping non-matches. Ties broken by name. */
 export function rankCandidates(entries, terms, stats = buildDocFrequency(entries), tuning = {}) {
+  const resolvedTuning = resolveTuning(tuning)
   return entries
-    .map((entry) => ({ ...entry, score: scoreEntry(entry, terms, stats, tuning) }))
+    .map((entry) => ({ ...entry, score: scoreEntry(entry, terms, stats, resolvedTuning) }))
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
 }
@@ -415,19 +452,20 @@ export function selectSkills(
   termsOrFacets,
   { tokenBudget = DEFAULT_TOKEN_BUDGET, tokensOf, tuning = {}, domainTags = DOMAIN_TAGS_DEFAULT } = {},
 ) {
+  const resolvedTuning = resolveTuning(tuning)
   const facets = normalizeFacets(termsOrFacets)
   const stats = buildDocFrequency(entries)
   const requestDomainSet = domainTags
     ? new Set(requestDomains(facets.flatMap((facet) => facet.terms).join(' ')))
     : null
-  const relativeScoreFloor = tuning.relativeScoreFloor ?? RELATIVE_SCORE_FLOOR
+  const relativeScoreFloor = resolvedTuning.relativeScoreFloor
   if (!Number.isFinite(relativeScoreFloor) || relativeScoreFloor < 0 || relativeScoreFloor >= 1) {
     throw new RangeError('tuning.relativeScoreFloor must be finite and in [0, 1)')
   }
   const rankFor = (terms) => {
     const ranked = entries
       .map((entry) => {
-        const detail = matchDetail(entry, terms, stats, tuning)
+        const detail = matchDetail(entry, terms, stats, resolvedTuning)
         const tagged = requestDomainSet && (SKILL_DOMAINS[entry.name] ?? [])
           .some((domain) => requestDomainSet.has(domain))
         return { ...entry, ...detail, score: tagged ? detail.score * (1 + DOMAIN_TAG_BOOST) : detail.score }
