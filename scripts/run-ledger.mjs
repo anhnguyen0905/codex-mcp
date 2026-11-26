@@ -90,6 +90,7 @@ export function parseAppendArgs(argv) {
     throw new Error('invalid language mode')
   }
   const causes = values.causes === undefined ? undefined : parseCauses(values.causes)
+  if (values.causes !== undefined && causes.length === 0) throw new Error('--causes requires at least one cause')
   return {
     ...values,
     fixRounds: Number(values.fixrounds),

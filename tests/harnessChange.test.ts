@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -131,6 +131,55 @@ describe('harness change', () => {
     expect(dueExit).toBe(2)
     expect(addExit).toBe(2)
     expect(readFileSync(store, 'utf8')).toBe(before)
+  })
+
+  it('rejects invalid timestamps in change and verdict records', () => {
+    // Arrange
+    const { store, ledger } = setup()
+    const invalid = { ...validSeed(), ts: '2026-01-01' }
+    writeFileSync(store, `${JSON.stringify(invalid)}\n`)
+    const error = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+
+    // Act
+    const dueExit = main(['due'], envFor(store, ledger))
+    const addExit = main(addArgs(), envFor(store, ledger))
+
+    // Assert
+    expect(dueExit).toBe(2)
+    expect(addExit).toBe(2)
+    expect(error.mock.calls).toEqual([
+      ['malformed harness changes store\n'],
+      ['malformed harness changes store\n'],
+    ])
+
+    // Arrange
+    writeFileSync(store, `${JSON.stringify(validSeed())}\n${JSON.stringify({ schemaVersion: 1, kind: 'verdict', id: 'HC-1', ts: '2026-01-01', result: 'confirmed', note: 'observed' })}\n`)
+
+    // Act
+    const verdictExit = main(['verdict', '--id', 'HC-1', '--result', 'confirmed', '--note', 'again'], envFor(store, ledger))
+
+    // Assert
+    expect(verdictExit).toBe(2)
+  })
+
+  it('rejects an unreadable directory store for every command', () => {
+    // Arrange
+    const { store, ledger } = setup()
+    mkdirSync(store)
+    const error = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const env = envFor(store, ledger)
+
+    // Act
+    const dueExit = main(['due'], env)
+    const addExit = main(addArgs(), env)
+    const verdictExit = main(['verdict', '--id', 'HC-1', '--result', 'confirmed', '--note', 'observed'], env)
+
+    // Assert
+    expect(dueExit).toBe(2)
+    expect(addExit).toBe(2)
+    expect(verdictExit).toBe(2)
+    expect(error.mock.calls).toHaveLength(3)
+    expect(error.mock.calls.every(([line]) => typeof line === 'string' && line.endsWith('\n'))).toBe(true)
   })
 
   it('sorts due changes by numeric id order', () => {

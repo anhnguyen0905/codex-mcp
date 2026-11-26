@@ -7,6 +7,7 @@ import { ledgerPath, matchesFilters, median, parseFilter, readLedger } from './r
 
 const DEFAULT_CHANGES = path.join(os.homedir(), '.codex-mcp', 'harness-changes.jsonl')
 const RESULTS = new Set(['confirmed', 'refuted', 'inconclusive'])
+const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
 
 const valueAfter = (argv, index) => argv[index + 1] && !argv[index + 1].startsWith('--') ? argv[index + 1] : undefined
 
@@ -46,7 +47,8 @@ const parseStore = (filePath) => {
 }
 
 const validStoreRecord = (record) => {
-  if (!record || record.schemaVersion !== 1 || !/^HC-[0-9]+$/.test(record.id) || typeof record.ts !== 'string') return false
+  if (!record || record.schemaVersion !== 1 || !/^HC-[0-9]+$/.test(record.id)
+    || typeof record.ts !== 'string' || !ISO_DATE_TIME.test(record.ts) || !Number.isFinite(Date.parse(record.ts))) return false
   if (record.kind === 'verdict') return RESULTS.has(record.result) && typeof record.note === 'string' && record.note.length > 0
   return record.kind === 'change' && typeof record.title === 'string' && typeof record.evidence === 'string'
     && isCause(record.cause) && typeof record.fix === 'string' && typeof record.expect === 'string'

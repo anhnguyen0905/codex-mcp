@@ -87,6 +87,24 @@ describe('run ledger', () => {
     expect(readFileSync(file, 'utf8')).toBe(before)
   })
 
+  it('rejects empty causes without changing the ledger', () => {
+    // Arrange
+    const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
+    const file = join(dir, 'ledger.jsonl')
+    process.env.CODEX_MCP_RUN_LEDGER = file
+    expect(main(cliArgs())).toBe(0)
+    const before = readFileSync(file, 'utf8')
+
+    // Act
+    const error = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const exitCode = main(cliArgs(['--causes', ' , ']))
+
+    // Assert
+    expect(exitCode).toBe(2)
+    expect(error.mock.calls).toEqual([['--causes requires at least one cause\n']])
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+
   it.each([
     ['hello world', 'en'],
     ['xin chào tiếng Việt', 'vi'],
