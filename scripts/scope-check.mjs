@@ -97,6 +97,37 @@ export function canonicalPath(filePath, platform = process.platform) {
   return CASE_INSENSITIVE_PLATFORMS.has(platform) ? rooted.toLowerCase() : rooted
 }
 
+/** Parse the optional untracked-at-start manifest embedded in a baseline patch. */
+export function parseUntrackedManifest(patchText) {
+  if (typeof patchText !== 'string') throw new TypeError('patchText must be a string')
+  const lines = patchText.split(/\r?\n/)
+  const headerIndex = lines.indexOf('# Untracked at run start')
+  if (headerIndex < 0) return []
+  const entries = []
+  for (const line of lines.slice(headerIndex + 1)) {
+    if (!line.startsWith('# ')) break
+    const entry = line.slice(2).trim()
+    if (entry) entries.push(entry)
+  }
+  return entries
+}
+
+/** Match a changed path against exact file entries or directory-prefix entries. */
+export function matchesUntrackedManifest(canonicalizedPath, entries, platform = process.platform) {
+  if (typeof canonicalizedPath !== 'string') throw new TypeError('canonicalPath must be a string')
+  if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== 'string')) {
+    throw new TypeError('entries must be an array of strings')
+  }
+  const pathValue = canonicalPath(canonicalizedPath, platform)
+  return entries.some((entry) => {
+    const isDirectory = entry.endsWith('/')
+    const declared = canonicalPath(entry, platform)
+    return isDirectory
+      ? pathValue === declared || pathValue.startsWith(`${declared}/`)
+      : pathValue === declared
+  })
+}
+
 /** True for the generated lockfiles, any `node_modules` entry, and every `.codex-flow/**` path. */
 export function isExcludedPath(canonicalized) {
   if (typeof canonicalized !== 'string' || canonicalized === '') return false
@@ -147,7 +178,14 @@ export function parseTaskFilesField(tasksText, taskId) {
  * reported it, so the printed violation is a path the operator can act on. Throws
  * ScopeDeclarationError when the declaration is missing, empty, or a placeholder.
  */
-export function scopeCheck(taskId, base, tasksText, changedPaths, platform = process.platform) {
+export function scopeCheck(
+  taskId,
+  base,
+  tasksText,
+  changedPaths,
+  platform = process.platform,
+  { baselineUntracked = [] } = {},
+) {
   if (typeof taskId !== 'string' || !TASK_ID.test(taskId)) {
     throw new TypeError('taskId must look like T<n>')
   }
@@ -185,7 +223,12 @@ export function scopeCheck(taskId, base, tasksText, changedPaths, platform = pro
   }
   const changed = [...originalByCanonical.keys()].sort()
   const extras = changed
-    .filter((entry) => !allowedSet.has(entry) && !isExcludedPath(entry))
+    .filter(
+      (entry) =>
+        !allowedSet.has(entry) &&
+        !isExcludedPath(entry) &&
+        !matchesUntrackedManifest(entry, baselineUntracked, platform),
+    )
     .map((entry) => originalByCanonical.get(entry))
   return { allowed, changed, extras }
 }
@@ -274,6 +317,14 @@ export function collectTreeChangedPaths(baseTree, cwd = process.cwd()) {
   ).split('\0').filter(Boolean)
 }
 
+/** Return current untracked, non-ignored paths using the same Git query as change collection. */
+export function collectUntrackedPaths(cwd = process.cwd()) {
+  if (typeof cwd !== 'string' || !cwd.trim()) throw new TypeError('cwd must be a non-empty string')
+  return gitOutput(['ls-files', '-z', '--others', '--exclude-standard'], cwd)
+    .split('\0')
+    .filter(Boolean)
+}
+
 /** Return paths whose worktree diff has no content-line changes. */
 function gitModeOnlyPaths(base, cwd) {
   return gitOutput(['diff', '--numstat', '-z', '--no-renames', base], cwd)
@@ -294,9 +345,7 @@ export function collectChangedPaths(base, cwd = process.cwd()) {
   )
   return [
     ...trackedPaths,
-    ...gitOutput(['ls-files', '-z', '--others', '--exclude-standard'], cwd)
-      .split('\0')
-      .filter(Boolean),
+    ...collectUntrackedPaths(cwd),
   ]
 }
 
@@ -367,12 +416,25 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd() }
     return EXIT_FAILURE
   }
 
+  const baselinePath = path.join(cwd, '.codex-flow', 'baseline-dirty.patch')
+  let baselineManifest = []
+  try {
+    baselineManifest = parseUntrackedManifest(await fs.readFile(baselinePath, 'utf8'))
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error(`scope-check: cannot read baseline manifest ${baselinePath}: ${errorMessage(error)}`)
+      return EXIT_FAILURE
+    }
+  }
+
   let changedPaths
+  let currentUntracked = []
   try {
     const objectType = gitObjectType(config.base, cwd)
     if (objectType === 'tree') changedPaths = collectTreeChangedPaths(config.base, cwd)
     else if (objectType === 'commit') changedPaths = collectChangedPaths(config.base, cwd)
     else throw new Error(`base ${config.base} is a ${objectType}; expected a commit or tree`)
+    currentUntracked = collectUntrackedPaths(cwd)
   } catch (error) {
     console.error(`scope-check: git failed for base ${config.base}: ${errorMessage(error)}`)
     return EXIT_FAILURE
@@ -380,7 +442,13 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd() }
 
   let result
   try {
-    result = scopeCheck(config.task, config.base, tasksText, changedPaths)
+    // Content edits inside files already untracked at run start are invisible to this trip-wire.
+    const baselineUntracked = currentUntracked.filter((entry) =>
+      matchesUntrackedManifest(entry, baselineManifest),
+    )
+    result = scopeCheck(config.task, config.base, tasksText, changedPaths, process.platform, {
+      baselineUntracked,
+    })
   } catch (error) {
     if (error instanceof ScopeDeclarationError) {
       console.error(`scope-check: ${errorMessage(error)}`)

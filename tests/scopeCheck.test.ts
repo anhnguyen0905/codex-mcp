@@ -16,6 +16,7 @@ import {
   main,
   parseCliArgs,
   parseRawDiff,
+  parseUntrackedManifest,
   parseTaskFilesField,
   scopeCheck,
 } from '../scripts/scope-check.mjs'
@@ -161,6 +162,30 @@ describe('canonicalPath', () => {
       expect(traversal).not.toBe(canonicalPath('secret.ts', platform))
     },
   )
+})
+
+describe('parseUntrackedManifest', () => {
+  test('reads entries after a header anywhere, including CRLF and directories', () => {
+    // Arrange
+    const patch = 'diff --git a/a b/a\r\n# Untracked at run start\r\n# pre/\r\n# pre.txt\r\n'
+
+    // Act
+    const entries = parseUntrackedManifest(patch)
+
+    // Assert
+    expect(entries).toEqual(['pre/', 'pre.txt'])
+  })
+
+  test('stops at the first non-comment line and returns empty without a header', () => {
+    // Arrange
+    const patch = '# Untracked at run start\n# pre/\nnot a comment\n# ignored.txt\n'
+
+    // Act & Assert
+    expect(parseUntrackedManifest(patch)).toEqual(['pre/'])
+    expect(parseUntrackedManifest('diff only\n')).toEqual([])
+    expect(parseUntrackedManifest('# Untracked at run start\n#   \n# pre.txt')).toEqual(['pre.txt'])
+    expect(() => parseUntrackedManifest(undefined)).toThrow(TypeError)
+  })
 })
 
 describe('isExcludedPath', () => {
@@ -617,6 +642,70 @@ describe('parseRawDiff', () => {
 })
 
 describe('scope-check CLI', () => {
+  test('excludes currently untracked manifest paths but keeps unrelated and lookalike paths', async () => {
+    // Arrange
+    const { directory, base } = makeRepo()
+    mkdirSync(join(directory, 'pre'))
+    mkdirSync(join(directory, 'pre', 'sub'))
+    writeFileSync(join(directory, 'pre', 'a.txt'), 'a\n')
+    writeFileSync(join(directory, 'pre', 'sub', 'b.txt'), 'b\n')
+    writeFileSync(join(directory, 'pre.txt'), 'pre\n')
+    writeFileSync(join(directory, 'new.txt'), 'new\n')
+    writeFileSync(join(directory, 'prefix-pre.txt'), 'prefix\n')
+    mkdirSync(join(directory, 'pre-other'))
+    writeFileSync(join(directory, 'pre-other', 'x.txt'), 'other\n')
+    writeFileSync(
+      join(directory, '.codex-flow', 'baseline-dirty.patch'),
+      '# Untracked at run start\n# pre/\n# pre.txt\n',
+    )
+    const { err } = captureConsole()
+
+    // Act
+    const exitCode = await main(['--task', 'T1', '--base', base], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(1)
+    expect(err).toContain('  extra: new.txt')
+    expect(err).toContain('  extra: pre-other/x.txt')
+    expect(err).toContain('  extra: prefix-pre.txt')
+    expect(err.some((line) => /extra: pre\//.test(line))).toBe(false)
+    expect(err.some((line) => line.includes('extra: pre.txt'))).toBe(false)
+  })
+
+  test('reports a manifest path that became tracked after the base', async () => {
+    // Arrange
+    const { directory, base } = makeRepo()
+    writeFileSync(join(directory, 'pre.txt'), 'tracked\n')
+    writeFileSync(
+      join(directory, '.codex-flow', 'baseline-dirty.patch'),
+      '# Untracked at run start\n# pre.txt\n',
+    )
+    git(directory, 'add', 'pre.txt')
+    git(directory, 'commit', '-q', '-m', 'track manifest path')
+    const { err } = captureConsole()
+
+    // Act
+    const exitCode = await main(['--task', 'T1', '--base', base], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(1)
+    expect(err).toContain('  extra: pre.txt')
+  })
+
+  test('fails when the baseline manifest path is unreadable', async () => {
+    // Arrange
+    const { directory, base } = makeRepo()
+    mkdirSync(join(directory, '.codex-flow', 'baseline-dirty.patch'))
+    const { err } = captureConsole()
+
+    // Act
+    const exitCode = await main(['--task', 'T1', '--base', base], { cwd: directory })
+
+    // Assert
+    expect(exitCode).toBe(2)
+    expect(err[0]).toContain('cannot read baseline manifest')
+  })
+
   test('snapshot leaves HEAD, the index and the working tree unchanged', () => {
     // Arrange
     const { directory, base } = makeRepo()
