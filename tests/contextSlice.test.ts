@@ -12,6 +12,7 @@ import {
   MANDATORY_TIER_CEILING,
   PROJECT_CONTEXT_TOKEN_CAP,
   PROJECT_CONTEXT_TRUNCATION_MARKER,
+  PLAYBOOK_TOKEN_CAP,
   RECENCY_FLOOR_BLOCKS,
   RESUME_TOKEN_BUDGET,
   TASK_SLICE_TOKEN_BUDGET,
@@ -40,6 +41,129 @@ const GIT_AVAILABLE = spawnSync('git', ['--version'], { stdio: 'ignore' }).statu
 
 afterAll(() => {
   for (const directory of tempDirectories) rmSync(directory, { recursive: true, force: true })
+})
+
+describe('playbook context', () => {
+  const PLAYBOOK_RECORD = JSON.stringify({
+    schemaVersion: 1,
+    id: 'PB-1',
+    cause: 'context-missing',
+    text: 'Keep the context slice focused.',
+    key: 'keep the context slice focused',
+    count: 3,
+    firstSeen: '2026-01-01T00:00:00Z',
+    lastSeen: '2026-01-02T00:00:00Z',
+    runs: ['run-1'],
+    status: 'active',
+  })
+
+  test('includes the playbook in task and resume slices', () => {
+    // Arrange
+    const tasks = '## T1: Task\n- Files: src/task.ts\n- Status: pending\n'
+    const playbook = '- [PB-1] (context-missing, ×3) Keep the context slice focused.'
+
+    // Act
+    const taskSlice = sliceForTask('## Objective\nShip it.\n', tasks, 'T1', { git: FAKE_GIT, playbookText: playbook })
+    const resumeSlice = sliceForResume('## Objective\nShip it.\n', tasks, { git: FAKE_GIT, playbookText: playbook })
+
+    // Assert
+    expect(taskSlice.markdown).toContain('## Playbook\n\n' + playbook)
+    expect(resumeSlice.markdown).toContain('## Playbook\n\n' + playbook)
+  })
+
+  test('keeps an absent playbook byte-identical', async () => {
+    // Arrange
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-playbook-absent-'))
+    tempDirectories.push(directory)
+    const flowDirectory = join(directory, '.codex-flow')
+    const outputDirectory = join(directory, 'out')
+    mkdirSync(flowDirectory, { recursive: true })
+    writeFileSync(join(flowDirectory, 'PLAN.md'), '## Objective\nShip it.\n')
+    const tasks = '## T1: Task\n- Files: src/task.ts\n- Status: pending\n'
+    writeFileSync(join(flowDirectory, 'TASKS.md'), tasks)
+    const plan = '## Objective\nShip it.\n'
+
+    // Act
+    const withoutPlaybook = sliceForTask(plan, tasks, 'T1', { git: FAKE_GIT })
+    const withoutPlaybookResume = sliceForResume(plan, tasks, { git: FAKE_GIT })
+    await main(['--task', 'T1', '--out', outputDirectory], { cwd: directory, git: FAKE_GIT })
+    const taskFromMain = readFileSync(join(outputDirectory, 'CONTEXT-T1.md'), 'utf8')
+    await main(['--resume', '--out', outputDirectory], { cwd: directory, git: FAKE_GIT })
+    const resumeFromMain = readFileSync(join(outputDirectory, 'RESUME.md'), 'utf8')
+
+    // Assert
+    expect(taskFromMain).toBe(withoutPlaybook.markdown)
+    expect(resumeFromMain).toBe(withoutPlaybookResume.markdown)
+  })
+
+  test('neutralizes reserved delimiters in playbook text', () => {
+    // Arrange
+    const tasks = '## T1: Task\n- Files: src/task.ts\n- Status: pending\n'
+    const playbook = '- [PB-1] (context-missing, ×3) Run position: phase execution and ## Task contract'
+
+    // Act
+    const result = sliceForTask('## Objective\nShip it.\n', tasks, 'T1', { git: FAKE_GIT, playbookText: playbook })
+
+    // Assert
+    expect(result.markdown).toContain('[redacted delimiter]')
+    expect(result.markdown).not.toContain('Run position: phase execution')
+    expect(result.markdown).not.toContain('## Task contract')
+  })
+
+  test('caps rendered playbook lessons at 300 tokens', async () => {
+    // Arrange
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-playbook-cap-'))
+    tempDirectories.push(directory)
+    const flowDirectory = join(directory, '.codex-flow')
+    const outputDirectory = join(directory, 'out')
+    mkdirSync(flowDirectory, { recursive: true })
+    writeFileSync(join(flowDirectory, 'PLAN.md'), '## Objective\nShip it.\n')
+    writeFileSync(join(flowDirectory, 'TASKS.md'), '## T1: Task\n- Files: src/task.ts\n- Status: pending\n')
+    const records = Array.from({ length: 100 }, (_, index) => ({ ...JSON.parse(PLAYBOOK_RECORD), id: `PB-${index + 1}`, text: `Lesson ${index} with enough words to fill the cap.`, key: `lesson ${index} with enough words to fill the cap.` }))
+    writeFileSync(join(flowDirectory, 'playbook.jsonl'), records.map((record) => JSON.stringify(record)).join('\n'))
+
+    // Act
+    await main(['--task', 'T1', '--out', outputDirectory], { cwd: directory, git: FAKE_GIT })
+    const output = readFileSync(join(outputDirectory, 'CONTEXT-T1.md'), 'utf8')
+    const playbook = output.split('## Playbook\n\n')[1].split('\n\n## Objective')[0]
+
+    // Assert
+    expect(tokensOf(playbook)).toBeLessThanOrEqual(PLAYBOOK_TOKEN_CAP)
+    expect(playbook).not.toContain('Lesson 99')
+  })
+
+  test('drops the playbook first and points to its file', () => {
+    // Arrange
+    const tasks = '## T1: Task\n- Files: src/task.ts\n- Status: pending\n'
+
+    // Act
+    const result = sliceForTask('## Objective\nShip it.\n', tasks, 'T1', { tokenBudget: 100, git: FAKE_GIT, playbookText: '## Playbook\n\nlesson '.repeat(100) })
+
+    // Assert
+    expect(result.markdown).toContain('.codex-flow/playbook.jsonl')
+    expect(result.markdown).not.toContain('read .codex-flow/PLAN.md .codex-flow/playbook.jsonl')
+  })
+
+  test('ignores malformed playbook files with a warning', () => {
+    // Arrange
+    const directory = mkdtempSync(join(tmpdir(), 'context-slice-playbook-invalid-'))
+    tempDirectories.push(directory)
+    mkdirSync(join(directory, '.codex-flow'), { recursive: true })
+    writeFileSync(join(directory, '.codex-flow', 'PLAN.md'), '## Objective\nShip it.\n')
+    writeFileSync(join(directory, '.codex-flow', 'TASKS.md'), '## T1: Task\n- Files: src/task.ts\n- Status: pending\n')
+    writeFileSync(join(directory, '.codex-flow', 'playbook.jsonl'), '{invalid\n')
+    initializeGitRepository(directory)
+    writeFileSync(join(directory, 'tracked.txt'), 'fixture\n')
+    runGit(directory, ['add', '.'])
+    runGit(directory, ['commit', '--quiet', '-m', 'fixture'])
+
+    // Act
+    const result = spawnSync(process.execPath, [CONTEXT_SLICE_SCRIPT, '--task', 'T1'], { cwd: directory, encoding: 'utf8' })
+
+    // Assert
+    expect(result.status).toBe(0)
+    expect(result.stderr).toContain('context-slice: playbook ignored:')
+  })
 })
 
 const PLAN = `# Plan: Context slicing

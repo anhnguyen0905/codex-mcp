@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { promises as fs } from 'node:fs'
+import { readFileSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { DEFAULT_PROJECT_FILE, FORBIDDEN_SUBSTRINGS } from './project-context.mjs'
 import { parseRequirements } from './requirements-coverage.mjs'
 import { parseTasks } from './task-waves.mjs'
+import { renderPlaybook } from './playbook.mjs'
 import {
   TASK_BLOCK_ID, decisionBlocksOf, decisionLogBlockCount, decisionLogProblems, decisionLogSectionForSlice,
   formatDecisionLogProblem,
@@ -22,6 +23,7 @@ export const CONTRACTS_INDEX_LINE_CHAR_CAP = 160
 export const PROJECT_CONTEXT_TOKEN_CAP = 600
 export const PROJECT_CONTEXT_SECTION_COUNT = 2
 export const PROJECT_CONTEXT_TRUNCATION_MARKER = '… (truncated)'
+export const PLAYBOOK_TOKEN_CAP = 300
 
 export { parseTasks }
 
@@ -36,6 +38,7 @@ const PROJECT_CONTEXT_HEADING = '## Project context'
 const PROJECT_CONTEXT_SECTION_PATTERN = /^##[ \t]+[^\n]+$/gm
 const DELIMITER_REDACTION = '[redacted delimiter]'
 const OPTIONAL_PRIORITY = {
+  PLAYBOOK: 0,
   SESSION_REPORT: 1,
   PROJECT_CONTEXT: 1,
   DIGEST: 2,
@@ -680,6 +683,13 @@ function truncateAtParagraphBoundary(markdown, tokenCap) {
   return [...kept, PROJECT_CONTEXT_TRUNCATION_MARKER].join('\n\n')
 }
 
+function neutralizeDelimiters(text) {
+  return FORBIDDEN_SUBSTRINGS.reduce(
+    (result, forbidden) => result.split(forbidden).join(DELIMITER_REDACTION),
+    text,
+  )
+}
+
 /**
  * Optional `## Project context` item built from PROJECT.md. The file is operator-owned prose,
  * so protocol delimiters are neutralized before it reaches a Codex prompt.
@@ -691,10 +701,7 @@ function projectContextItem(projectContextText) {
   }
   const excerpt = firstProjectSections(projectContextText, PROJECT_CONTEXT_SECTION_COUNT)
   if (!excerpt) return null
-  const guarded = FORBIDDEN_SUBSTRINGS.reduce(
-    (text, forbidden) => text.split(forbidden).join(DELIMITER_REDACTION),
-    excerpt,
-  )
+  const guarded = neutralizeDelimiters(excerpt)
   // The cap covers the whole item, heading included, so the heading is the first paragraph
   // truncation measures: a body paragraph too large to fit leaves the heading plus the marker.
   const markdown = truncateAtParagraphBoundary(
@@ -710,8 +717,23 @@ function projectContextItem(projectContextText) {
   }
 }
 
+function playbookItem(playbookText) {
+  if (playbookText === null || playbookText === undefined || playbookText === '') return null
+  if (typeof playbookText !== 'string') throw new TypeError('playbookText must be a string, null, or undefined')
+  const guarded = neutralizeDelimiters(playbookText)
+  return {
+    name: 'Playbook',
+    section: '.codex-flow/playbook.jsonl',
+    source: '.codex-flow/playbook.jsonl',
+    markdown: `## Playbook\n\n${guarded}`,
+    priority: OPTIONAL_PRIORITY.PLAYBOOK,
+  }
+}
+
 function pointerFor(droppedItems) {
-  const sections = [...new Set(droppedItems.map((item) => item.section))].join(', ')
+  const planItems = droppedItems.filter((item) => item.source !== '.codex-flow/playbook.jsonl')
+  const sections = [...new Set(planItems.map((item) => item.section))].join(', ')
+  const playbookDropped = droppedItems.some((item) => item.source === '.codex-flow/playbook.jsonl')
   const budgetDroppedBlockIds = droppedItems.flatMap((item) => item.blockId ? [item.blockId] : [])
   const filteredBlockIds = droppedItems.flatMap((item) => item.blockIds ?? [])
   const visibleBlockIds = [...new Set([...budgetDroppedBlockIds, ...filteredBlockIds])]
@@ -723,7 +745,10 @@ function pointerFor(droppedItems) {
   const blockSuffix = visibleBlockIds.length
     ? ` (dropped blocks: ${visibleBlockIds.join(', ')}${additionalBlockSuffix})`
     : ''
-  return `- (+${droppedItems.length} lower-priority items omitted — read .codex-flow/PLAN.md ${sections})${blockSuffix}`
+  const detail = sections
+    ? `.codex-flow/PLAN.md ${sections}${playbookDropped ? '; .codex-flow/playbook.jsonl' : ''}`
+    : '.codex-flow/playbook.jsonl'
+  return `- (+${droppedItems.length} lower-priority items omitted — read ${detail})${blockSuffix}`
 }
 
 function generatedHeader(headSha) {
@@ -906,6 +931,7 @@ export function sliceForTask(
     git = defaultGit(),
     requirementsText = null,
     projectContextText = null,
+    playbookText = null,
   } = {},
 ) {
   validateSliceText(planText, tasksText)
@@ -928,6 +954,8 @@ export function sliceForTask(
   items.push(contractsIndexItem(sections.get('Contracts'), decisionBlocks, gitState))
   const projectItem = projectContextItem(projectContextText)
   if (projectItem) items.push(projectItem)
+  const playbook = playbookItem(playbookText)
+  if (playbook) items.push(playbook)
   const planItems = taskPlanItems(sections, decisionBlocks, task, taskRaw, gitState)
   items.push(...planItems.items)
   return fitToBudget(items, tokenBudget, gitState.headSha, planItems.omittedItems)
@@ -1005,7 +1033,7 @@ function resumeOmissionsOf(sections, decisionBlocks, filteredBlocks) {
 export function sliceForResume(
   planText,
   tasksText,
-  { tokenBudget = RESUME_TOKEN_BUDGET, git = defaultGit() } = {},
+  { tokenBudget = RESUME_TOKEN_BUDGET, git = defaultGit(), playbookText = null } = {},
 ) {
   validateSliceText(planText, tasksText)
   validateTokenBudget(tokenBudget)
@@ -1023,6 +1051,8 @@ export function sliceForResume(
     })
   }
   items.push(contractsIndexItem(sections.get('Contracts'), decisionBlocks, gitState))
+  const playbook = playbookItem(playbookText)
+  if (playbook) items.push(playbook)
   for (const name of ['Contracts', 'Objective', 'Out of scope']) {
     const section = sections.get(name)
     const priority = name === 'Contracts'
@@ -1144,6 +1174,19 @@ async function readProjectContext(projectContextPath) {
   }
 }
 
+function readPlaybookText(playbookPath) {
+  try {
+    const lines = readFileSync(playbookPath, 'utf8').split(/\r?\n/).filter((line) => line !== '')
+    const items = lines.map((line) => JSON.parse(line))
+    return renderPlaybook(items, PLAYBOOK_TOKEN_CAP)
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+    const reason = error instanceof Error ? error.message : String(error)
+    console.error(`context-slice: playbook ignored: ${reason}`)
+    return null
+  }
+}
+
 /** Validate the plan's Decision-log blocks; return the CLI exit code (0 ok, 1 problems). */
 async function runCheckPlan(planPath) {
   let planText
@@ -1183,10 +1226,11 @@ export async function main(args = process.argv.slice(2), { cwd = process.cwd(), 
   const projectContextText = config.resume
     ? null
     : await readProjectContext(path.resolve(cwd, DEFAULT_PROJECT_FILE))
+  const playbookText = readPlaybookText(path.resolve(cwd, '.codex-flow/playbook.jsonl'))
   const gitSeam = git ?? defaultGit(cwd)
   const slice = config.resume
-    ? sliceForResume(planText, tasksText, { git: gitSeam })
-    : sliceForTask(planText, tasksText, config.taskId, { git: gitSeam, requirementsText, projectContextText })
+    ? sliceForResume(planText, tasksText, { git: gitSeam, playbookText })
+    : sliceForTask(planText, tasksText, config.taskId, { git: gitSeam, requirementsText, projectContextText, playbookText })
   await fs.mkdir(outputDirectory, { recursive: true })
   await assertNotSymlink(outputDirectory, 'output directory')
   await assertNotSymlink(outputPath, 'output file')

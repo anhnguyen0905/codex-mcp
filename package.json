@@ -87,6 +87,7 @@
     "scripts/flow-state-cli.mjs",
     "scripts/flow-events.mjs",
     "scripts/context-slice.mjs",
+    "scripts/playbook.mjs",
     "scripts/decision-log.mjs",
     "scripts/worktree-setup.mjs",
     "scripts/project-context.mjs",
