@@ -13,6 +13,17 @@ const readFlag = (args, flag) => {
   return value && !value.startsWith('--') ? value : undefined
 }
 
+const mapNormalizedOffset = (text, normalizedOffset) => {
+  let originalIndex = 0
+  let normalizedIndex = 0
+  while (normalizedIndex < normalizedOffset) {
+    if (text[originalIndex] === '\r' && text[originalIndex + 1] === '\n') originalIndex += 1
+    originalIndex += 1
+    normalizedIndex += 1
+  }
+  return originalIndex
+}
+
 export function extractRules(text, file) {
   const source = text.replace(/\r\n/g, '\n')
   const spans = []
@@ -68,8 +79,9 @@ export async function ablateRule(root, id, outDir) {
   const target = path.join(destination, rule.file)
   const content = await fs.readFile(target, 'utf8')
   const source = ruleSources.get(rule)
-  if (!source || content.slice(source.start, source.start + source.raw.length) !== source.raw) throw new Error('rule source span changed')
-  await fs.writeFile(target, content.slice(0, source.start) + content.slice(source.start + source.raw.length), 'utf8')
+  const start = source ? mapNormalizedOffset(content, source.start) : -1
+  if (!source || content.slice(start, start + source.raw.length) !== source.raw) throw new Error('rule source span changed')
+  await fs.writeFile(target, content.slice(0, start) + content.slice(start + source.raw.length), 'utf8')
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
