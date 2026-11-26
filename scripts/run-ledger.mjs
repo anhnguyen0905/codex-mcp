@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { detectLanguage } from './language-detect.mjs'
+import { CAUSES, isCause, parseCauses } from './harness-taxonomy.mjs'
 export { detectLanguage }
 
 const DEFAULT_LEDGER = path.join(homedir(), '.codex-mcp', 'run-ledger.jsonl')
@@ -15,7 +16,7 @@ const LANGUAGE_MODES = ['off', 'on']
 const APPEND_FLAGS = new Set([
   'lane', 'project', 'run-id', 'profile', 'domain', 'request', 'request-file', 'language',
   'skills', 'fix-rounds', 'codex-tokens', 'started', 'owner-gates', 'bypasses', 'outcome',
-  'profile-mode', 'evidence-mode', 'language-mode',
+  'profile-mode', 'evidence-mode', 'language-mode', 'causes',
 ])
 const ISO = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value))
 const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
@@ -88,6 +89,7 @@ export function parseAppendArgs(argv) {
   if (values.languagemode !== undefined && !LANGUAGE_MODES.includes(values.languagemode)) {
     throw new Error('invalid language mode')
   }
+  const causes = values.causes === undefined ? undefined : parseCauses(values.causes)
   return {
     ...values,
     fixRounds: Number(values.fixrounds),
@@ -97,6 +99,7 @@ export function parseAppendArgs(argv) {
     profileMode: values.profilemode,
     evidenceMode: values.evidencemode,
     languageMode: values.languagemode,
+    causes,
   }
 }
 
@@ -134,6 +137,7 @@ export function buildLine(input, now = new Date()) {
     ...(input.profileMode === undefined ? {} : { profileMode: input.profileMode }),
     ...(input.evidenceMode === undefined ? {} : { evidenceMode: input.evidenceMode }),
     ...(input.languageMode === undefined ? {} : { languageMode: input.languageMode }),
+    ...(input.causes === undefined ? {} : { causes: input.causes }),
   }
 }
 
@@ -143,12 +147,13 @@ export function appendLine(line, ledgerPath = process.env.CODEX_MCP_RUN_LEDGER ?
   appendFileSync(ledgerPath, `${JSON.stringify(line)}\n`, { flag: 'a', mode: 0o600 })
 }
 
-const median = (values) => {
+export function median(values) {
   if (!values.length) return null
   const sorted = [...values].sort((a, b) => a - b)
   const middle = Math.floor(sorted.length / 2)
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
 }
+const validCauses = (value) => value === undefined || (Array.isArray(value) && value.every(isCause))
 const validLine = (line) => isRecord(line) && line.schemaVersion === 1 && ISO(line.ts)
   && LANES.includes(line.lane) && typeof line.project === 'string' && path.isAbsolute(line.project)
   && typeof line.runId === 'string' && line.runId.length > 0 && PROFILES.includes(line.profile)
@@ -165,6 +170,7 @@ const validLine = (line) => isRecord(line) && line.schemaVersion === 1 && ISO(li
   && (line.profileMode === undefined || MODES.includes(line.profileMode))
   && (line.evidenceMode === undefined || MODES.includes(line.evidenceMode))
   && (line.languageMode === undefined || LANGUAGE_MODES.includes(line.languageMode))
+  && validCauses(line.causes)
 
 const emptySummary = () => ({
   total: 0,
@@ -172,9 +178,10 @@ const emptySummary = () => ({
   medians: { fixRounds: null, codexTokens: null, wallClockMinutes: null, ownerGates: null },
   bypassRate: 0,
   malformed: 0,
+  causes: Object.fromEntries(CAUSES.map((cause) => [cause, 0])),
 })
 
-const FILTER_ENUMS = {
+export const FILTER_ENUMS = {
   lane: LANES,
   profile: PROFILES,
   language: LANGUAGES,
@@ -182,42 +189,70 @@ const FILTER_ENUMS = {
   profileMode: MODES,
   evidenceMode: MODES,
   languageMode: LANGUAGE_MODES,
+  cause: CAUSES,
 }
 
-const validateFilters = (filters) => filters.map((filter) => {
+export function parseFilter(filter) {
   const [key, value, ...extra] = filter.split('=')
   if (extra.length || !Object.hasOwn(FILTER_ENUMS, key)) throw new Error(`invalid filter key: ${key || ''}`)
   if (!FILTER_ENUMS[key].includes(value)) throw new Error(`invalid filter value for ${key}: ${value ?? ''}`)
   return { key, value }
-})
+}
+
+const validateFilters = (filters) => filters.map(parseFilter)
+
+export function matchesFilters(record, filters) {
+  return filters.every(({ key, value }) => key === 'cause'
+    ? Array.isArray(record.causes) && record.causes.includes(value)
+    : (record[key] ?? 'off') === value)
+}
+
+export function ledgerPath(env = process.env) {
+  return env.CODEX_MCP_RUN_LEDGER ?? DEFAULT_LEDGER
+}
+
+export function readLedger(filePath) {
+  let content
+  try {
+    content = readFileSync(filePath, 'utf8')
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { records: [], malformed: 0 }
+    throw error
+  }
+  const records = []
+  let malformed = 0
+  for (const line of content.split(/\r?\n/).filter(Boolean)) {
+    try {
+      const parsed = JSON.parse(line)
+      if (validLine(parsed)) records.push(parsed)
+      else malformed += 1
+    } catch {
+      malformed += 1
+    }
+  }
+  return { records, malformed }
+}
 
 /** Summarize valid ledger lines and count malformed lines. */
 export function summarize(
-  ledgerPath = process.env.CODEX_MCP_RUN_LEDGER ?? DEFAULT_LEDGER,
+  ledgerFile = ledgerPath(),
   project,
   filters = [],
 ) {
   const parsedFilters = validateFilters(filters)
-  let content
-  try {
-    content = readFileSync(ledgerPath, 'utf8')
-  } catch (error) {
-    if (error?.code === 'ENOENT') return emptySummary()
-    throw error
-  }
-  const lines = content.split(/\r?\n/).filter(Boolean)
-  const parsed = lines.map((line) => { try { return JSON.parse(line) } catch { return null } })
-  const valid = parsed.filter((line) => validLine(line))
-  const malformed = parsed.length - valid.length
-  const filtered = valid.filter((line) => {
+  const { records, malformed } = readLedger(ledgerFile)
+  const filtered = records.filter((line) => {
     if (project && line.project !== project) return false
-    return parsedFilters.every(({ key, value }) => (line[key] ?? 'off') === value)
+    return matchesFilters(line, parsedFilters)
   })
   const counts = {}
   for (const line of filtered) {
     const key = `${line.profile} × ${line.language} × ${line.outcome}`
     counts[key] = (counts[key] ?? 0) + 1
   }
+  const causes = Object.fromEntries(CAUSES.map((cause) => [
+    cause, filtered.filter((line) => line.causes?.includes(cause)).length,
+  ]))
   return {
     total: filtered.length,
     counts,
@@ -229,6 +264,7 @@ export function summarize(
     },
     bypassRate: filtered.length ? filtered.filter((x) => x.bypasses.length > 0).length / filtered.length : 0,
     malformed,
+    causes,
   }
 }
 
@@ -241,6 +277,7 @@ const formatSummary = (result) => [
   `median ownerGates: ${result.medians.ownerGates ?? 'n/a'}`,
   `bypass rate: ${result.bypassRate}`,
   `skipped malformed: ${result.malformed}`,
+  `causes: ${Object.entries(result.causes).filter(([, count]) => count > 0).map(([cause, count]) => `${cause}=${count}`).join(', ') || 'none'}`,
 ].join('\n') + '\n'
 
 const readRequestFile = (requestPath) => {

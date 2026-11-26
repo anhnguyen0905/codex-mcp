@@ -95,6 +95,7 @@
     "scripts/skill-lint.mjs",
     "scripts/session-cost.mjs",
     "scripts/run-ledger.mjs",
+    "scripts/harness-taxonomy.mjs",
     "scripts/language-detect.mjs",
     "scripts/quality-grade.mjs",
     "scripts/quality-eval.mjs",

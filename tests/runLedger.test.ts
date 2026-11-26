@@ -9,8 +9,13 @@ import {
   buildLine,
   detectLanguage,
   main,
+  matchesFilters,
+  median,
   parseAppendArgs,
+  parseFilter,
   redactRequest,
+  readLedger,
+  ledgerPath,
   summarize,
 } from '../scripts/run-ledger.mjs'
 // @ts-expect-error — plain .mjs script, not part of the tsc build
@@ -44,6 +49,42 @@ describe('run ledger', () => {
 
     // Assert
     expect(readFileSync(file, 'utf8').trim().split('\n')).toHaveLength(2)
+  })
+
+  it('appends causes in order and preserves legacy lines in summaries', () => {
+    // Arrange
+    const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
+    const file = join(dir, 'ledger.jsonl')
+    appendLine(buildLine(base('legacy')), file)
+    process.env.CODEX_MCP_RUN_LEDGER = file
+
+    // Act
+    const exitCode = main(cliArgs(['--causes', 'infra, skill-gap, infra']))
+    const result = summarize(file)
+
+    // Assert
+    expect(exitCode).toBe(0)
+    expect(JSON.parse(readFileSync(file, 'utf8').split('\n')[1])).toMatchObject({
+      causes: ['infra', 'skill-gap', 'infra'],
+    })
+    expect(result.causes).toMatchObject({ infra: 1, 'skill-gap': 1 })
+  })
+
+  it('rejects an invalid cause without changing the ledger', () => {
+    // Arrange
+    const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
+    const file = join(dir, 'ledger.jsonl')
+    process.env.CODEX_MCP_RUN_LEDGER = file
+    const exitCodeBefore = main(cliArgs())
+    const before = readFileSync(file, 'utf8')
+
+    // Act
+    const exitCode = main(cliArgs(['--causes', 'not-a-cause']))
+
+    // Assert
+    expect(exitCodeBefore).toBe(0)
+    expect(exitCode).toBe(2)
+    expect(readFileSync(file, 'utf8')).toBe(before)
   })
 
   it.each([
@@ -422,7 +463,7 @@ describe('run ledger', () => {
     // Assert
     expect(exitCode).toBe(0)
     expect(Object.keys(result)).toEqual([
-      'total', 'counts', 'medians', 'bypassRate', 'malformed',
+      'total', 'counts', 'medians', 'bypassRate', 'malformed', 'causes',
     ])
     expect(result.total).toBe(1)
     write.mockRestore()
@@ -487,6 +528,10 @@ describe('run ledger', () => {
       medians: { fixRounds: null, codexTokens: null, wallClockMinutes: null, ownerGates: null },
       bypassRate: 0,
       malformed: 0,
+      causes: {
+        'spec-ambiguous': 0, 'plan-wrong': 0, 'context-missing': 0, 'skill-gap': 0,
+        'executor-error': 0, 'verifier-gap': 0, infra: 0,
+      },
     })
     write.mockRestore()
   })
@@ -520,6 +565,10 @@ describe('run ledger', () => {
     })
     expect(result.bypassRate).toBe(0)
     expect(result.malformed).toBe(kind === 'malformed-only' ? 1 : 0)
+    expect(result.causes).toEqual({
+      'spec-ambiguous': 0, 'plan-wrong': 0, 'context-missing': 0, 'skill-gap': 0,
+      'executor-error': 0, 'verifier-gap': 0, infra: 0,
+    })
     write.mockRestore()
   })
 
@@ -592,5 +641,96 @@ describe('run ledger', () => {
     expect(output).toContain(asJson ? '"total":1' : 'total runs: 1')
     expect(output).toContain(asJson ? '"bypassRate":1' : 'bypass rate: 1')
     write.mockRestore()
+  })
+
+  it('filters summaries by cause and rejects unknown causes', () => {
+    // Arrange
+    const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
+    const file = join(dir, 'ledger.jsonl')
+    appendLine(buildLine({ ...base('one'), causes: ['infra'] }), file)
+    appendLine(buildLine({ ...base('two'), runId: 'r2', causes: ['skill-gap'] }), file)
+    appendLine(buildLine({ ...base('legacy'), runId: 'r3' }), file)
+
+    // Act
+    const matching = summarize(file, undefined, ['cause=infra'])
+    const unknown = main(['summary', '--filter', 'cause=unknown'])
+
+    // Assert
+    expect(matching.total).toBe(1)
+    expect(unknown).toBe(2)
+    expect(parseFilter('cause=infra')).toEqual({ key: 'cause', value: 'infra' })
+    expect(readLedger(file)).toMatchObject({ records: expect.any(Array), malformed: 0 })
+    expect(readLedger(file).records).toHaveLength(3)
+    expect(matchesFilters({ causes: ['infra'] }, [{ key: 'cause', value: 'infra' }])).toBe(true)
+    expect(matchesFilters({ profile: 'code' }, [{ key: 'profile', value: 'code' }])).toBe(true)
+    expect(median([3, 1, 2])).toBe(2)
+    expect(median([])).toBeNull()
+    expect(ledgerPath({ CODEX_MCP_RUN_LEDGER: '/tmp/x.jsonl' })).toBe('/tmp/x.jsonl')
+  })
+
+  it('prints cause counts in text and JSON summaries, including none for legacy runs', () => {
+    // Arrange
+    const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
+    const file = join(dir, 'ledger.jsonl')
+    appendLine(buildLine({ ...base('caused'), causes: ['infra', 'skill-gap', 'infra'] }), file)
+    appendLine(buildLine({ ...base('legacy'), runId: 'r2' }), file)
+    process.env.CODEX_MCP_RUN_LEDGER = file
+    let output = ''
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      output += String(chunk)
+      return true
+    })
+
+    // Act
+    const textExitCode = main(['summary'])
+    const textOutput = output
+    output = ''
+    const jsonExitCode = main(['summary', '--json'])
+    const jsonResult = JSON.parse(output)
+
+    // Assert
+    expect(textExitCode).toBe(0)
+    expect(textOutput).toContain('causes: skill-gap=1, infra=1')
+    expect(jsonExitCode).toBe(0)
+    expect(jsonResult.causes).toEqual({
+      'spec-ambiguous': 0, 'plan-wrong': 0, 'context-missing': 0, 'skill-gap': 1,
+      'executor-error': 0, 'verifier-gap': 0, infra: 1,
+    })
+    write.mockRestore()
+
+    // Arrange
+    const legacyFile = join(dir, 'legacy.jsonl')
+    appendLine(buildLine({ ...base('only legacy') }), legacyFile)
+    process.env.CODEX_MCP_RUN_LEDGER = legacyFile
+    output = ''
+    const legacyWrite = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      output += String(chunk)
+      return true
+    })
+
+    // Act
+    const legacyExitCode = main(['summary'])
+
+    // Assert
+    expect(legacyExitCode).toBe(0)
+    expect(output).toContain('causes: none')
+    legacyWrite.mockRestore()
+  })
+
+  it('reports malformed and missing ledgers through readLedger', () => {
+    // Arrange
+    const dir = mkdtempSync(join(tmpdir(), 'run-ledger-'))
+    const file = join(dir, 'ledger.jsonl')
+    appendLine(buildLine(base('valid')), file)
+    writeFileSync(file, `${readFileSync(file, 'utf8')}not-json\n`)
+
+    // Act
+    const result = readLedger(file)
+    const missing = readLedger(join(dir, 'missing.jsonl'))
+
+    // Assert
+    expect(result.records).toHaveLength(1)
+    expect(result.malformed).toBe(1)
+    expect(missing).toEqual({ records: [], malformed: 0 })
   })
 })
