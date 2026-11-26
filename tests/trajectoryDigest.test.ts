@@ -69,6 +69,9 @@ describe('trajectory digest', () => {
       'npm run test:unit',
       'cargo test',
       'jest',
+      '/usr/bin/vitest run',
+      "/bin/zsh -lc '/opt/homebrew/bin/pytest -q'",
+      'C:\\tools\\npm.cmd test',
     ]
     const nonMatchingCommands = [
       'sed -n 1,20p vitest.config.ts',
@@ -86,9 +89,34 @@ describe('trajectory digest', () => {
     expect(nonMatchingResults).toEqual(nonMatchingCommands.map(() => false))
   })
 
+  it('matches Windows test command forms', () => {
+    // Arrange
+    const commands = ['npm.cmd test', 'npx.cmd vitest run', 'node_modules\\.bin\\vitest run', 'pytest.exe -q', 'C:\\tools\\go.exe test ./...']
+
+    // Act
+    const results = commands.map((command) => TEST_COMMAND_PATTERNS.some((pattern: RegExp) => pattern.test(command)))
+
+    // Assert
+    expect(results).toEqual(commands.map(() => true))
+  })
+
   it('classifies a deep non-test path quickly', () => {
     // Arrange
-    const command = `cat ${'a/'.repeat(200)}x.txt`
+    const command = `cat ${'a\\'.repeat(200)}x.txt`
+
+    // Act
+    const startedAt = performance.now()
+    const isTestCommand = TEST_COMMAND_PATTERNS.some((pattern: RegExp) => pattern.test(command))
+    const elapsedMilliseconds = performance.now() - startedAt
+
+    // Assert
+    expect(isTestCommand).toBe(false)
+    expect(elapsedMilliseconds).toBeLessThan(100)
+  })
+
+  it('classifies a deep mixed-separator non-test path quickly', () => {
+    // Arrange
+    const command = `cat ${'a\\/'.repeat(500)}x.txt`
 
     // Act
     const startedAt = performance.now()
@@ -132,7 +160,28 @@ describe('trajectory digest', () => {
 
     // Assert
     expect(result.status).toBe(0)
-    expect(result.stdout).toContain('  - exit 1: pytest tests/test_alpha.py --quiet')
+    expect(result.stdout).toContain('  - exit 1: ` pytest tests/test_alpha.py --quiet `')
+  })
+
+  it('renders failed commands as safe single-line code spans', () => {
+    // Arrange
+    const digest = {
+      commands: [],
+      failedCommands: [{ command: 'node `script`\n--bad', exitCode: 1 }],
+      testRuns: 0,
+      filesChangedMoreThanOnce: [],
+      tokens: { input: 0, cachedInput: 0, output: 0, reasoningOutput: 0 },
+      durationSeconds: null,
+      finalStatus: null,
+      skippedLines: 0,
+    }
+
+    // Act
+    const output = formatDigest(digest)
+
+    // Assert
+    expect(output).toContain('  - exit 1: `` node `script` --bad ``')
+    expect(output).not.toContain('\n--bad')
   })
 
   it('returns exit code two for a missing log file', () => {

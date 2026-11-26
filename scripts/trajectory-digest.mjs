@@ -3,12 +3,12 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export const TEST_COMMAND_PATTERNS = [
-  /(?:^|[\s;&|('"])(?:[^\s;&|('"/]*\/)*vitest(?=$|[\s'"])/i,
-  /(?:^|[\s;&|('"])(?:[^\s;&|('"/]*\/)*jest(?=$|[\s'"])/i,
-  /(?:^|[\s;&|('"])(?:[^\s;&|('"/]*\/)*npm\s+(?:run\s+)?test(?=$|[\s'":])/i,
-  /(?:^|[\s;&|('"])(?:[^\s;&|('"/]*\/)*pytest(?=$|[\s'"])/i,
-  /(?:^|[\s;&|('"])(?:[^\s;&|('"/]*\/)*go\s+test(?=$|[\s'"])/i,
-  /(?:^|[\s;&|('"])(?:[^\s;&|('"/]*\/)*cargo\s+test(?=$|[\s'"])/i,
+  /(?:^|[\s;&|('"])(?:[^\s;&|('"/\\]*[\/\\])*vitest(?:\.cmd|\.exe)?(?=$|[\s'"])/i,
+  /(?:^|[\s;&|('"])(?:[^\s;&|('"/\\]*[\/\\])*jest(?:\.cmd|\.exe)?(?=$|[\s'"])/i,
+  /(?:^|[\s;&|('"])(?:[^\s;&|('"/\\]*[\/\\])*npm(?:\.cmd|\.exe)?\s+(?:run\s+)?test(?=$|[\s'":])/i,
+  /(?:^|[\s;&|('"])(?:[^\s;&|('"/\\]*[\/\\])*pytest(?:\.cmd|\.exe)?(?=$|[\s'"])/i,
+  /(?:^|[\s;&|('"])(?:[^\s;&|('"/\\]*[\/\\])*go(?:\.cmd|\.exe)?\s+test(?=$|[\s'"])/i,
+  /(?:^|[\s;&|('"])(?:[^\s;&|('"/\\]*[\/\\])*cargo(?:\.cmd|\.exe)?\s+test(?=$|[\s'"])/i,
 ]
 
 const EMPTY_TOKENS = { input: 0, cachedInput: 0, output: 0, reasoningOutput: 0 }
@@ -16,6 +16,12 @@ const EMPTY_TOKENS = { input: 0, cachedInput: 0, output: 0, reasoningOutput: 0 }
 const isRecord = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
 const numberOrZero = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
 const isTestCommand = (command) => TEST_COMMAND_PATTERNS.some((pattern) => pattern.test(command))
+const longestBacktickRun = (text) => Math.max(...[...text.matchAll(/`+/g)].map((match) => match[0].length), 0)
+const formatFailedCommand = (command, exitCode) => {
+  const safeCommand = command.replace(/\r?\n|\r/g, ' ')
+  const fence = '`'.repeat(longestBacktickRun(safeCommand) + 1)
+  return `  - exit ${exitCode}: ${fence} ${safeCommand} ${fence}`
+}
 
 export function digestLines(lines) {
   const commands = []
@@ -88,7 +94,7 @@ export function formatDigest(digest) {
   return [
     `Commands: ${digest.commands.length}`,
     `Failed commands: ${digest.failedCommands.length}`,
-    ...digest.failedCommands.map(({ command, exitCode }) => `  - exit ${exitCode}: ${command}`),
+    ...digest.failedCommands.map(({ command, exitCode }) => formatFailedCommand(command, exitCode)),
     `Test runs: ${digest.testRuns}`,
     `Files changed more than once: ${digest.filesChangedMoreThanOnce.length}`,
     ...digest.filesChangedMoreThanOnce.map(({ path: filePath, count }) => `  - ${filePath} ×${count}`),
