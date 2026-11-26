@@ -1,0 +1,6 @@
+not json
+{"type":"item.completed","at":"2026-01-02T00:00:00.000Z","item":{"type":"command_execution","command":"pytest tests/test_alpha.py --quiet","exit_code":1}}
+{"type":"turn.completed","at":"2026-01-02T00:00:01.000Z","usage":{"input_tokens":4}}
+{"type":"item.completed","at":"2026-01-02T00:00:02.000Z","item":{"type":"command_execution","command":"node scripts/check.mjs","exit_code":0}}
+{"type":"item.completed","item":{"type":"command_execution","command":"jest","exit_code":0}}
+42

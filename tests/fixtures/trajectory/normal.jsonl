@@ -1,0 +1,5 @@
+{"type":"item.completed","at":"2026-01-01T00:00:00.000Z","item":{"type":"command_execution","command":"npm test","exit_code":0}}
+{"type":"item.completed","at":"2026-01-01T00:00:02.000Z","item":{"type":"file_change","changes":[{"path":"src/alpha.ts"}]}}
+{"type":"item.completed","at":"2026-01-01T00:00:03.000Z","item":{"type":"file_change","changes":[{"path":"src/alpha.ts"}]}}
+{"type":"turn.completed","at":"2026-01-01T00:00:04.000Z","usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":5,"reasoning_output_tokens":3}}
+{"type":"live.run_finished","at":"2026-01-01T00:00:05.000Z","status":"completed"}

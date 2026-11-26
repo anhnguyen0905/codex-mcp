@@ -1,0 +1,1 @@
+{"type":"item.completed","at":"2026-01-03T00:00:00.000Z","item":{"type":"command_execution","command":"go test ./...","exit_code":0}}
