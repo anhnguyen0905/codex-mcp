@@ -73,6 +73,16 @@ behavior is defined in **markdown instruction files**, not runtime code.
   pinned in `tests/flowDocs.test.ts` — pay for new command text by trimming unpinned duplicates;
   never touch Phase 2 skills.
 
+## Harness changes (process rule, not CI-enforced)
+
+- **Harness changes**: every commit that changes `commands/`, `skills/` or `scripts/` records one
+  `node scripts/harness-change.mjs add --title … --evidence … --cause <label> --fix … --expect …
+  --at-risk … --filter key=value --after-runs <n> [--commit <sha>]` entry with a falsifiable
+  expectation, at-risk area, run-ledger filter, and run count after which `due` compares cohorts;
+  close it later with `harness-change.mjs verdict`. The local store is
+  `~/.codex-mcp/harness-changes.jsonl`, overridable with `CODEX_MCP_HARNESS_CHANGES`, and is
+  never committed.
+
 ## Style
 
 - Instruction prose: English, imperative, concise. Match the section style of neighboring skills

@@ -102,6 +102,16 @@ The run directory is `.codex-flow/brainstorm/<timestamp>/`. It contains `FRAME.m
 
 The run ledger is append-only JSONL at `~/.codex-mcp/run-ledger.jsonl`; set `CODEX_MCP_RUN_LEDGER` to override the path. Each record captures the lane, project, run ID, profile, domain, language, request, selected skills, fix rounds, Codex tokens, wall-clock minutes, owner gates, bypasses, and outcome. Requests are redacted and capped at 4,000 characters. Ledger writes are best-effort: report a non-zero exit and continue. Inspect aggregates with `node scripts/run-ledger.mjs summary [--project <abs path>] [--json]`. The [`gate inventory`](gate-inventory.md) is Phase 0 of the multiscope roadmap accepted on 2026-11-13; analysis remains in the local brainstorm record.
 
+## Harness learning
+
+`harness-taxonomy.mjs` defines the seven cause labels—`spec-ambiguous`, `plan-wrong`, `context-missing`, `skill-gap`, `executor-error`, `verifier-gap`, and `infra`; record causes with `run-ledger.mjs append … --causes <csv>` and compare cohorts with `run-ledger.mjs summary --filter cause=<label>`. `verifier-guard.mjs arm` and `check` detect flow or test changes and are warn-only in the workflow. `trajectory-digest.mjs --log <liveLog> [--json]` summarizes a live run.
+
+`playbook.mjs merge`, `render`, and `prune` maintain `.codex-flow/playbook.jsonl`; it is never archived. `context-slice.mjs` adds a `## Playbook` item capped at 300 tokens and drops it first when the slice is tight. `harness-change.mjs add`, `due`, and `verdict` record and close falsifiable harness-change cohorts.
+
+`skill-ablation.mjs prompts` and `compare` use mechanical grading with no network. `rule-audit.mjs list` and `ablate` write only outside the repository. `flow-skill-map.mjs` is the single source of `PHASE_SKILL_MAP`. Skill-match tuning lives in `skill-match.mjs` under `DEFAULT_TUNING` and `TUNING_BOUNDS` inside `EVOLVE-BLOCK` markers; `skill-match-evolve.mjs` performs seeded search and a held-out check, reports results, and never writes `skill-match.mjs`.
+
+Of the helpers above, the new runtime ones (added to `package.json` `files[]`) are `harness-taxonomy.mjs`, `playbook.mjs`, `verifier-guard.mjs`, and `trajectory-digest.mjs`; `run-ledger.mjs`, `context-slice.mjs`, and `skill-match.mjs` were already shipped; `harness-change.mjs`, `skill-ablation.mjs`, `rule-audit.mjs`, `flow-skill-map.mjs`, and `skill-match-evolve.mjs` are development tooling.
+
 ## Profile pilot
 
 The multiscope Phase 1 data-analysis pilot has independent `profile`, `evidence`, and run-language switches. Defaults preserve today's behaviour; shadow routing records its proposed gate replacements. See the [`profile pilot procedure`](profile-pilot.md) for the manifest, checker, and pass bar. Compare switch cohorts with `node scripts/run-ledger.mjs summary --filter key=value`.
