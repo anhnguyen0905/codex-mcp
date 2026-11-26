@@ -1,6 +1,6 @@
+import { isDirectRun } from './direct-run.mjs'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 export const TEST_COMMAND_PATTERNS = [
   /(?:^|[\s;&|('"])(?:[^\s;&|('"/\\]*[\/\\])*vitest(?:\.cmd|\.exe)?(?=$|[\s'"])/i,
@@ -110,9 +110,7 @@ const usageError = (message) => {
   process.exitCode = 2
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   const args = process.argv.slice(2)
   const logIndex = args.indexOf('--log')
   const logPath = logIndex >= 0 ? args[logIndex + 1] : undefined

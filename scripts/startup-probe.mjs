@@ -1,7 +1,8 @@
+import { isDirectRun } from './direct-run.mjs'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { npxBin, npmBin, npmSpawnOptions, runSmoke, shellArgs, SMOKE_ERROR_CODES } from './npm-smoke.mjs'
 
 export const STARTUP_BUDGET_MS = 30_000
@@ -96,9 +97,7 @@ export function classifyStartup(probe, dataless, { budgetMs = STARTUP_BUDGET_MS 
   return { level: 'ok', detail: `server started in ${probe.elapsedMs}ms` }
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   const distEntry = fileURLToPath(new URL('../dist/index.js', import.meta.url))
   const main = async () => {
     const probe = await probeStartup({ command: process.execPath, args: [distEntry] })

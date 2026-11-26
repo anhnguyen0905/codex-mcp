@@ -37,7 +37,7 @@ process.stdin.on('data', (chunk) => {
 })
 `
 
-const scriptNames = ['doctor.mjs', 'startup-probe.mjs', 'npm-smoke.mjs', 'session-cost.mjs']
+const scriptNames = ['doctor.mjs', 'startup-probe.mjs', 'npm-smoke.mjs', 'session-cost.mjs', 'direct-run.mjs']
 const makeDoctorCopy = () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'doctor-test-'))
   const scripts = path.join(dir, 'scripts')

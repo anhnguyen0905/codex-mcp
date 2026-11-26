@@ -67,6 +67,7 @@
   },
   "files": [
     "dist",
+    "scripts/direct-run.mjs",
     "scripts/evidence-scan.mjs",
     "scripts/tail-progress.mjs",
     "scripts/doctor.mjs",

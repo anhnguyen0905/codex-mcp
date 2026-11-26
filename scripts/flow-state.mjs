@@ -1,7 +1,7 @@
+import { isDirectRun } from './direct-run.mjs'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 import {
   JournalRejectedError, eventsPathFor, journalCheck, journalFilesFor, journalInit, journalPathFor,
   journalTransition, journalViolations,
@@ -821,9 +821,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     throw error
   }
 }
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   main()
     .then((exitCode) => { process.exitCode = exitCode })
     .catch((error) => {

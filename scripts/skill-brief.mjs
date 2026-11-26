@@ -1,3 +1,4 @@
+import { isDirectRun } from './direct-run.mjs'
 // Generates a bounded authoring brief for one skill facet from the effective
 // requirements and the project context recorded in PLAN.md.
 //
@@ -16,7 +17,6 @@ import {
   writeFileSync,
 } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 import { parseRequirements } from './requirements-coverage.mjs'
 
@@ -345,9 +345,7 @@ export function runCli(args, cwd = process.cwd()) {
   return EXIT_OK
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   try {
     process.exitCode = runCli(process.argv.slice(2))
   } catch (error) {

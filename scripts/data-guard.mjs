@@ -1,9 +1,9 @@
+import { isDirectRun } from './direct-run.mjs'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const TOKEN_PATTERN = /[\p{L}\p{N}_.-]{4,}/gu
@@ -141,8 +141,7 @@ export function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   }
   return output.findings.length || output.unchecked.length ? 1 : 0
 }
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   try { process.exitCode = main() } catch (error) {
     console.error(`data-guard: ${error instanceof Error ? error.message : String(error)}`)
     process.exitCode = 2

@@ -1,9 +1,10 @@
+import { isDirectRun } from './direct-run.mjs'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 const SERVER = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js')
 
@@ -153,9 +154,6 @@ async function main() {
   }
 }
 
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   await main()
 }

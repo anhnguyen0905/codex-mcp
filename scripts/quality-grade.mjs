@@ -1,10 +1,11 @@
+import { isDirectRun } from './direct-run.mjs'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, chmodSync, appendFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { appendLook, buildGraderPrompt, graderCacheKey, isInsideDir, loadHoldout, holdoutDir, loadRubric, parseGraderVerdict, validateCases, runMechanical, ingestGrades, verifyQuotes } from './quality-eval.mjs'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -135,5 +136,4 @@ export async function main(args, dependencies = {}) {
   } finally { if (typeof client.close === 'function') await client.close().catch(() => {}) }
 }
 
-const direct = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-if (direct) main(process.argv.slice(2)).catch((error) => { console.error(`quality-grade: ${error.message}`); process.exit(2) })
+if (isDirectRun(import.meta.url)) main(process.argv.slice(2)).catch((error) => { console.error(`quality-grade: ${error.message}`); process.exit(2) })

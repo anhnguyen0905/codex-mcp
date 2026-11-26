@@ -1,8 +1,9 @@
+import { isDirectRun } from './direct-run.mjs'
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 import { parseCatalog } from './build-skills-index.mjs'
 import { DEFAULT_TUNING, TUNING_BOUNDS } from './skill-match.mjs'
@@ -183,6 +184,6 @@ export async function resolveRealOutput(file) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRun(import.meta.url)) {
   runCli(process.argv.slice(2)).catch((error) => { const message = error instanceof Error ? error.message : String(error); process.stderr.write(`skill-match-evolve: ${message}\n`); process.exitCode = 2 })
 }

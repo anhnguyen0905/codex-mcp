@@ -1,7 +1,7 @@
+import { isDirectRun } from './direct-run.mjs'
 import { promises as fs, existsSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { pathToFileURL } from 'node:url'
 import { FLOW_COMMAND_PATH, flowSkillNames } from './flow-skill-map.mjs'
 
 const rulePattern = /\b(MUST|NEVER|ALWAYS)\b/i
@@ -84,7 +84,7 @@ export async function ablateRule(root, id, outDir) {
   await fs.writeFile(target, content.slice(0, start) + content.slice(start + source.raw.length), 'utf8')
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRun(import.meta.url)) {
   const args = process.argv.slice(2)
   const root = readFlag(args, '--root') ?? process.cwd()
   const run = async () => {

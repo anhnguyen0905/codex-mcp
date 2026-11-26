@@ -1,7 +1,7 @@
+import { isDirectRun } from './direct-run.mjs'
 import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 import { parseCatalog } from './build-skills-index.mjs'
 import {
@@ -161,6 +161,4 @@ export function runCli(argv, { stdout = console.log, stderr = console.error } = 
   }
 }
 
-const isDirectRun = process.argv[1]
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-if (isDirectRun) process.exit(runCli(process.argv.slice(2)))
+if (isDirectRun(import.meta.url)) process.exit(runCli(process.argv.slice(2)))

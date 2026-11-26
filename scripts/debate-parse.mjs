@@ -1,3 +1,4 @@
+import { isDirectRun } from './direct-run.mjs'
 // Fail-closed parser for the /codex-flow:brainstorm debate contract.
 // Usage: node scripts/debate-parse.mjs --kind map|round|feasibility [--round <1..3>] [--file <path>]
 // --round is required for round and rejected for map and feasibility.
@@ -5,7 +6,6 @@
 // (the result is still printed); 2 = usage or read failure.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 export const EXIT_OK = 0
 export const EXIT_MALFORMED = 1
@@ -319,5 +319,4 @@ export function main(argv = process.argv.slice(2), io = { stdout: console.log, s
   io.stdout(JSON.stringify(result, null, 2))
   return result.parsed && result.dropped === 0 ? EXIT_OK : EXIT_MALFORMED
 }
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-if (isDirectRun) process.exit(main())
+if (isDirectRun(import.meta.url)) process.exit(main())

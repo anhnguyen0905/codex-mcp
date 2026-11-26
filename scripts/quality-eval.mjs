@@ -1,8 +1,9 @@
+import { isDirectRun } from './direct-run.mjs'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, appendFileSync, chmodSync, writeFileSync, realpathSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { checkManifest } from './evidence-check.mjs'
 import { sampleClaims } from './evidence-check.mjs'
 import { checkLanguage } from './language-check.mjs'
@@ -464,8 +465,7 @@ async function runCli(args) {
   }
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-if (isDirectRun) runCli(process.argv.slice(2)).then(() => process.exit(0)).catch((error) => {
+if (isDirectRun(import.meta.url)) runCli(process.argv.slice(2)).then(() => process.exit(0)).catch((error) => {
   console.error(`quality-eval: ${error instanceof Error ? error.message : String(error)}`)
   process.exit(error instanceof FrozenChangesError ? 1 : 2)
 })

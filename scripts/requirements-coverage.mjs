@@ -1,3 +1,4 @@
+import { isDirectRun } from './direct-run.mjs'
 // Validates that every effective REQUIREMENTS.md criterion is assigned to at
 // least one TASKS.md task and that tasks cite only effective criterion IDs.
 // With --plan, also validates that every PLAN.md `A<n>` acceptance entry is
@@ -9,7 +10,6 @@
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 const REQUIREMENT_HEADING = /^##\s+(R\d+):\s*(.+?)\s*$/i
 const CRITERION_BULLET = /^\s*-\s*(R\d+\.\d+):\s*(.+?)\s*$/i
@@ -385,9 +385,7 @@ async function runCli(args) {
   return EXIT_OK
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   runCli(process.argv.slice(2))
     .then((exitCode) => { process.exitCode = exitCode })
     .catch((error) => {

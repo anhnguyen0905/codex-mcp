@@ -1,8 +1,8 @@
+import { isDirectRun } from './direct-run.mjs'
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { readFileSync, promises as fs } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 import { DEFAULT_PROJECT_FILE, FORBIDDEN_SUBSTRINGS } from './project-context.mjs'
 import { parseRequirements } from './requirements-coverage.mjs'
@@ -1246,10 +1246,7 @@ export async function main(args = process.argv.slice(2), { cwd = process.cwd(), 
   return outputPath
 }
 
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   main()
     .then((result) => {
       if (typeof result === 'number') process.exitCode = result

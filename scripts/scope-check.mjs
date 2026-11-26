@@ -1,3 +1,4 @@
+import { isDirectRun } from './direct-run.mjs'
 // Sequential scope trip-wire: proves that everything changed since the task's
 // base commit is inside that task's declared `Files:` set in .codex-flow/TASKS.md.
 // Sequential runs have no worktree boundary, so an executor can silently edit a
@@ -14,7 +15,6 @@ import { promises as fs, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 export const DEFAULT_TASKS_PATH = path.join('.codex-flow', 'TASKS.md')
 
@@ -471,10 +471,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd() }
   return EXIT_OK
 }
 
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   main()
     .then((exitCode) => {
       process.exitCode = exitCode

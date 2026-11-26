@@ -1,3 +1,4 @@
+import { isDirectRun } from './direct-run.mjs'
 // Command sync gate: commands/<name>.md is the single source of truth for each
 // slash command; .claude/commands/<name>.md must be a byte-exact copy. Exits 1 with a fix hint when any pair has drifted.
 //
@@ -5,7 +6,7 @@
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -51,7 +52,4 @@ const main = () => {
   process.exit(0)
 }
 
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) main()
+if (isDirectRun(import.meta.url)) main()

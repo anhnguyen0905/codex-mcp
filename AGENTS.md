@@ -53,6 +53,7 @@ behavior is defined in **markdown instruction files**, not runtime code.
   `scripts/task-waves.mjs` idiom — Node stdlib only, pure named exports, CLI behind a
   `pathToFileURL` direct-run guard — and MUST be added to `package.json` `files[]` to reach the
   plugin cache. Tests import its exports with `// @ts-expect-error — plain .mjs script`.
+  Gate the CLI with `isDirectRun(import.meta.url)` from `scripts/direct-run.mjs` (realpath-safe); never inline the `pathToFileURL(process.argv[1])` comparison.
   Any script referenced by an npm script (dev tooling included) also belongs in `files[]`:
   CI's `node scripts/pack-smoke.mjs` fails otherwise — run it locally before tagging.
 

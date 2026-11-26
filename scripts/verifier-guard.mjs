@@ -1,7 +1,7 @@
+import { isDirectRun } from './direct-run.mjs'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 const TASK_ID = /^T\d+$/
 const ASSERTION_PATTERN = /\bexpect\s*\(|\bassert\s*\(|\bassert\.[A-Za-z_]\w*\s*\(|\.should\b/g
@@ -159,7 +159,7 @@ const parseArgs = (args) => {
   return options
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRun(import.meta.url)) {
   try {
     const [command, ...args] = process.argv.slice(2)
     if (!['arm', 'check'].includes(command)) throw new Error(usage)

@@ -1,6 +1,6 @@
+import { isDirectRun } from './direct-run.mjs'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { LANGUAGE_TERMS } from './language-terms.mjs'
 
 const LETTER = '\\p{L}'
@@ -144,4 +144,4 @@ export function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) process.exitCode = main()
+if (isDirectRun(import.meta.url)) process.exitCode = main()

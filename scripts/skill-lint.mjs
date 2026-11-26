@@ -1,9 +1,9 @@
+import { isDirectRun } from './direct-run.mjs'
 // Validates the mechanical structure and provenance discipline of an authored SKILL.md.
 //
 // Usage: node scripts/skill-lint.mjs <SKILL.md path> [--max-unverified <ratio>]
 
 import { readFileSync } from 'node:fs'
-import { pathToFileURL } from 'node:url'
 import { scanSkillRisk } from './build-skills-index.mjs'
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/
@@ -340,7 +340,5 @@ export function runCli(args) {
   return EXIT_OK
 }
 
-const isDirectRun = process.argv[1]
-  && import.meta.url === pathToFileURL(process.argv[1]).href
 
-if (isDirectRun) process.exitCode = runCli(process.argv.slice(2))
+if (isDirectRun(import.meta.url)) process.exitCode = runCli(process.argv.slice(2))

@@ -1,6 +1,7 @@
+import { isDirectRun } from './direct-run.mjs'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { loadRubric, runMechanical, scoreCase, validateCases } from './quality-eval.mjs'
 
 const rubricFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'tests', 'fixtures', 'quality', 'rubrics.json')
@@ -94,7 +95,7 @@ export function main(args) {
   throw new Error('usage: prompts or compare')
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRun(import.meta.url)) {
   try { main(process.argv.slice(2)); process.exitCode = 0 } catch (error) {
     process.stderr.write(`skill-ablation: ${error instanceof Error ? error.message : String(error)}\n`)
     process.exitCode = 2

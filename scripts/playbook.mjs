@@ -1,6 +1,6 @@
+import { isDirectRun } from './direct-run.mjs'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { isCause } from './harness-taxonomy.mjs'
 
 const DEFAULT_FILE = path.join('.codex-flow', 'playbook.jsonl')
@@ -174,7 +174,7 @@ async function main(args) {
   await writePlaybook(file, prunePlaybook(await readPlaybook(file), Number(rawKeep)))
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRun(import.meta.url)) {
   main(process.argv.slice(2)).catch((error) => {
     process.stderr.write(`playbook: ${error instanceof Error ? error.message : String(error)}\n`)
     process.exitCode = 2

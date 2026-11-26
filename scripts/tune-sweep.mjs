@@ -1,3 +1,4 @@
+import { isDirectRun } from './direct-run.mjs'
 // Sweep the remaining retrieval tuning constant against every maintained scenario suite.
 //
 // Usage:
@@ -6,7 +7,7 @@
 import { promises as fs, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 import { parseCatalog } from './build-skills-index.mjs'
 import {
@@ -328,10 +329,7 @@ export async function runCli(argv) {
   return { report, outFile: resolvedOut }
 }
 
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   runCli(process.argv.slice(2))
     .then(({ report, outFile }) => {
       console.log(report)

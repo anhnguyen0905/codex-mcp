@@ -1,10 +1,10 @@
+import { isDirectRun } from './direct-run.mjs'
 // Calls TypeSafe Jev, loads fallback environment values from .env, and records optional shadow-mode comparisons.
 // Usage: node scripts/jev-client.mjs ask --point <name> --json '<JevAskParams JSON>'
 //        node scripts/jev-client.mjs log --point <name> --jev '<json>' --claude '<json>'
 
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 const JEV_URL = 'https://api.typesafe.ai/v1/systemone'
 const LOG_PATH = path.join('.codex-flow', 'notes', 'jev-shadow.log')
@@ -129,7 +129,7 @@ async function runCli(argv) {
   throw new Error(`unknown command: ${command}`)
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRun(import.meta.url)) {
   runCli(process.argv.slice(2)).catch((error) => {
     process.stdout.write(`${JSON.stringify({ available: false, mode: getJevMode(), reason: 'client-error', detail: errorMessage(error) })}\n`)
   })

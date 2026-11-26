@@ -1,6 +1,6 @@
+import { isDirectRun } from './direct-run.mjs'
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import os from 'node:os'
-import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 import { CAUSES, isCause } from './harness-taxonomy.mjs'
 import { ledgerPath, matchesFilters, median, parseFilter, readLedger } from './run-ledger.mjs'
@@ -125,6 +125,6 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRun(import.meta.url)) {
   process.exitCode = main()
 }

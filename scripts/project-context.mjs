@@ -1,3 +1,4 @@
+import { isDirectRun } from './direct-run.mjs'
 // Builds `.codex-flow/PROJECT.md` — the durable project-context artifact Codex receives
 // alongside every task slice. Extraction is deterministic: fixed section order, fixed
 // heading candidates per section, fixed manifest facts. Nothing is paraphrased, so two
@@ -12,7 +13,6 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 export const DEFAULT_PROJECT_FILE = path.join('.codex-flow', 'PROJECT.md')
 export const PROJECT_CONTEXT_TOKEN_BUDGET = 3000
@@ -459,10 +459,7 @@ function runCli(args) {
   return EXIT_OK
 }
 
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   try {
     process.exitCode = runCli(process.argv.slice(2))
   } catch (error) {

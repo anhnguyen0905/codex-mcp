@@ -1,3 +1,4 @@
+import { isDirectRun } from './direct-run.mjs'
 // Runs the skill-selection scope scenarios against a skill index and evaluates
 // whether the retrieval core surfaces the right skills within the ≤3 budget.
 //
@@ -14,7 +15,7 @@ import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 import { parseCatalog } from './build-skills-index.mjs'
 import {
@@ -692,10 +693,7 @@ export function exitCodeFor(summary, options = {}) {
   return passRequirement && !hasNegativeViolations && !hasBreachedGate ? 0 : 1
 }
 
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   runCli(process.argv.slice(2))
     .then(({ report, passed, total, negativeViolations, reportFile, gates, minPass }) => {
       console.log(report)

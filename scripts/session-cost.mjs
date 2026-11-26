@@ -1,7 +1,7 @@
+import { isDirectRun } from './direct-run.mjs'
 import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 const TOKENS_PER_MILLION = 1_000_000
 const COST_DECIMALS = 6
@@ -571,10 +571,7 @@ export function resolvePricing(env) {
   }
 }
 
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   try {
     const args = parseArgs(process.argv.slice(2))
     const logPath = resolveLogPath(args, process.env)

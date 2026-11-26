@@ -1,8 +1,8 @@
+import { isDirectRun } from './direct-run.mjs'
 import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import { constants as FS_CONSTANTS } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
 const TASK_ID = /^T\d+$/
@@ -161,7 +161,7 @@ async function main(argv = process.argv.slice(2)) {
   process.stdout.write(`worktree-setup: copied ${result.copied.join(', ')}\n`)
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRun(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`worktree-setup: ${errorMessage(error)}\n`)
     process.exitCode = 1

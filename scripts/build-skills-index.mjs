@@ -1,3 +1,4 @@
+import { isDirectRun } from './direct-run.mjs'
 // Builds a grep-friendly index of local skills so /codex-flow can SELECT the
 // few relevant skills for a task instead of blind-loading whole collections.
 //
@@ -71,7 +72,6 @@ import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -997,10 +997,7 @@ export async function runCli(argv) {
   return { count: entries.length, local: localEntries.length, out: outFile, warnings }
 }
 
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   runCli(process.argv.slice(2))
     .then((summary) => {
       if (summary.vetted) {

@@ -1,6 +1,7 @@
+import { isDirectRun } from './direct-run.mjs'
 import { appendFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { detectLanguage } from './language-detect.mjs'
 import { requestDomains } from './skill-domains.mjs'
 
@@ -151,4 +152,4 @@ export function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) process.exitCode = main()
+if (isDirectRun(import.meta.url)) process.exitCode = main()

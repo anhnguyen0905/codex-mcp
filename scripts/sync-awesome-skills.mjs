@@ -1,3 +1,4 @@
+import { isDirectRun } from './direct-run.mjs'
 // Syncs the awesome-claude-skills list into a local REMOTE.md catalog — the
 // foundation layer of the skill index. build-skills-index.mjs merges this
 // catalog into INDEX.md; locally vetted skills always shadow remote entries.
@@ -29,7 +30,6 @@ import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -203,10 +203,7 @@ export async function runCli(argv) {
   return summary
 }
 
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   runCli(process.argv.slice(2))
     .then(({ count, out, from, clone }) => {
       console.log(`Synced ${count} remote skill(s) from ${from}`)

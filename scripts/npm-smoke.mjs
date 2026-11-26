@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isDirectRun } from './direct-run.mjs'
 /**
  * Post-publish / pre-publish npm smoke test.
  *
@@ -22,7 +23,7 @@ import { spawn, execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -504,9 +505,7 @@ async function main(argv, repoRoot) {
   }
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
   main(process.argv.slice(2), repoRoot).then(
     () => process.exit(EXIT_OK),

@@ -1,3 +1,4 @@
+import { isDirectRun } from './direct-run.mjs'
 // Computes parallel execution "waves" from a codex-flow TASKS.md so large
 // backlogs can run several Codex sessions concurrently (one git worktree per
 // task, since codex-mcp serializes per cwd but parallelizes across cwds).
@@ -12,7 +13,6 @@
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 // Cap on how many subagents/worktrees run at once — a wider ready set is split
 // across consecutive waves so we never spawn more than this many in parallel.
@@ -312,10 +312,7 @@ export function renderWaves({ waves, maxWidth, parallelizable, blocked = [], inP
   return lines.join('\n')
 }
 
-const isDirectRun =
-  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   const args = process.argv.slice(2)
   const maxIdx = args.findIndex((a) => a === '--max')
   let maxConcurrency = DEFAULT_MAX_CONCURRENCY
