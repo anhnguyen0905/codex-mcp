@@ -2137,7 +2137,7 @@ describe('durable task-loop state contract (R1.2, R1.6)', () => {
   test('task status writes route through the helper and fail closed', () => {
     expect(phase4).toContain(`${helper} task T<n> in-progress`)
     expect(phase4).toContain('`flow-state set currentTask T<n>` and `flow-state set taskStage launching`')
-    expect(phase4).toContain('once the call is dispatched, run `flow-state set taskStage executing`')
+    expect(phase4).toContain('then run `flow-state set taskStage executing` as the last write before the call.')
     expect(phase4).toContain(`${helper} task T<n> failed`)
     expect(phase4).toContain(`${helper} set wave <n>`)
     // T9 retarget: the command now names the key count and defers the literal key list to
@@ -3105,6 +3105,69 @@ describe('PROJECT.md generation, reading, and refresh triggers (R7.3, R7.4)', ()
       finalReview,
       STEP_EIGHT_PHRASES,
       (text) => extractNumberedStep(extractPhaseSection(text, 5), 8),
+    )
+  })
+})
+
+describe('T11 workflow helper wiring (R1.6, R2.8, R7.6, R8.9)', () => {
+  test('task-loop pins verifier arm/check and non-failure handling', () => {
+    const skill = readText(TASK_LOOP_PATH).replace(/\s+/g, ' ')
+
+    expect(skill).toContain(
+      'verifier-guard.mjs" arm --task T<n> --verify "<verifyCommand>"`; immediately after the call returns',
+    )
+    expect(skill).toContain(
+      'verifier-guard.mjs" check --task T<n>`. Exit 1 is a finding Codex must explain in the next round, never an automatic task failure.',
+    )
+  })
+
+  test('task-loop pins trajectory digest output and null-log skip', () => {
+    const skill = readText(TASK_LOOP_PATH).replace(/\s+/g, ' ')
+
+    expect(skill).toContain(
+      'trajectory-digest.mjs" --log <liveLog>` and append its text output to the task\'s `reviews.md` section; skip when `liveLog` is null.',
+    )
+  })
+
+  test('task-loop retains the Phase 4 step 6 handoff rule', () => {
+    const phaseFour = extractPhaseSection(readText(TASK_LOOP_PATH), 4)
+
+    expect(phaseFour).toMatch(/6\. When the task passes review, the Phase 5 step 7 handoff is the only per-task writer; `done` is its last write\./)
+  })
+
+  test('review-feedback pins one harness cause label per continue round', () => {
+    const skill = readText(path.join(REPO_ROOT, 'skills', 'review-feedback', 'SKILL.md')).replace(/\s+/g, ' ')
+
+    expect(skill).toContain(
+      'Every `codex_continue` round records exactly one cause label from `scripts/harness-taxonomy.mjs`',
+    )
+  })
+
+  test('run-ledger pins cause forwarding', () => {
+    expect(readText(RUN_LEDGER_PATH)).toContain(
+      'Pass the run\'s recorded cause labels as `--causes <csv>` on the end-of-run ledger append.',
+    )
+  })
+
+  test('final-review pins playbook lesson merging', () => {
+    const skill = readText(FINAL_REVIEW_PATH).replace(/\s+/g, ' ')
+
+    expect(skill).toContain('playbook.mjs" merge --run <run id> --from <lessons file>')
+    expect(skill).toContain('lessons use lines `<cause> | <lesson>`')
+  })
+
+  test('command Phase 2 pins reading the playbook with PROJECT.md', () => {
+    const stepOne = extractNumberedStep(extractPhaseSection(readText(COMMAND_PATH), 2), 1)
+      .replace(/\s+/g, ' ')
+
+    expect(stepOne).toContain(
+      'Read `.codex-flow/PROJECT.md` first; when present, also read `.codex-flow/playbook.jsonl`',
+    )
+  })
+
+  test('preflight pins the playbook archive rule', () => {
+    expect(readText(PREFLIGHT_PATH).replace(/\s+/g, ' ')).toContain(
+      '`.codex-flow/playbook.jsonl`, like PROJECT.md, is never archived with a run.',
     )
   })
 })

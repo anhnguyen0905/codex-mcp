@@ -5,7 +5,7 @@ description: Run the final review, improvement gate, and retro.
 
 # Final review (embed into Codex prompts)
 
-**Helpers**: required — requirements-coverage.mjs, project-context.mjs, session-cost.mjs, flow-state.mjs (scripts/flow-state.mjs; helper rule: missing or non-zero means stop and tell the user to reinstall the plugin).
+**Helpers**: required — requirements-coverage.mjs, project-context.mjs, session-cost.mjs, flow-state.mjs, playbook.mjs (scripts/flow-state.mjs; helper rule: missing or non-zero means stop and tell the user to reinstall the plugin).
 
 ## Phase 5 — Review (final)
 
@@ -38,11 +38,7 @@ description: Run the final review, improvement gate, and retro.
    deviation under `Contracts touched` or a Decision naming an architecture change, run
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/project-context.mjs" --refresh` and show the user the
    resulting `.codex-flow/PROJECT.md` diff for confirmation (owner notes survive a refresh).
-9. **Improvement decision gate**: run it per `codex-flow:review-dual`, which carries the whole gate
-   (pending-entry definition, the missing-ledger "no improvements" case, slicing approved items into
-   `.codex-flow/TASKS.md` with `(approved: T<n>)` / `(declined)` ledger markers, and the no-re-trigger
-   rule for gate-spawned tasks). Before appending any approved task, FIRST run `flow-state improvement-gate`. Slice
-   approved items into new tasks appended to `.codex-flow/TASKS.md`.
+9. **Improvement decision gate**: run it per `codex-flow:review-dual`. Before appending any approved task, FIRST run `flow-state improvement-gate`. Slice approved items into new tasks appended to `.codex-flow/TASKS.md`.
    Run the impact analysis, the coverage lint with `--plan .codex-flow/PLAN.md`, and backlog sanity
    checks, then get backlog re-approval;
    only afterward run `flow-state approve backlog` then `flow-state advance` before scheduling the new tasks, which run
@@ -61,6 +57,4 @@ description: Run the final review, improvement gate, and retro.
    reports in the final delivery summary. Only after the improvement gate and all final review, requirement,
    cost, report, and delivery gates complete, run `flow-state advance` until `phase: complete`
    (twice when improvement tasks returned the run to `execution`).
-10. **Retro**: per `codex-flow:skill-selection` Step 8, if the flow produced reusable domain
-   knowledge no indexed skill covers, offer to save it as a new skill in the local library and
-   rebuild the index.
+10. **Retro**: merge the run's lessons with `node "${CLAUDE_PLUGIN_ROOT}/scripts/playbook.mjs" merge --run <run id> --from <lessons file>`; lessons use lines `<cause> | <lesson>`. Per `codex-flow:skill-selection` Step 8, offer reusable uncovered domain knowledge as a new local skill and rebuild the index.

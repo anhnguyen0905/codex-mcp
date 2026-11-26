@@ -20,6 +20,8 @@ helper detect it; pass it only to correct a wrong detection. `--skills` and `--b
 comma-separated; omit them when empty. Exit 0 means written, exit 2 means usage or validation
 error with nothing written, and exit 1 means I/O failure.
 
+Pass the run's recorded cause labels as `--causes <csv>` on the end-of-run ledger append.
+
 ```sh
 node "${CLAUDE_PLUGIN_ROOT}/scripts/run-ledger.mjs" append --lane <lane> --project <abs-path> --run-id <id> --profile <profile> --profile-mode <m> --evidence-mode <m> --language-mode <m> --domain <text> --request-file <path> --skills <a,b> --fix-rounds <n> --codex-tokens <n> --started <ISO> --owner-gates <n> --bypasses <a,b> --outcome <outcome>
 ```

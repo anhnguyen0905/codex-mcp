@@ -182,7 +182,8 @@ when STATE.md does not exist.
 On a fresh run, before baselining, when `.codex-flow/PROJECT.md` is absent generate it with
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/project-context.mjs" --generate`, and ask the user to confirm or edit it in
 the Phase 1 interview. PROJECT.md is tracked, not run state: include it in checkpoint and final
-commits and never archive it with the run; when created before baselining, list it as pre-existing
+commits and never archive it with the run. `.codex-flow/playbook.jsonl`, like PROJECT.md, is never
+archived with a run. When created before baselining, list it as pre-existing
 in the `baseline-dirty.patch` manifest.
 
 On a fresh run, create `.codex-flow/reports/<YYYYMMDD-HHMMSS>/` using the session-start local-time

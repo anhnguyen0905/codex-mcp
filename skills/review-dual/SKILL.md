@@ -45,11 +45,8 @@ comparison result so a reviewer that ignored the declared scope is visible inste
 
 ## Run the two reviews concurrently
 
-`mcp__codex__codex_review` is read-only and does not depend on Claude's pass, so never run the two
-in series. Launch a background subagent whose single job is to call `mcp__codex__codex_review`
-with the focus block above and return the result's `reviewFindings` and `status` verbatim; run
-Claude's conformance → quality → security pass while it works; then compare. Only when the Agent
-tool is unavailable call `mcp__codex__codex_review` directly after Claude's pass.
+`mcp__codex__codex_review` is read-only, so never run the two
+in series.
 
 ## Read Codex's findings from `reviewFindings`, not prose
 
@@ -83,7 +80,6 @@ Append non-blocking improvements from BOTH reviews to `.codex-flow/IMPROVEMENTS.
 `- [ ] IMP-<n> (T<k>, source: codex|claude|both) <description> — <file:line>`
 Allocate `IMP-<n>` from one global counter across the whole run, never from per-review counters.
 When Claude and Codex suggest the same improvement, record ONE line with `source: both`.
-The ledger NEVER blocks marking a task done and NEVER spends an `mcp__codex__codex_continue` round.
 
 Optional Jev assist (off by default): load `codex-flow:jev-assist`.
 

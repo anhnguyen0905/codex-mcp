@@ -71,7 +71,7 @@ elicitation. When in doubt, ask.
 
 **Load skills first**: (if not already loaded this session) `codex-flow:plan-research-first`, `codex-flow:plan-architecture`, `codex-flow:skill-selection`, `codex-flow:context-discipline`, and `codex-flow:session-report`.
 
-1. Read `.codex-flow/PROJECT.md` first (the executor under inverted roles reads it too), then explore the codebase through Explore subagents per `codex-flow:context-discipline`, requiring conclusions with paths and line anchors.
+1. Read `.codex-flow/PROJECT.md` first; when present, also read `.codex-flow/playbook.jsonl` (the executor under inverted roles reads them too), then explore the codebase through Explore subagents per `codex-flow:context-discipline`, requiring conclusions with paths and line anchors.
 2. **Select domain skills from the local index** by running `codex-flow:skill-selection` end to
    end — it carries the search terms, the ~3%-of-context load budget, the index scan, and the
    no-blind-loading rule. Every facet the

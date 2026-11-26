@@ -5,6 +5,8 @@ description: Review verdict process — severity levels, the codex_continue feed
 
 # Review Feedback Process
 
+**Helpers**: required — harness-taxonomy.mjs (helper rule: missing/non-zero → STOP).
+
 ## Run status gate (before reviewing content)
 
 Every `codex_execute`/`codex_continue`/`codex_review` result carries `schemaVersion: 1` and a
@@ -51,6 +53,7 @@ Rules: exact file:line · observed vs expected behavior · which criterion/stand
 ## Round discipline
 
 - Re-review after every round: pass the same `verifyCommand` on the `codex_continue` so acceptance re-runs mechanically, read `accepted`/`verification` from the fix-round result, verify each finding is actually fixed, and check nothing new broke — diff the diff.
+- Every `codex_continue` round records exactly one cause label from `scripts/harness-taxonomy.mjs` (spec-ambiguous, plan-wrong, context-missing, skill-gap, executor-error, verifier-gap, infra) in the task's `reviews.md` section.
 - Max 3 rounds per task. Persisting findings after 3 rounds → stop sending to Codex; tell the user, then either fix by hand (flagging it) or re-plan the task.
 - Never fix Codex's code yourself during rounds 1–3 — parallel edits desync the Codex session's view of the workspace.
 - Clean review → proceed to the Phase 5 step 7 durable handoff, where `done` is the last write; state what was verified (verification passed, criteria met) — not just "looks good".

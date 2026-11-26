@@ -5,7 +5,7 @@ description: Execute and review tasks through the Phase 4 and Phase 5 loop.
 
 # Task Loop (embed into Codex prompts)
 
-**Helpers**: required — task-waves.mjs, context-slice.mjs, flow-state.mjs, scope-check.mjs, requirements-coverage.mjs (helper rule: if a named helper is missing or exits non-zero, stop and tell the user to reinstall the plugin).
+**Helpers**: required — task-waves.mjs, context-slice.mjs, flow-state.mjs, scope-check.mjs, requirements-coverage.mjs, verifier-guard.mjs, trajectory-digest.mjs (helper rule: if a named helper is missing or exits non-zero (except `verifier-guard.mjs check` exit 1, a finding), stop and tell the user to reinstall the plugin).
 
 ## Phase 4 — Execution (Codex)
 
@@ -29,7 +29,7 @@ For each task in dependency order (sequential mode):
    `  - <ISO 8601 ts> pending -> in-progress` beneath it, and write
    `- Session: launching (base: <short sha>)`. Make the Status write and its transition line with
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/flow-state.mjs" task T<n> in-progress`, and run `flow-state set currentTask T<n>` and
-   `flow-state set taskStage launching`; once the call is dispatched, run `flow-state set taskStage executing`.
+   `flow-state set taskStage launching`, then run `flow-state set taskStage executing` as the last write before the call.
    Complete all of these writes before calling `mcp__codex__codex_execute` with:
    - `prompt`: start with the single header line `Run position: phase execution — task T<n> <title> — next gate: <gate>`, then the opener "Read .codex-flow/CONTEXT-T<n>.md for context (a budgeted slice of PLAN.md; its header records the generation anchor, and blocks marked [verify] must be re-checked against the current code before relying on them)." Then append "Implement task T<n> exactly as specified below, and only this task. Run its acceptance checks before finishing." + the standards, testing, and language blocks from the loaded skills (or the `exec-deliverable` blocks for a non-code task) + a distilled ≤ 30-line rules block per skill in the task's `Skills:` field (see `codex-flow:skill-selection` Step 6 — never paste a whole SKILL.md); do not append the full task text because the slice already embeds it as mandatory content.
    - `cwd`: absolute path of the project root
@@ -38,6 +38,7 @@ For each task in dependency order (sequential mode):
    - `timeoutMs`: default 60 min; scale UP for large tasks rather than letting them die. The server auto-resumes within bounded limits, so never retry manually before inspecting `attempts` and `resumeReasons` (see step 2).
    - `terminal`: `true` — opens a live-progress terminal window when supported; progress also streams into the session via MCP notifications
    - `verifyCommand`: the task's exact acceptance check from its `Acceptance:` field (test file/pattern or build command, e.g. `npx vitest run tests/foo.test.ts`). The server runs it in `cwd` after the run settles and returns `verification` (`exitCode`, `passed`, `outputTail`) — deterministic evidence that the check ran, independent of Codex's account. Pass the same `verifyCommand` on every `codex_continue` fix round. Omit only when the acceptance is a manual probe with no command.
+   After all other pre-call control-file writes, immediately before each `codex_execute`/`codex_continue`, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verifier-guard.mjs" arm --task T<n> --verify "<verifyCommand>"`; immediately after the call returns and before any other control-file write, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/verifier-guard.mjs" check --task T<n>`. Exit 1 is a finding Codex must explain in the next round, never an automatic task failure.
 2. **Check the returned `status` field** before anything else:
    - `success` → proceed normally.
    - `partial` (not a tool error) → the run ended without a completion marker, or with unparseable
@@ -61,9 +62,7 @@ For each task in dependency order (sequential mode):
    in the Decision log, never as a suffix on that line), then set `taskStage idle` and
    `currentTask -`, and update TaskUpdate. Transition lines are append-only — never rewrite or delete earlier ones.
 5. Run Phase 5 review for the task BEFORE starting the next one.
-6. When the task passes review, act as the only per-task writer in sequential mode: Phase 5 step 7
-   performs the durable completion handoff in the order given there, and only after all of its
-   writes succeed may it flip the task to `done`; `done` means the complete durable handoff exists.
+6. When the task passes review, the Phase 5 step 7 handoff is the only per-task writer; `done` is its last write.
 
 ## Phase 5 — Review (Claude, per task + final)
 
@@ -74,7 +73,7 @@ worktrees) and moves to `handoff` only in the coordinator's Step 3.8. `phase: re
 in step 8, after the last task.
 
 0. Before reviewing, reuse the existing `.codex-flow/CONTEXT-T<n>.md` only when its generated header's anchor equals the current `git rev-parse HEAD` and the tree is clean; otherwise run `node "${CLAUDE_PLUGIN_ROOT}/scripts/context-slice.mjs" --task T<n>` to regenerate this task's slice, then re-read it and this task's entry in `.codex-flow/TASKS.md`. Treat the files read on disk — not session memory, which may have been compacted — as the source of truth for acceptance criteria, architecture, `Files:` scope, and the known-red baseline. Read full `.codex-flow/PLAN.md` only when a finding disputes plan intent or the slice's omitted-pointer line points at a section the review needs.
-1. **Start the Codex-side review in the background FIRST** — it is read-only and independent of your own pass, so never run it after your review: launch a background subagent (Agent tool, general-purpose) whose only job is to call `mcp__codex__codex_review` for THIS task with the focus block from `codex-flow:review-dual` (task id/title, acceptance criteria, `Files:` list) plus `scope: { files: <the task's `Files:` list>, contract: <the PLAN Contracts the task lists> }`, and return the tool result's `reviewFindings` object plus `status` verbatim, nothing else. Do steps 2–4 yourself while it runs; collect its result in step 4. If the Agent tool is unavailable, call `mcp__codex__codex_review` directly at step 4 instead (sequential fallback).
+1. **Start the Codex-side review in the background FIRST** — launch a background subagent (Agent tool, general-purpose) whose only job is to call `mcp__codex__codex_review` for THIS task with the focus block from `codex-flow:review-dual` (task id/title, acceptance criteria, `Files:` list) plus `scope: { files: <the task's `Files:` list>, contract: <the PLAN Contracts the task lists> }`, and return the tool result's `reviewFindings` object plus `status` verbatim, nothing else. Do steps 2–4 yourself while it runs; collect its result in step 4. If the Agent tool is unavailable, call `mcp__codex__codex_review` directly at step 4 instead (sequential fallback).
    **Scope trip-wire (mechanical, not judgment)** — in sequential mode, before the Claude review
    pass, run
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/scope-check.mjs" --task T<n> --base <base sha> --tasks .codex-flow/TASKS.md`
@@ -115,6 +114,7 @@ in step 8, after the last task.
    the AskUserQuestion exceptions), and append non-blocking suggestions from BOTH reviews to
    `.codex-flow/IMPROVEMENTS.md` per that skill; they never block the task. A failed, timed-out, or
    `partial` `codex_review` falls back to Claude-only review per that skill.
+   After each Codex call whose `liveLog` is non-null, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/trajectory-digest.mjs" --log <liveLog>` and append its text output to the task's `reviews.md` section; skip when `liveLog` is null.
 5. **If issues found**: route verified CRITICAL/HIGH findings from EITHER review to the task's
    recorded Session line via `mcp__codex__codex_continue` (passing the same `verifyCommand`, see
    Phase 4 step 1, so acceptance re-runs mechanically), never to the fresh reviewer session from

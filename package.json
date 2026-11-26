@@ -88,6 +88,8 @@
     "scripts/flow-events.mjs",
     "scripts/context-slice.mjs",
     "scripts/playbook.mjs",
+    "scripts/verifier-guard.mjs",
+    "scripts/trajectory-digest.mjs",
     "scripts/decision-log.mjs",
     "scripts/worktree-setup.mjs",
     "scripts/project-context.mjs",
