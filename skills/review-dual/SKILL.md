@@ -80,6 +80,7 @@ Append non-blocking improvements from BOTH reviews to `.codex-flow/IMPROVEMENTS.
 `- [ ] IMP-<n> (T<k>, source: codex|claude|both) <description> — <file:line>`
 Allocate `IMP-<n>` from one global counter across the whole run, never from per-review counters.
 When Claude and Codex suggest the same improvement, record ONE line with `source: both`.
+The ledger NEVER blocks marking a task done and NEVER spends an `mcp__codex__codex_continue` round.
 
 Optional Jev assist (off by default): load `codex-flow:jev-assist`.
 

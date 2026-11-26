@@ -49,7 +49,8 @@ export function signature(results) {
 }
 
 const metric = (summary) => ({ fitness: summary.passed, precisionAt1: summary.results.reduce((sum, result) => sum + (result.precisionAt1 ?? 0), 0) })
-const compare = (a, b) => b.fitness - a.fitness || b.precisionAt1 - a.precisionAt1 || a.canonical.localeCompare(b.canonical)
+const canonicalTuning = (tuning) => JSON.stringify(Object.fromEntries(Object.keys(TUNING_BOUNDS).map((key) => [key, tuning[key]])))
+export const compareCandidates = (a, b) => b.fitness - a.fitness || b.precisionAt1 - a.precisionAt1 || a.canonical.localeCompare(b.canonical)
 
 export function validateTuning(tuning, bounds = TUNING_BOUNDS) {
   for (const [key, [min, max]] of Object.entries(bounds)) {
@@ -64,7 +65,7 @@ function evaluateCandidate(tuning, entries, dev, holdout, seen) {
   if (seen.has(candidateSignature)) return { duplicate: true }
   seen.add(candidateSignature)
   const holdoutSummary = runScenarios(holdout, entries, { tuning })
-  return { tuning, signature: candidateSignature, ...metric(devSummary), heldOut: holdoutSummary.passed + holdoutSummary.results.reduce((sum, result) => sum + (result.precisionAt1 ?? 0), 0) }
+  return { tuning, canonical: canonicalTuning(tuning), signature: candidateSignature, ...metric(devSummary), heldOut: holdoutSummary.passed + holdoutSummary.results.reduce((sum, result) => sum + (result.precisionAt1 ?? 0), 0) }
 }
 
 export async function evolve(options) {
@@ -83,7 +84,7 @@ export async function evolve(options) {
   const seen = new Set()
   const baselineDev = runScenarios(dev, entries, { tuning: DEFAULT_TUNING })
   const baselineHoldout = runScenarios(holdout, entries, { tuning: DEFAULT_TUNING })
-  const baseline = { tuning: { ...DEFAULT_TUNING }, signature: signature(baselineDev.results), ...metric(baselineDev), heldOut: baselineHoldout.passed + baselineHoldout.results.reduce((sum, result) => sum + (result.precisionAt1 ?? 0), 0), baseline: true }
+  const baseline = { tuning: { ...DEFAULT_TUNING }, canonical: canonicalTuning(DEFAULT_TUNING), signature: signature(baselineDev.results), ...metric(baselineDev), heldOut: baselineHoldout.passed + baselineHoldout.results.reduce((sum, result) => sum + (result.precisionAt1 ?? 0), 0), baseline: true }
   seen.add(baseline.signature)
   let parents = [baseline]
   const candidates = []
@@ -103,9 +104,9 @@ export async function evolve(options) {
         rejected++
       }
     }
-    batch.sort(compare)
+    batch.sort(compareCandidates)
     candidates.push(...batch)
-    parents = [baseline, ...[...candidates].sort(compare).slice(0, Math.ceil(population / 2))]
+    parents = [baseline, ...[...candidates].sort(compareCandidates).slice(0, Math.ceil(population / 2))]
   }
   return { seed, generations, population, baseline, candidates, rejectedDuplicates, rejected, evaluations: 1 + generations * population, recommended: recommend(baseline, candidates) }
 }

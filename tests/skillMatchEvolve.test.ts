@@ -5,13 +5,13 @@ import { tmpdir } from 'node:os'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error — plain .mjs script
-import { evolve, formatReport, mulberry32, mutate, recommend, validateTuning } from '../scripts/skill-match-evolve.mjs'
+import { compareCandidates, evolve, formatReport, mulberry32, mutate, recommend, validateTuning } from '../scripts/skill-match-evolve.mjs'
 // @ts-expect-error — plain .mjs script
 import { TUNING_BOUNDS, DEFAULT_TUNING } from '../scripts/skill-match.mjs'
 
 const root = process.cwd()
 const fixture = (name: string) => join(root, 'tests', 'fixtures', 'evolve', name)
-const options = (seed: number) => ({ generations: 2, population: 5, seed, index: fixture('index.md'), dev: [fixture('dev.json')], holdout: fixture('holdout.json') })
+const options = (seed: number) => ({ generations: 3, population: 32, seed, index: fixture('index.md'), dev: [fixture('dev.json')], holdout: fixture('holdout.json') })
 
 describe('skill-match evolution', () => {
   it('produces a reproducible mulberry32 sequence', () => {
@@ -55,7 +55,22 @@ describe('skill-match evolution', () => {
 
     // Assert
     expect(firstText).toBe(secondText)
+    expect(first.candidates.length).toBeGreaterThanOrEqual(3)
     expect(first.candidates.map((candidate) => candidate.tuning)).not.toEqual(other.candidates.map((candidate) => candidate.tuning))
+  })
+
+  it('sorts tied candidates by canonical tuning', () => {
+    // Arrange
+    const candidates = [
+      { fitness: 1, precisionAt1: 1, canonical: '{"nameWord":2}' },
+      { fitness: 1, precisionAt1: 1, canonical: '{"nameWord":1}' },
+    ]
+
+    // Act
+    const sorted = [...candidates].sort(compareCandidates)
+
+    // Assert
+    expect(sorted[0].canonical).toBe('{"nameWord":1}')
   })
 
   it('counts duplicate signatures before ranking', async () => {

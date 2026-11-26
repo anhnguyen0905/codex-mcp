@@ -1,1 +1,1 @@
-{"scenarios":[{"id":"d1","terms":["alpha testing","beta"],"expectAny":["alpha"]},{"id":"d2","terms":["beta"],"expectAny":["beta"]},{"id":"d3","terms":["gamma"],"expectAny":["gamma"]}]}
+{"scenarios":[{"id":"d1","terms":["alpha testing","beta"],"expectAny":["alpha"]},{"id":"d2","terms":["beta"],"expectAny":["beta"]},{"id":"d3","terms":["gamma"],"expectAny":["gamma"]},{"id":"d4","terms":["gamma report","alpha"],"expectAny":["gamma","eta","alpha"]}]}
