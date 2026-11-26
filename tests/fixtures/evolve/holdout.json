@@ -1,0 +1,1 @@
+{"scenarios":[{"id":"h1","terms":["alpha"],"expectAny":["alpha"]},{"id":"h2","terms":["gamma"],"expectAny":["gamma"]}]}
