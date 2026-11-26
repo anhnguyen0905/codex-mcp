@@ -48,7 +48,30 @@ export function digestFlowDir(root) {
 export function testPathsFromVerify(command, root) {
   if (typeof command !== 'string') throw new TypeError('verify must be a string')
   const resolvedRoot = validateRoot(root)
-  return [...new Set(command.split(/\s+/).filter(Boolean).map((token) => path.resolve(resolvedRoot, token)))]
+  const tokens = []
+  let token = ''
+  let quote = null
+  let escaped = false
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]
+    const nextCharacter = command[index + 1]
+    if (escaped) {
+      token += character
+      escaped = false
+    } else if (character === '\\' && quote === '"' && (nextCharacter === '"' || nextCharacter === '\\')) escaped = true
+    else if (character === '\\' && !quote && (nextCharacter === undefined || /\s|["'\\]/.test(nextCharacter))) escaped = true
+    else if (quote) {
+      if (character === quote) quote = null
+      else token += character
+    } else if (character === '"' || character === "'") quote = character
+    else if (/\s/.test(character)) {
+      if (token) tokens.push(token)
+      token = ''
+    } else token += character
+  }
+  if (escaped || quote) throw new Error('unterminated quote or escape in verify command')
+  if (token) tokens.push(token)
+  return [...new Set(tokens.map((entry) => path.resolve(resolvedRoot, entry)))]
     .filter((file) => isInside(resolvedRoot, file) && existsSync(file) && lstatSync(file).isFile())
     .map((file) => posixRelative(resolvedRoot, file))
 }
@@ -69,11 +92,23 @@ const readTests = (paths, root) => {
 }
 const readState = (root, task) => JSON.parse(readFileSync(statePath(root, task), 'utf8'))
 const writeState = (root, task, state) => {
-  const directory = path.dirname(statePath(root, task))
+  const notesDirectory = path.join(root, '.codex-flow', 'notes')
+  const target = statePath(root, task)
+  const isSymbolicLink = (file) => {
+    try {
+      return lstatSync(file).isSymbolicLink()
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false
+      throw error
+    }
+  }
+  if (isSymbolicLink(notesDirectory)) throw new Error('notes directory must not be a symbolic link')
+  if (isSymbolicLink(target)) throw new Error('state file must not be a symbolic link')
+  const directory = path.dirname(target)
   mkdirSync(directory, { recursive: true })
   const temporary = path.join(directory, `.verifier-guard-${task}-${process.pid}-${Date.now()}.tmp`)
   writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`)
-  renameSync(temporary, statePath(root, task))
+  renameSync(temporary, target)
 }
 
 export function arm({ task, root = process.cwd(), tests = [], verify } = {}) {
