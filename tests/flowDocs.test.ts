@@ -3121,6 +3121,43 @@ describe('T11 workflow helper wiring (R1.6, R2.8, R7.6, R8.9)', () => {
     )
   })
 
+  test('task-loop arms before and checks after every execute or continue call', () => {
+    // Arrange
+    const skill = readText(TASK_LOOP_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const armPhrase = 'immediately before each `codex_execute`/`codex_continue`, run'
+    const checkPhrase = 'immediately after the call returns and before any other control-file write, run'
+
+    // Assert
+    expect(skill).toContain(armPhrase)
+    expect(skill).toContain(checkPhrase)
+  })
+
+  test('task-loop keeps both Phase 5 fix-round routes under the verifier guard', () => {
+    // Arrange
+    const taskLoop = readText(TASK_LOOP_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const continuePhrase = 'route verified CRITICAL/HIGH findings from EITHER review to the task\'s recorded Session line via `mcp__codex__codex_continue`'
+    const fallbackPhrase = 'fall back to a fresh `codex_execute` fix task'
+
+    // Assert
+    expect(taskLoop).toContain(continuePhrase)
+    expect(taskLoop).toContain(fallbackPhrase)
+  })
+
+  test('run-ledger command template includes cause labels', () => {
+    // Arrange
+    const skill = readText(RUN_LEDGER_PATH).replace(/\s+/g, ' ')
+
+    // Act
+    const commandTemplate = '--bypasses <a,b> --causes <a,b> --outcome <outcome>'
+
+    // Assert
+    expect(skill).toContain(commandTemplate)
+  })
+
   test('task-loop pins trajectory digest output and null-log skip', () => {
     const skill = readText(TASK_LOOP_PATH).replace(/\s+/g, ' ')
 
