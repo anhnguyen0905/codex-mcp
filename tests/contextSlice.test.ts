@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -163,6 +163,29 @@ describe('playbook context', () => {
     // Assert
     expect(result.status).toBe(0)
     expect(result.stderr).toContain('context-slice: playbook ignored:')
+    expect(result.stderr.split('\n').filter((line) => line.includes('context-slice: playbook ignored:'))).toHaveLength(1)
+    expect(existsSync(join(directory, '.codex-flow', 'CONTEXT-T1.md'))).toBe(true)
+  })
+
+  test('fails when the playbook path is a directory', () => {
+    // Arrange
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'context-slice-playbook-directory-')))
+    tempDirectories.push(directory)
+    mkdirSync(join(directory, '.codex-flow'), { recursive: true })
+    writeFileSync(join(directory, '.codex-flow', 'PLAN.md'), '## Objective\nShip it.\n')
+    writeFileSync(join(directory, '.codex-flow', 'TASKS.md'), '## T1: Task\n- Files: src/task.ts\n- Status: pending\n')
+    writeFileSync(join(directory, '.codex-flow', 'REQUIREMENTS.md'), '')
+    mkdirSync(join(directory, '.codex-flow', 'playbook.jsonl'))
+
+    // Act
+    const result = spawnSync(process.execPath, [CONTEXT_SLICE_SCRIPT, '--task', 'T1'], { cwd: directory, encoding: 'utf8' })
+
+    // Assert
+    expect(result.status).toBe(2)
+    expect(result.stderr.trim().split('\n')).toHaveLength(1)
+    const playbookPath = join(directory, '.codex-flow', 'playbook.jsonl')
+    expect(result.stderr.trim()).toContain(playbookPath)
+    expect(existsSync(join(directory, '.codex-flow', 'CONTEXT-T1.md'))).toBe(false)
   })
 })
 

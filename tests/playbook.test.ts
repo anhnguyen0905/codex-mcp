@@ -196,4 +196,25 @@ describe('playbook', () => {
     expect(result.status).toBe(2)
     expect(result.stderr).toContain('merge requires --run and --from')
   })
+
+  it('cli rejects unknown, duplicate, and positional flags without changing the file', () => {
+    // Arrange
+    const file = join(dir(), 'playbook.jsonl')
+    const before = 'original\n'
+    writeFileSync(file, before)
+
+    // Act
+    const unknown = runCli(['render', '--bogus', '1', '--file', file])
+    const duplicate = runCli(['prune', '--keep', '1', '--keep', '2', '--file', file])
+    const positional = runCli(['render', 'extra', '--file', file])
+    const inheritedCommand = runCli(['constructor'])
+
+    // Assert
+    expect(unknown.status).toBe(2)
+    expect(duplicate.status).toBe(2)
+    expect(positional.status).toBe(2)
+    expect(inheritedCommand.status).toBe(2)
+    expect(inheritedCommand.stderr).toContain('usage: merge, render, or prune')
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
 })

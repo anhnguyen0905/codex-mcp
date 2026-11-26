@@ -1175,12 +1175,20 @@ async function readProjectContext(projectContextPath) {
 }
 
 function readPlaybookText(playbookPath) {
+  let content
   try {
-    const lines = readFileSync(playbookPath, 'utf8').split(/\r?\n/).filter((line) => line !== '')
-    const items = lines.map((line) => JSON.parse(line))
-    return renderPlaybook(items, PLAYBOOK_TOKEN_CAP)
+    content = readFileSync(playbookPath, 'utf8')
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+    const reason = error instanceof Error ? error.message : String(error)
+    const failure = new Error(`could not read ${playbookPath}: ${reason}`)
+    failure.exitCode = 2
+    throw failure
+  }
+  try {
+    const lines = content.split(/\r?\n/).filter((line) => line !== '')
+    return renderPlaybook(lines.map((line) => JSON.parse(line)), PLAYBOOK_TOKEN_CAP)
+  } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     console.error(`context-slice: playbook ignored: ${reason}`)
     return null

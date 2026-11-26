@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { CAUSES, isCause } from './harness-taxonomy.mjs'
+import { isCause } from './harness-taxonomy.mjs'
 
 const DEFAULT_FILE = path.join('.codex-flow', 'playbook.jsonl')
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/
@@ -129,21 +129,41 @@ function flagValue(args, name) {
   return value
 }
 
+function validateCliArgs(args, command) {
+  const commandFlags = {
+    merge: new Set(['--file', '--run', '--from', '--at']),
+    render: new Set(['--file', '--max-tokens']),
+    prune: new Set(['--file', '--keep']),
+  }
+  const allowed = Object.hasOwn(commandFlags, command) ? commandFlags[command] : undefined
+  if (!allowed) throw new Error('usage: merge, render, or prune')
+  const seen = new Set()
+  for (let index = 1; index < args.length; index += 1) {
+    const flag = args[index]
+    if (!flag.startsWith('--') || !allowed.has(flag)) throw new Error(`unknown or positional argument: ${flag}`)
+    if (seen.has(flag)) throw new Error(`duplicate flag: ${flag}`)
+    seen.add(flag)
+    const value = args[index + 1]
+    if (value === undefined || value.startsWith('--')) throw new Error(`${flag} requires a value`)
+    index += 1
+  }
+}
+
 async function main(args) {
   const command = args[0]
-  const file = path.resolve(flagValue(args, '--file', false) ?? DEFAULT_FILE)
-  if (!['merge', 'render', 'prune'].includes(command)) throw new Error('usage: merge, render, or prune')
+  validateCliArgs(args, command)
+  const file = path.resolve(flagValue(args, '--file') ?? DEFAULT_FILE)
   if (command === 'merge') {
     const runId = flagValue(args, '--run')
     const source = flagValue(args, '--from')
     if (runId === undefined || source === undefined) throw new Error('merge requires --run and --from')
-    const at = flagValue(args, '--at', false) ?? new Date().toISOString()
+    const at = flagValue(args, '--at') ?? new Date().toISOString()
     const lessons = parseLessonLines(await fs.readFile(source, 'utf8'))
     await writePlaybook(file, mergeLessons(await readPlaybook(file), lessons, { runId, at }))
     return
   }
   if (command === 'render') {
-    const raw = flagValue(args, '--max-tokens', false)
+    const raw = flagValue(args, '--max-tokens')
     const max = raw === undefined ? Infinity : Number(raw)
     if (raw !== undefined && (!/^\d+$/.test(raw) || !Number.isSafeInteger(max))) throw new Error('--max-tokens must be a non-negative integer')
     process.stdout.write(renderPlaybook(await readPlaybook(file), max))
