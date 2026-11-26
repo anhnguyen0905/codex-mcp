@@ -123,7 +123,8 @@ describe('skill-match evolution', () => {
 
   it('resolves missing output segments from the nearest existing ancestor', async () => {
     // Arrange
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'evolve-resolve-')))
+    // resolveRealOutput uses the native realpath, which expands Windows 8.3 names (RUNNER~1).
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'evolve-resolve-')))
     const missingOutput = join(root, 'a', 'b', 'report.md')
     const existingFile = join(process.cwd(), 'scripts', 'skill-match.mjs')
 
@@ -133,7 +134,7 @@ describe('skill-match evolution', () => {
 
     // Assert
     expect(missingResult).toBe(missingOutput)
-    expect(existingResult).toBe(realpathSync(existingFile))
+    expect(existingResult).toBe(realpathSync.native(existingFile))
   })
 
   it.skipIf(process.platform === 'win32')('resolves missing output segments through a symlinked ancestor', async () => {
