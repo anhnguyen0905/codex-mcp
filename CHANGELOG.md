@@ -3,6 +3,32 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.39.0] - 2026-11-26
+
+### Added
+
+- Harness-learning helpers (Node stdlib, local data only):
+  - `scripts/harness-taxonomy.mjs`: a shared cause-label list; `run-ledger.mjs append --causes <csv>` and `summary --filter cause=<label>`.
+  - `scripts/verifier-guard.mjs arm|check`: warns when a task's acceptance tests lose assertions or flow files change during an executor call.
+  - `scripts/trajectory-digest.mjs --log <liveLog>`: summarizes a run's live log for the review report.
+  - `scripts/playbook.mjs merge|render|prune`: keeps per-project lessons in `.codex-flow/playbook.jsonl`; context slices include up to 300 tokens of them.
+  - `scripts/harness-change.mjs add|due|verdict`: records falsifiable harness-change hypotheses in `~/.codex-mcp/harness-changes.jsonl`.
+  - Dev tooling: `scripts/skill-ablation.mjs prompts|compare`, `scripts/rule-audit.mjs list|ablate` (with `scripts/flow-skill-map.mjs`) and the seeded `scripts/skill-match-evolve.mjs` (skill-match weights are now tunable; defaults unchanged).
+- `scripts/direct-run.mjs`: a shared, realpath-safe `isDirectRun(import.meta.url)` guard. Helpers invoked through a symlinked path (for example macOS `/var` → `/private/var`) now run their CLI instead of exiting silently.
+- `docs/workflow.md` documents the helpers; `AGENTS.md` adds the harness-change process rule.
+
+### Changed
+
+- The workflow wires the helpers into the task loop, review, final review, run ledger and preflight within the existing byte budgets.
+- `scripts/scope-check.mjs` ignores paths listed under `# Untracked at run start` in `.codex-flow/baseline-dirty.patch` while they stay untracked.
+- Tunable skill-match weights add no measurable cost: tuning is resolved once per public entry point, and skill-eval output is identical.
+
+### Fixed
+
+- The verifier guard parses quoted test paths and refuses symlinked state files; the trajectory digest recognizes Windows command forms and writes Markdown-safe text.
+- Stricter validation: harness-change timestamps, empty `--causes`, unknown or duplicate playbook flags; context-slice exits 2 on playbook read errors other than a malformed file.
+- `rule-audit ablate` works on CRLF files; the evolve helper resolves nested missing output directories correctly.
+
 ## [0.38.2] - 2026-11-22
 
 ### Fixed
